@@ -1,13 +1,26 @@
 project:
   type: book
+  output-dir: _book
 
 book:
   title: "AI Engineering Handbook"
+  subtitle: "A from-scratch, hands-on path to AI Engineering"
   author: "Matteo Zirilli"
+  date: today
+  search: true
+  page-footer: "AI Engineering Handbook — © 2026 Matteo Zirilli"
   chapters:
     - index.qmd
+    - part: "Reinforcement Learning"
+      chapters:
+        - rl-paradigm.qmd
+
+bibliography: references.bib
 
 format:
   html:
     theme: cosmo
     toc: true
+    toc-depth: 3
+    number-sections: true
+    code-overflow: wrap
