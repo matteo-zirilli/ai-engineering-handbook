@@ -1,0 +1,13 @@
+project:
+  type: book
+
+book:
+  title: "AI Engineering Handbook"
+  author: "Matteo Zirilli"
+  chapters:
+    - index.qmd
+
+format:
+  html:
+    theme: cosmo
+    toc: true
