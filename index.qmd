@@ -1,0 +1,19 @@
+# Welcome {.unnumbered}
+
+This is the **AI Engineering Handbook** — a from-scratch, hands-on guide
+to becoming job-ready in AI Engineering.
+
+Here is a formula, to prove the math renders:
+
+$$
+Q(s,a) \leftarrow Q(s,a) + \alpha\big[r + \gamma \max_{a'} Q(s',a') - Q(s,a)\big]
+$$
+
+And a code block, to prove code renders:
+
+```python
+def choose_action(state, Q, epsilon):
+    if random.random() < epsilon:
+        return random.randint(0, n_actions - 1)   # explore
+    return int(np.argmax(Q[state]))               # exploit
+```
