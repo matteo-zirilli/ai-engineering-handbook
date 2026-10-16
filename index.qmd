@@ -1,19 +1,20 @@
-# Welcome {.unnumbered}
+# Preface {.unnumbered}
 
-This is the **AI Engineering Handbook** — a from-scratch, hands-on guide
-to becoming job-ready in AI Engineering.
+Welcome to the **AI Engineering Handbook** — a from-scratch, hands-on path
+that takes you from *"I can write a little Python"* to *"I can build, train,
+and ship intelligent systems."*
 
-Here is a formula, to prove the math renders:
+**Who this book is for.** It assumes no prior knowledge of machine learning.
+Every concept is built up from first principles, with the mathematics
+explained (and, where it helps, proved), concrete worked examples, and
+runnable, heavily commented code.
 
-$$
-Q(s,a) \leftarrow Q(s,a) + \alpha\big[r + \gamma \max_{a'} Q(s',a') - Q(s,a)\big]
-$$
+**How each chapter is organized.** We follow the same rhythm throughout:
+learning objectives → intuition → formalism and proofs → worked examples →
+annotated code → exercises → references to the primary literature.
 
-And a code block, to prove code renders:
+**How to read it.** Read the intuition first, then the formalism; do the
+worked examples by hand; run and modify the code. The exercises are where the
+understanding actually forms.
 
-```python
-def choose_action(state, Q, epsilon):
-    if random.random() < epsilon:
-        return random.randint(0, n_actions - 1)   # explore
-    return int(np.argmax(Q[state]))               # exploit
-```
+> This is a living draft. Chapters are released and refined incrementally.
