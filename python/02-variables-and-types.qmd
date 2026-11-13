@@ -24,10 +24,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 2.1 *Input and output* · 2.2 *Variables and constants* · 2.3 *Data
-types* · 2.4 *Casting*. Practice: 2.5 *Input and output* · 2.6 *Data types* ·
-2.7 *Casting* · 2.8 *Formatting*.
+## Topics covered
+Reading input and printing output; variables and constants; the built-in data types; converting between types; formatting text and numbers.
 :::
 
 ## Intuition: sticky notes, not boxes
@@ -252,7 +250,11 @@ which binds tighter than `*, /, //, %`, which bind tighter than `+, -`. So
 right-associative: `2 ** 3 ** 2 == 2 ** 9 == 512`. When in doubt, use
 parentheses [@pythonreference, §6.17].
 
-### How fixed-width integers are stored: two's complement {#sec-twos-complement}
+Outside Python's own `int` — in NumPy arrays, PyTorch tensors, C, databases —
+integers have a **fixed number of bits** and can **overflow** (wrap around).
+The deep dive below explains how they are stored and why.
+
+### How fixed-width integers are stored: two's complement {#sec-twos-complement .deep}
 
 Python hides the bit-level representation of integers, but most other systems
 — the CPU, C, NumPy arrays, GPUs — use **fixed-width** integers of 8, 16, 32 or
@@ -293,8 +295,8 @@ With $n$ bits:
 *In one line:* two's complement is arithmetic modulo $2^n$ with the upper half
 of the range relabelled as negative numbers.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-twos-complement
+::: {.deep kind="proof"}
+## Proof of @thm-twos-complement
 
 (2) From @eq-twos, $v = u - d_{n-1}2^{n-1} - d_{n-1}2^{n-1} = u - d_{n-1}2^n$,
 so $v \equiv u \pmod{2^n}$.
@@ -355,6 +357,9 @@ the late 1970s largely under the leadership of William Kahan (who received the
 1989 Turing Award for it). Python's `float` is the IEEE 754 **binary64** format
 ("double precision").
 
+::: {.deep}
+## The exact format of a `float` (IEEE 754 binary64)
+
 ::: {#def-binary64}
 ## IEEE 754 binary64
 A `float` occupies 64 bits: 1 **sign** bit $s$, 11 **exponent** bits $e$
@@ -382,6 +387,8 @@ since the leading 1 of a normal number is implicit ("hidden bit"). The constant
 - The smallest positive normal: $2^{-1022}\approx 2.2\times10^{-308}$; the
   smallest subnormal: $2^{-52}\times2^{-1022} = 2^{-1074}\approx 4.9\times 10^{-324}$.
 :::
+:::
+
 
 #### Which numbers are exactly representable?
 
@@ -399,8 +406,8 @@ exactly representable as a `float`.
 denominator is a power of 2 — just as in base 10 you cannot write $1/3$
 exactly.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-dyadic
+::: {.deep kind="proof"}
+## Proof of @thm-dyadic
 
 If $q = 2^k$, then $p/q = p\cdot 2^{-k}$, and writing $p$ in binary and moving
 the point $k$ places to the left gives a finite expansion.
@@ -433,6 +440,9 @@ famous `0.30000000000000004`.
 
 #### How big is the error? Machine epsilon and unit roundoff
 
+::: {.deep}
+## How large is a single rounding error? Machine epsilon and its bound
+
 ::: {#def-epsilon}
 ## Machine epsilon and unit roundoff
 **Machine epsilon** $\varepsilon = 2^{-52} \approx 2.22\times10^{-16}$ is the
@@ -460,8 +470,8 @@ the computed result is $(a \circ b)(1+\delta)$ with $|\delta| \le u$
 *In one line:* each single operation loses at most about 16 significant decimal
 digits' worth of precision — the relative error is at most $1.1\times10^{-16}$.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-rounding-error
+::: {.deep kind="proof"}
+## Proof of @thm-rounding-error
 
 Assume $x > 0$ (the negative case is symmetric) and let $E$ be the integer with
 $2^E \le x < 2^{E+1}$. In the interval $[2^E, 2^{E+1}]$ the doubles are
@@ -477,6 +487,8 @@ $\lvert\delta\rvert = \lvert \mathrm{fl}(x)-x\rvert/x \le 2^{-53}$.
 The statement about operations follows because correct rounding means
 "compute $a\circ b$ exactly, then apply $\mathrm{fl}$". $\blacksquare$
 :::
+:::
+
 
 Errors **accumulate** across many operations. Adding $0.1$ ten times does not
 give exactly $1.0$, and the order of the additions matters (floating-point
@@ -504,7 +516,7 @@ rounding, @sec-math-module). For money use `decimal.Decimal` or integers
 counting cents.
 :::
 
-#### Try it yourself: the bits of a double {.unnumbered}
+#### Try it yourself: the bits of a double {.unnumbered .deep}
 
 ::: {.widget}
 ```{ojs}
@@ -542,7 +554,7 @@ html`<p><code style="color:#c01c28">${floatInfo.s}</code> <code style="color:#1a
 Try `0.1`, `0.5`, `1e-320` (a subnormal), `9007199254740993` ($2^{53}+1$,
 which is rounded to $2^{53}$), `-0` and `1e309` (overflow to infinity).
 
-### Complex numbers
+### Complex numbers {.deep}
 
 Python also has a built-in `complex` type: `z = 3 + 4j` (the imaginary unit is
 written `j`, as in electrical engineering). `abs(z)` is the modulus
@@ -574,6 +586,9 @@ is called **encoding**. The dominant encoding on the web
 is **UTF-8** (used by the overwhelming majority of web pages), designed by Ken
 Thompson and Rob Pike in 1992 and standardised in
 RFC 3629 [@rfc3629]:
+
+::: {.deep}
+## How UTF-8 turns code points into bytes
 
 | Code point range | Bytes | Byte pattern (x = payload bits) |
 |---|---|---|
@@ -613,8 +628,8 @@ corrupts only one character.
 *In one line:* the bit prefixes make the code **prefix-free** and
 self-describing.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — justification of @prp-utf8
+::: {.deep kind="proof"}
+## Justification of @prp-utf8
 (a) The 1-byte form is `0xxxxxxx` with the 7 bits of the code point, which is
 exactly ASCII. (b) Leading bytes begin with `0`, `110`, `1110`, `11110`: the
 number of leading ones (0, 2, 3, 4) equals the length (1 meaning "one byte").
@@ -627,6 +642,8 @@ leading byte. Prefix-freeness also guarantees **unique decodability**: no
 encoded character is a prefix of another, so a byte stream splits into
 characters in only one way. $\blacksquare$
 :::
+:::
+
 
 Rule of thumb, crucial for files (@sec-ch-files): **decode bytes into `str` as
 soon as data enters your program, work with `str`, encode back to bytes when it
@@ -712,7 +729,7 @@ In mixed arithmetic Python **widens** the narrower type:
 `bool` → `int` → `float` → `complex`. So `1 + 2.0` is `3.0` and `True + 1` is
 `2`. It never converts implicitly between numbers and strings.
 
-### Why `round` rounds half to even {#sec-banker-rounding}
+### Why `round` rounds half to even {#sec-banker-rounding .deep}
 
 `round(2.5) == 2` surprises many people. Python implements the IEEE 754 default
 rounding, **round half to even** (also called *banker's rounding*): a value
@@ -726,8 +743,8 @@ half **up** adds a total error of $+\tfrac12 \cdot 2N = N$; rounding half to
 **even** adds a total error of $0$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-round-half-even
+::: {.deep kind="proof"}
+## Proof of @prp-round-half-even
 Half up maps $k+\tfrac12 \mapsto k+1$, error $+\tfrac12$ each, $2N$ values:
 total $N$. Half to even maps $k+\tfrac12$ to $k$ if $k$ is even (error
 $-\tfrac12$) and to $k+1$ if $k$ is odd (error $+\tfrac12$). Among
@@ -788,10 +805,15 @@ for item, qty, price in rows:
 print(f"{255:#x} {255:08b} {5:08b} {1234567:_}")
 ```
 
+::: {.deep}
+## Older formatting styles you will meet
+
 For completeness, the two older styles are `"%s has %.2f" % (name, balance)`
 (printf-style, inherited from C) and `"{} has {:.2f}".format(name, balance)`
 (PEP 3101, which introduced the mini-language that f-strings reuse
 [@pep3101]). You will meet both in existing code.
+:::
+
 
 ## Worked example: a unit-conversion program
 

@@ -23,9 +23,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 10.1 *Introduction to modules*. Practice: 10.2 *Let's create a module* ·
-10.3 *Let's create a package* · 10.4 *Let's create a (real) package*.
+## Topics covered
+Splitting code into modules; building a package; turning it into a real, installable package.
 :::
 
 ## Intuition: chapters of a book, bricks of a building
@@ -223,7 +222,15 @@ can still be imported as a *namespace package* (PEP 420 [@pep420]), mainly to
 split one package across several distributions. For your own code, include
 `__init__.py`.
 
-## Module dependencies form a graph {#sec-import-graph}
+::: {.callout-important}
+## Keep module dependencies free of cycles
+Modules that import each other form a **dependency graph**. Keep it **without
+cycles** — in particular, domain code must never import the user interface —
+or you will meet *circular import* errors. The next section (a deep dive)
+proves why cycles are the only obstacle and shows how to detect them.
+:::
+
+## Module dependencies form a graph {#sec-import-graph .deep}
 
 If module `A` imports `B`, draw an arrow $A \to B$. The modules of a program
 and their imports form a **directed graph**. For the package above:
@@ -242,8 +249,8 @@ it has no directed cycle.
 *In one line:* a cycle can never be laid out left-to-right; without cycles,
 there is always some vertex with no incoming edges to put first.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-toposort
+::: {.deep kind="proof"}
+## Proof of @thm-toposort
 ($\Rightarrow$) If $v_1 \to v_2 \to \dots \to v_k \to v_1$ were a cycle, a
 topological order would need $v_1$ before $v_2$, …, $v_k$ before $v_1$, so
 $v_1$ before itself: impossible.
@@ -379,6 +386,9 @@ phonebook                            # the console script declared in [project.s
 - An **editable** install links the installed package to your source folder,
   so code changes are visible without reinstalling.
 
+::: {.deep}
+## Looking inside a wheel
+
 Here we build the wheel with `pip` (offline, using the installed setuptools)
 and inspect it — a wheel is just a ZIP file:
 
@@ -398,12 +408,13 @@ The `.dist-info` folder contains the metadata (`METADATA`), the list of files
 with their hashes (`RECORD`) and the declared console scripts
 (`entry_points.txt`); `pip` uses them to install, list and uninstall the
 package.
+:::
+
 
 ::: {.project-link}
-**In the project.** The project is delivered as a single Colab notebook, as the
-brief requires; but the brief's *"classes with well-separated
-responsibilities"* and *"keep the interaction logic out of the domain classes"*
-are the seeds of a modular design. @sec-ch-project-phonebook shows how the same
+**In the project.** The project is delivered as a single notebook (R11); but
+requirements R2 and R3 — classes with clear jobs, interface separated from
+logic — are the seeds of a modular design. @sec-ch-project-phonebook shows how the same
 code maps onto the package layout above — `models` (Contact), `book`
 (PhoneBook), `storage` (JSON, the hidden design decision), `cli` (menu) — with
 the dependency graph `cli → book → models`, `cli → storage → models`, which is

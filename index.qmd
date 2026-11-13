@@ -4,7 +4,7 @@ Welcome to the **AI Engineering Handbook**: a from-scratch, proof-driven,
 hands-on path that takes you from *"I have never written a program"* to
 *"I can design, build, train, evaluate and ship intelligent systems"*.
 
-The handbook follows, module by module, the twelve courses of the Master in
+The handbook follows, course by course, the topics of the twelve courses of the Master in
 AI Engineering that I attended. For each course I wrote a
 part of this book that is **far more detailed than the lectures**: every idea
 is traced back to the book, paper or standard where it was born, every formula
@@ -30,11 +30,12 @@ can skip it.
 2. **Every formula has a story.** For each result you will find *who* proposed
    it, *why* (what problem they were trying to solve), and *where* (the exact
    publication, with a reference you can look up).
-3. **Proofs are complete, but never in the way.** Each proof is placed in a
-   collapsible box titled *"For the interested reader"*, immediately preceded
-   by a one-line statement of what it proves. You may take the statement on
-   faith and continue; nothing used later is hidden inside a proof except its
-   justification.
+3. **Two layers, one page.** Each page separates the **essentials** — what
+   you must understand — from the **deep dives**: proofs, history, internals,
+   extra code. Deep dives sit exactly where they belong in the text, as
+   coloured bars you can open one by one; a **reading-mode switch**
+   (*Essentials* / *Full*) opens or closes them all. See
+   [Two reading modes](how-to-study.qmd#sec-reading-modes).
 4. **Many examples.** Each idea is shown at least three ways: an intuition
    (an everyday analogy), a worked example by hand, and running code.
 5. **Interactive widgets.** Some chapters contain small simulations that run
@@ -51,14 +52,13 @@ can skip it.
 Each course of the master becomes a **part** of the book. The structure of
 each part is always the same:
 
-- an **overview page** with the course's objectives, the map of the chapters,
+- an **overview page** with what you will be able to do, the map of the chapters,
   and the final project;
-- one **chapter per module** of the course. The lectures are split into
-  *Theory* and *Practice*; in the book these two strands are merged inside each
-  chapter, theory first, then the practice;
-- a **project chapter** that restates the project brief, maps each requirement
-  to the chapters that teach the necessary skills, and walks through the design
-  and implementation.
+- one **chapter per topic** of the course, in which theory and practice are
+  merged: ideas first, then runnable code;
+- a **project chapter** that states the project requirements in my own words,
+  maps each requirement to the chapters that teach the necessary skills, and
+  walks through the design and implementation.
 
 | Part | Course | Status |
 |---|---|---|
@@ -77,12 +77,16 @@ All code was executed with **Python 3.13**. The outputs you see under each code
 cell were produced by actually running that cell when the book was built: they
 are not typed by hand.
 
-## Acknowledgements and licence {.unnumbered}
+## Independence and licence {.unnumbered}
 
-The structure of the content follows the syllabus of the Master in AI
-Engineering. The text, the examples, the proofs and the code are original work
-written for this handbook; the primary sources each section draws on are cited
-in place. All rights reserved.
+This is an **independent, personal work**. It is not affiliated with, endorsed
+by or produced on behalf of the institution that runs the master, and it does
+**not reproduce any of its course material** (lectures, slides, texts or
+project assignments): the master only determined *which topics* each part
+covers and in which order. The text, the examples, the proofs, the code and the
+project specifications are original work written for this handbook; the
+primary sources each section draws on are cited in place. All rights
+reserved.
 
 ::: {.callout-note}
 ## A living book

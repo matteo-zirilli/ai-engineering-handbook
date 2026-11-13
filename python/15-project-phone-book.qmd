@@ -4,8 +4,7 @@
 
 ::: {.callout-note}
 ## What this chapter contains
-1. The **brief** of the project, as given by the (fictional) client
-   *ContactEase Solutions*.
+1. The **problem statement**, written in my own words.
 2. A **requirements matrix** that maps every requirement to the chapters of
    this part that teach the necessary skills.
 3. The **design**: classes, data structure (with its cost analysis),
@@ -19,91 +18,54 @@
 6. **Extensions** to practise further.
 :::
 
-## The client {#sec-project-client}
+## The problem {#sec-project-brief}
 
-**ContactEase Solutions** is an Italian software house based in Bologna,
-founded in 2016 by developers coming from mobile applications. It builds light
-personal-productivity tools — address books, agendas, note managers, small
-synchronisation utilities — for private users, freelancers and micro-companies
-who want simple, fast solutions without needless complexity. Its catalogue
-includes desktop and mobile applications and command-line utilities, partly
-open source, under a mixed freemium/business-support model. About forty people
-work in development, design and support, with short release cycles and strong
-attention to code quality and clarity of the user experience.
+::: {.callout-note}
+## About this specification
+This project was the final assignment of the Python course of the master I
+attended. The specification below is **my own restatement** of the
+requirements, written for this handbook; it does not reproduce the course
+material.
+:::
 
-Its guiding values are **ease of use**, **protection of the users' personal
-data** (kept on the device whenever possible) and **maintainable,
-well-documented code** — a principle the company applies to its internal
-prototypes too.
+**Context.** Many developers, system administrators and data people spend
+their day in a terminal. Opening a graphical application just to look up a
+phone number interrupts their flow. A small, fast **command-line phone book**
+fills that gap. Before building a full product, the goal is a **working
+prototype** that proves the approach is sound and the code is solid.
 
-## The brief {#sec-project-brief}
+**What the prototype must do.**
 
-> *Hi, now that you are in the development team, here is your first
-> assignment.*
->
-> *We are evaluating a niche that still seems uncovered: terminal tools for
-> people who work a lot on the command line and do not want to open a graphical
-> application just to look up a phone number. Before investing in a product
-> version, we need a **working prototype** that demonstrates the soundness of
-> the approach.*
->
-> *What I have in mind:*
->
-> - *an **interactive console application** written in Python, built on the
->   principles of **object-oriented programming** (classes for the single
->   contact and for the phone book, well-separated responsibilities);*
-> - *a suitable **data structure** to keep contacts in memory in an orderly and
->   efficient way;*
-> - *a **main menu** with clear options, usable also by people unfamiliar with
->   the terminal;*
-> - *the basic features: **add**, **view** the complete list, **edit** an
->   existing contact, **delete**, **search** by first or last name;*
-> - ***file persistence** (JSON is fine): contacts must be saved and reloaded
->   automatically at start-up, so the user finds their phone book again.*
->
-> *A couple of practical recommendations: users always get something wrong, so
-> handle invalid input and out-of-menu choices without crashing the program;
-> and consider the case of a missing or empty file at first start.*
->
-> *Deliver everything as a **public link to a Google Colab notebook**, with
-> commented code and a short demonstration of use.*
->
-> *If you have doubts about how to set up the classes, write to me before
-> starting.* — Davide Lombardo
+- **R1 — Interactive console program.** It runs in a terminal (or in a
+  notebook cell) and talks to the user through text prompts.
+- **R2 — Object-oriented design.** At least two classes: one for a single
+  contact and one for the collection, each with a clear job.
+- **R3 — Interface separated from logic.** Reading input and printing messages
+  happen outside the classes that model contacts and the phone book.
+- **R4 — A suitable data structure**, chosen for orderly and efficient
+  storage, with the choice explained.
+- **R5 — A main menu** with numbered options that a non-expert can use.
+- **R6 — The basic operations**: add a contact, list all contacts, edit one,
+  delete one, search by first or last name.
+- **R7 — Persistence in JSON**: contacts are loaded automatically at start-up
+  and saved when the program ends.
+- **R8 — Robust loading**: a missing, empty or damaged file must not stop the
+  program.
+- **R9 — Robust input**: wrong values and invalid menu choices are handled with
+  a message, never with a crash.
+- **R10 — Good terminal experience**: clear messages, a confirmation after each
+  operation, a clean exit that saves the data.
+- **R11 — Deliverable**: a notebook with commented code that runs from top to
+  bottom, plus a short demonstration of use.
 
-### Didactic guidance
-
-The goal is a command-line phone-book prototype in Python that applies
-object-oriented principles correctly. The value of the work lies not only in
-making the operations work, but in the **cleanliness of the architecture**:
-classes with clear responsibilities, coherent methods, readable and commented
-code. The user experience at the terminal (clear messages, understandable
-menu) and robustness against wrong input matter too. Six operational tips
-accompany the brief:
-
-1. **Separate responsibilities between classes** — a `Contact` class for the
-   single record (first name, last name, phone, optional e-mail) and a
-   `PhoneBook` class managing the collection and its operations; keep the
-   user-interaction logic **outside** the domain classes.
-2. **Choose the data structure with care** — list, dictionary or a
-   combination: assess what makes search and modification more efficient, and
-   motivate the choice in a comment or a text cell.
-3. **Make persistence reliable** — serialise objects to a readable format such
-   as JSON; on loading, handle a missing or corrupted file without
-   interrupting execution.
-4. **Do not let the program crash** — use validation and `try`/`except` for
-   non-numeric input, non-existent indices, empty fields. A prototype that
-   ends with a traceback makes a terrible impression in a demo.
-5. **Take care of the menu and the messages** — a main loop with numbered
-   options, a confirmation after every operation, a clean way to exit that
-   saves the data.
-6. **Mind the Colab notebook** — interactive input works in Colab, but
-   organise the cells so that the evaluator can run the code and try the menu
-   smoothly; add a short demonstration of use.
+**What counts as quality.** Working operations are only half of the job. The
+other half is a clean architecture: classes with clear responsibilities,
+coherent methods, readable and commented code. That is what turns a prototype
+into a base for a real product.
 
 ## Requirements matrix {#sec-project-requirements}
 
-| # | Requirement (from the brief and the guidance) | Skills needed | Chapters |
+| # | Requirement | Skills needed | Chapters |
 |---|---|---|---|
 | R1 | Interactive console application | `input`/`print`, loops, menus | @sec-ch-variables, @sec-ch-loops |
 | R2 | OOP: `Contact` and `PhoneBook` classes, separated responsibilities | classes, special methods, encapsulation, composition | @sec-ch-oop |
@@ -115,7 +77,7 @@ accompany the brief:
 | R8 | Missing / empty / corrupted file handled | exceptions, EAFP | @sec-ch-exceptions |
 | R9 | Invalid input and out-of-menu choices never crash | casting, validation, `try`/`except` | @sec-casting, @sec-try |
 | R10 | Confirmations, clean exit that saves | UX, `finally`/context managers | @sec-context-managers |
-| R11 | Colab notebook: commented code, runnable top to bottom, demo of use | notebooks, docstrings | @sec-dev-environment, @sec-docstrings-functions |
+| R11 | Notebook: commented code, runnable top to bottom, demo of use | notebooks, docstrings | @sec-dev-environment, @sec-docstrings-functions |
 
 : Requirements and where the book teaches them {#tbl-project-requirements}
 
@@ -123,7 +85,7 @@ accompany the brief:
 
 ### Responsibilities
 
-Following the guidance (and @sec-solid), the program splits into four
+Following R3 (and @sec-solid), the program splits into four
 responsibilities, each a class (or module, @sec-real-package):
 
 ```{mermaid}
@@ -170,7 +132,7 @@ hundreds of entries, where every operation takes microseconds). **Motivation
 for the notebook**: *"a dict gives $O(1)$ duplicate checks and deletions; at
 the scale of a personal phone book the difference is negligible, so the
 decisive reasons are clarity of the uniqueness rule and simplicity of the
-code."* That is exactly the kind of justification tip 2 asks for.
+code."* That is exactly the kind of justification R4 asks for.
 
 ### What identifies a contact?
 
@@ -239,7 +201,7 @@ that round-trips; a menu that cannot drift out of sync with the methods.
 | 1 | Phone numbers stored as `int` | leading zeros are lost (`06…` → `6…`); `+`, spaces impossible | store a validated, normalised **string** (E.164) | @sec-casting, @sec-verification |
 | 2 | `__eq__` defined without `__hash__` | contacts are unhashable: no sets/dict keys, duplicate checks stay $O(n)$ | define `__hash__` on the same key, or use a frozen dataclass | @prp-hash-contract |
 | 3 | `Rubrica` reads `contatto._nome` etc. | breaks encapsulation of `Contatto` | public read-only attributes or properties | @sec-encapsulation |
-| 4 | `input_valid_contact` has no `self` and calls `input()` inside the domain class | works only when called on the class; mixes UI and domain (against tip 1) | move it to the UI layer (or at least `@staticmethod`) | @sec-dataclasses, @sec-solid |
+| 4 | `input_valid_contact` has no `self` and calls `input()` inside the domain class | works only when called on the class; mixes UI and domain (against R3) | move it to the UI layer (or at least `@staticmethod`) | @sec-dataclasses, @sec-solid |
 | 5 | `cerca_contatto`, `cerca_name` print messages | domain methods with UI side effects; hard to test | return results; let the UI print | @sec-return |
 | 6 | `assert` used to validate the menu choice | disabled by `python -O` → `IndexError` | an explicit `if` with a message | @sec-assert |
 | 7 | `os.path.exists` before `open` | LBYL with a race window; an **empty** file raises `JSONDecodeError` and is reported as invalid | EAFP on `FileNotFoundError`; treat empty as an empty book | @exm-toctou |
@@ -248,14 +210,14 @@ that round-trips; a menu that cannot drift out of sync with the methods.
 | 10 | Menu built from `dir()` | order is alphabetical, labels derive from method names, renaming a method changes the UI | an explicit dispatch table (label → function) | @sec-first-class |
 | 11 | Edit/delete require retyping the whole contact | error-prone UX; the notebook's own to-do notes the "name exists but number differs" case | pick from a numbered list of search results | @sec-project-design |
 | 12 | `Ctrl+C` / end of input | a traceback, and unsaved data | catch `KeyboardInterrupt`/`EOFError`, save, exit | @sec-try |
-| 13 | Data structure choice not motivated in the notebook | tip 2 asks for it explicitly | a text cell with the analysis of @tbl-project-structures | @sec-choosing-collection |
+| 13 | Data structure choice not motivated in the notebook | R4 asks for it explicitly | a text cell with the analysis of @tbl-project-structures | @sec-choosing-collection |
 | 14 | No automated tests | regressions go unnoticed | a small test suite with scripted input | @sec-verification |
 
 : Code review of the published implementation {#tbl-project-review}
 
 None of these prevents the prototype from working — it passed the course
 assessment. They are the difference between a prototype and a product, which is
-exactly the next step ContactEase is considering.
+exactly the next step a real product would need.
 
 ## Reference implementation {#sec-project-reference}
 
@@ -263,7 +225,7 @@ The code below applies all the refinements. It is written as four blocks that
 correspond to the four modules of @sec-real-package (`models`, `book`,
 `storage`, `cli`); in a notebook each block is one cell, in a package one file.
 
-### `models`: the contact
+### `models`: the contact {.deep}
 
 ```{python}
 """models — the Contact record and its validation."""
@@ -340,7 +302,7 @@ print(Contact("Mario", "Rossi", "06 1234 5678"))       # Italian landline: +39 a
 print(c, "|", c.identity)
 ```
 
-### `book`: the collection and its rules
+### `book`: the collection and its rules {.deep}
 
 ```{python}
 """book — the PhoneBook: a collection of unique contacts. No input/print here."""
@@ -406,7 +368,7 @@ class PhoneBook:
         return isinstance(c, Contact) and c.identity in self._by_id
 ```
 
-### `storage`: reliable JSON persistence
+### `storage`: reliable JSON persistence {.deep}
 
 ```{python}
 """storage — the only module that knows the file format (information hiding)."""
@@ -455,7 +417,7 @@ class JsonStorage:
             raise
 ```
 
-### `cli`: the console user interface
+### `cli`: the console user interface {.deep}
 
 ```{python}
 """cli — all interaction with the user lives here."""
@@ -658,9 +620,9 @@ ConsoleUI(PhoneBook(contacts), JsonStorage(book_file), input_fn=scripted(session
 print("\nFile content:\n" + book_file.read_text(encoding="utf-8"))
 ```
 
-### Tests
+### Tests {.deep}
 
-A handful of automated checks for the behaviours the brief cares about
+A handful of automated checks for the behaviours the requirements care about
 (@sec-verification). In a real project they would live in
 `tests/test_phonebook.py` and run with `pytest`.
 
@@ -704,7 +666,7 @@ for name, ok in tests.items():
 print(f"{sum(tests.values())}/{len(tests)} tests passed")
 ```
 
-### How the reference implementation meets the brief
+### How the reference implementation meets the requirements
 
 | Requirement | Where |
 |---|---|
@@ -733,7 +695,7 @@ print(f"{sum(tests.values())}/{len(tests)} tests passed")
 6. **SQLite backend.** Implement a `SqliteStorage` with the same interface as
    `JsonStorage` (an abstract base class `Storage`, @sec-inheritance) and
    switch backends without touching the UI — the payoff of information hiding.
-7. **AI-assisted review.** Give an assistant the brief and your code as a
+7. **AI-assisted review.** Give an assistant the requirements of @sec-project-brief and your code as a
    structured prompt (@sec-structured-prompting) and ask for a review and for
    additional edge-case tests; verify each suggestion before accepting it.
 

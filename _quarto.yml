@@ -47,6 +47,9 @@ book:
     - appendices/finding-sources.qmd
     - references.qmd
 
+filters:
+  - filters/deep.lua
+
 bibliography: references.bib
 csl: styles/chicago-author-date-notes.csl
 link-citations: true
@@ -67,6 +70,7 @@ format:
       light: [cosmo, styles/light.scss]
       dark: [darkly, styles/dark.scss]
     css: styles/handbook.css
+    include-after-body: styles/deep-mode.html
     toc: true
     toc-depth: 3
     toc-title: "On this page"

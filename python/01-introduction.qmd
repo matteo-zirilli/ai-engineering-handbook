@@ -22,9 +22,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-1.1 *Introduction to the course* · 1.2 *Computer programming* · 1.3 *The
-development environment*.
+## Topics covered
+What programming is and why Python; algorithms; the tools you need to write and run code (interpreter, editors, notebooks).
 :::
 
 ## Intuition: a very fast, very literal cook
@@ -117,8 +116,8 @@ There are exactly $2^n$ distinct strings of $n$ bits.
 
 *In one line:* each additional bit doubles the number of possibilities.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-bit-strings
+::: {.deep kind="proof"}
+## Proof of @thm-bit-strings
 
 By induction on $n$.
 
@@ -162,6 +161,9 @@ $(\mathtt{FF})_{16} = 15\cdot 16 + 15 = 255$, which is also $(11111111)_2$:
 one byte with all bits set.
 :::
 
+::: {.deep}
+## Why every number has exactly one base-$b$ representation, and how many digits it has
+
 Two questions arise immediately. Does **every** natural number have a base-$b$
 representation? And is it **unique** — could the same number have two
 different digit strings? We need one tool first.
@@ -179,8 +181,8 @@ We write $q = \lfloor a/b \rfloor$ and $r = a \bmod b$.
 *In one line:* you can always divide and get a remainder smaller than the
 divisor, and only one such pair $(q, r)$ exists.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @lem-division
+::: {.deep kind="proof"}
+## Proof of @lem-division
 
 *Existence.* Consider the set $S = \{a - qb : q \in \mathbb{Z},\ a - qb \ge 0\}$.
 It is non-empty (take $q = -\lvert a\rvert$: then
@@ -214,8 +216,8 @@ $$ {#eq-num-digits}
 *In one line:* repeatedly dividing by $b$ produces the digits, from the last
 to the first, and there is no other choice.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-base-representation
+::: {.deep kind="proof"}
+## Proof of @thm-base-representation
 
 *Existence*, by strong induction on $n$. If $1 \le n < b$, the one-digit string
 $(n)_b$ works. If $n \ge b$, divide (@lem-division): $n = q b + r$ with
@@ -244,9 +246,13 @@ $b^{k-1} \le n < b^k$; taking $\log_b$, which is increasing,
 $k-1 \le \log_b n < k$, i.e. $k - 1 = \lfloor \log_b n\rfloor$.
 $\blacksquare$
 :::
+:::
 
-The existence proof *is* an algorithm: **repeated division**. The remainders,
-read from last to first, are the digits.
+
+To convert a number to base $b$, use **repeated division** by $b$ (the deep
+dive above proves that this always works and gives the only possible answer).
+The remainders, read from last to first, are the digits; a number $n \ge 1$
+has $\lfloor \log_b n\rfloor + 1$ digits in base $b$ (@eq-num-digits).
 
 ::: {#exm-to-binary}
 ## 13 in binary, by hand
@@ -337,6 +343,9 @@ for n in [13, 255, 2026]:
 print(from_base("1101", 2), from_base("7EA", 16), int("7EA", 16))
 ```
 
+::: {.deep}
+## Horner's rule: evaluating a number with few multiplications
+
 `from_base` uses **Horner's rule** [@horner1819]: instead of computing each
 power $b^i$, it rewrites @eq-positional as
 $$
@@ -344,15 +353,22 @@ n = (\cdots((d_{k-1}\,b + d_{k-2})\,b + d_{k-3})\,b + \cdots)\,b + d_0,
 $$
 which needs only $k-1$ multiplications. For example
 $(1101)_2 = ((1\cdot2+1)\cdot2+0)\cdot2+1 = 13$.
+:::
+
 
 ## Algorithms {#sec-algorithms}
 
 ### What an algorithm is
 
+::: {.deep}
+## Where the word *algorithm* comes from
+
 The word comes from the name of the 9th-century Persian mathematician
 Muḥammad ibn Mūsā **al-Khwārizmī**, whose book on calculating with
 Hindu–Arabic numerals introduced positional arithmetic to Europe. Knuth
 [@knuth1997, §1.1] gives the definition used by computer scientists:
+:::
+
 
 ::: {#def-algorithm}
 ## Algorithm (Knuth)
@@ -400,8 +416,8 @@ For integers $a \ge 0$ and $b > 0$: $\gcd(a, b) = \gcd(b,\ a \bmod b)$.
 *In one line:* $a$ and $b$ have exactly the same common divisors as $b$ and
 $a \bmod b$.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @lem-gcd-step
+::: {.deep kind="proof"}
+## Proof of @lem-gcd-step
 
 Let $r = a \bmod b$, so $a = qb + r$ (@lem-division). If $d$ divides $a$ and
 $b$, then $d$ divides $a - qb = r$; so $d$ divides $b$ and $r$. Conversely, if
@@ -441,8 +457,8 @@ $\gcd(a, b)$.
 *In one line:* the gcd never changes along the loop (an *invariant*), and $b$
 strictly decreases, so the loop must stop.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-euclid-correct
+::: {.deep kind="proof"}
+## Proof of @thm-euclid-correct
 
 Let $(a_0,b_0) = (a,b)$ and $(a_{i+1}, b_{i+1}) = (b_i,\ a_i \bmod b_i)$ be the
 values after each iteration.
@@ -465,7 +481,7 @@ This proof pattern — **an invariant that is preserved, plus a quantity that
 strictly decreases** — is the standard way to prove loops correct. We will
 formalise it in @sec-loop-invariants.
 
-### How fast is Euclid? Lamé's theorem
+### How fast is Euclid? Lamé's theorem {.deep}
 
 Termination says the loop stops; it does not say *when*. In 1844 Gabriel Lamé
 proved that the worst case is related to the **Fibonacci numbers**
@@ -484,8 +500,8 @@ $\varphi = \frac{1+\sqrt5}{2} \approx 1.618$ is the golden ratio.
 like Fibonacci numbers — so the number of steps grows only with the number of
 *digits* of $b$.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-lame
+::: {.deep kind="proof"}
+## Proof of @thm-lame
 
 *Part 1, by induction on $k$.* If $k = 1$: $b \ge 1 = F_2$, and $a > b$ gives
 $a \ge 2 = F_3$. Suppose the claim holds for $k-1 \ge 1$ divisions, and let
@@ -559,8 +575,8 @@ input $x$, and `False` otherwise, for **all** programs $P$ and inputs $x$.
 *In one line:* if such a program existed, we could build a program that does
 the opposite of what `halts` predicts about itself.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-halting (diagonalisation)
+::: {.deep kind="proof"}
+## Proof of @thm-halting (diagonalisation)
 
 Suppose, for contradiction, that `halts` exists and always answers correctly.
 Since programs are strings (stored-program idea!), a program can be given its
@@ -651,8 +667,8 @@ For non-negative functions:
 *In one line:* keep only the fastest-growing term, ignore constants and the
 base of logarithms; exponentials beat every polynomial.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-big-o-rules
+::: {.deep kind="proof"}
+## Proof of @thm-big-o-rules
 
 1. $c f(n) \le c\cdot f(n)$ and $c f(n) \ge c\cdot f(n)$: take the constant $c$
    in both definitions.
@@ -735,6 +751,9 @@ first **compiles** your source code into a compact intermediate code called
 in software, exactly like @sec-von-neumann but one level up — **interprets**
 the bytecode. The `dis` module lets us look at it:
 
+::: {.deep}
+## Looking inside: the bytecode of a function
+
 ```{python}
 import dis
 
@@ -750,6 +769,8 @@ bytecode, but knowing that it exists explains, for instance, why Python is
 slower than C for tight numeric loops (each bytecode instruction costs many
 machine instructions) and why libraries such as NumPy (§
 [-@sec-crash-courses]) move heavy computations into compiled code.
+:::
+
 
 ### Why Python, and why for AI?
 
@@ -846,9 +867,9 @@ delivered as Colab notebooks.
 
 ::: {.project-link}
 **In the project.** The phone book of @sec-ch-project-phonebook is delivered as
-a public Colab notebook; the brief explicitly asks to organise the cells so
-that the evaluator can run them top to bottom without surprises — a direct
-consequence of the "run cells in any order" pitfall below.
+a Colab notebook; requirement R11 asks for a notebook that runs from top to
+bottom without surprises — a direct consequence of the "run cells in any
+order" pitfall below.
 :::
 
 ## Common pitfalls

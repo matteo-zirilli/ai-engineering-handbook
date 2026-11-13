@@ -13,3 +13,73 @@ main.content { line-height: 1.65; }
 table { font-size: 0.93em; }
 /* Interactive widgets */
 .widget { border: 1px solid rgba(127,127,127,.35); border-radius: 8px; padding: 0.8em 1em; margin: 1em 0; }
+
+/* ===================== Reading modes: deep-dive blocks ===================== */
+div.deep, section.deep {
+  --deep-accent: #6d3fc8;
+  --deep-tint: rgba(109, 63, 200, 0.07);
+  border-left: 4px solid var(--deep-accent);
+  background: var(--deep-tint);
+  border-radius: 6px;
+  margin: 1.1em 0;
+}
+div.deep.deep-proof { --deep-accent: #b7791f; --deep-tint: rgba(183, 121, 31, 0.08); }
+section.deep { padding: 0.2em 0.9em 0.3em 0.9em; }
+section.deep > h2, section.deep > h3, section.deep > h4 { margin-top: 0.6em; }
+section.deep > h2::after, section.deep > h3::after, section.deep > h4::after {
+  content: "🔬 deep dive"; font-size: 0.55em; font-weight: 600; letter-spacing: 0.03em;
+  vertical-align: middle; margin-left: 0.6em; padding: 0.15em 0.55em; border-radius: 999px;
+  color: #fff; background: #6d3fc8; text-transform: uppercase;
+}
+.deep-summary {
+  display: flex; align-items: center; gap: 0.7em; flex-wrap: wrap;
+  padding: 0.55em 0.9em; cursor: pointer; user-select: none; font-size: 0.95em;
+}
+section.deep > .deep-summary { padding-left: 0; }
+.deep-summary:hover { background: rgba(127, 127, 127, 0.08); }
+.deep-summary:focus-visible { outline: 2px solid var(--deep-accent); outline-offset: -2px; }
+.deep-badge {
+  flex: none; font-size: 0.78em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #fff; background: var(--deep-accent); border-radius: 999px; padding: 0.15em 0.65em;
+}
+.deep-title { flex: 1 1 0; min-width: 12em; font-weight: 600; }
+.deep-meta { flex: none; margin-left: auto; font-size: 0.85em; opacity: 0.75; white-space: nowrap; }
+.deep-action { margin-left: 0.5em; font-weight: 600; color: var(--deep-accent); }
+.deep.collapsed > .deep-summary .deep-action::before { content: "show ▸"; }
+.deep:not(.collapsed) > .deep-summary .deep-action::before { content: "hide ▾"; }
+.deep-body { padding: 0.1em 1em 0.7em 1em; }
+section.deep > .deep-body { padding-left: 0; padding-right: 0; }
+.deep.collapsed > .deep-body { display: none; }
+@media print { .deep.collapsed > .deep-body { display: block; } }
+
+/* ===================== Reading modes: switches and banner ================== */
+.rm-switch { display: inline-flex; border: 1px solid #6d3fc8; border-radius: 999px; overflow: hidden; }
+.rm-switch button {
+  border: 0; background: transparent; padding: 0.25em 0.9em; font-size: 0.9em; cursor: pointer; color: inherit;
+}
+.rm-switch button.active { background: #6d3fc8; color: #fff; }
+.rm-switch.rm-small button { padding: 0.15em 0.7em; font-size: 0.8em; }
+.reading-mode-banner {
+  border: 1px solid rgba(109, 63, 200, 0.35); border-radius: 8px; padding: 0.6em 0.9em;
+  margin: 0.6em 0 1.4em 0; background: rgba(109, 63, 200, 0.04); font-size: 0.92em;
+}
+.rm-row { display: flex; align-items: center; gap: 0.8em; flex-wrap: wrap; }
+.rm-label { font-weight: 700; }
+.rm-times { opacity: 0.8; }
+.rm-help { margin-left: auto; }
+.rm-list { margin-top: 0.4em; }
+.rm-list summary { cursor: pointer; opacity: 0.85; }
+.rm-list ol { margin: 0.4em 0 0 0; columns: 2; column-gap: 2em; }
+.rm-list li { break-inside: avoid; }
+.rm-kind { font-size: 0.85em; }
+.rm-min { opacity: 0.6; font-size: 0.85em; }
+@media (max-width: 900px) { .rm-list ol { columns: 1; } }
+.rm-sidebar { padding: 0.4em 0.5em 0.8em 0.5em; }
+.rm-sidebar-label { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-bottom: 0.25em; }
+
+/* Table of contents: deep-dive entries */
+#TOC a.toc-deep::after { content: " 🔬"; font-size: 0.8em; }
+body.mode-essentials #TOC a.toc-deep { opacity: 0.55; font-style: italic; }
+
+/* Quarto copies the .deep class of a heading onto the <hN> element too: neutralise it */
+h1.deep, h2.deep, h3.deep, h4.deep, h5.deep { border: 0; background: none; padding: 0; margin-left: 0; border-radius: 0; }

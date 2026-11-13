@@ -21,12 +21,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 13.1 *Virtual environments*. Practice: 13.2 *Creating, using and
-removing a virtual environment* · 13.3 *Using the virtual environment with
-Jupyter Notebook* · 13.4 *Selecting the Python version* · 13.5 *Sharing Python
-projects with venv and pip* · 13.6 *Optional crash courses on the tools of the
-next courses* (NumPy, pandas, Matplotlib).
+## Topics covered
+Creating, using and removing virtual environments; using them in Jupyter; choosing the Python version; sharing projects; a primer on NumPy, pandas and Matplotlib.
 :::
 
 ## Intuition: one kitchen per recipe
@@ -69,6 +65,9 @@ convenience**: it prepends `.venv/bin` to the `PATH` so that typing `python` or
 `pip` finds the environment's executables first. Running `.venv/bin/python`
 directly works just as well.
 
+::: {.deep}
+## Verifying how `venv` works, from Python
+
 Let us verify all of this by creating an environment from Python (without pip,
 so that no network is needed):
 
@@ -92,6 +91,8 @@ print("this kernel in a venv?", sys.prefix != sys.base_prefix)
 
 The test `sys.prefix != sys.base_prefix` is the official way for a program to
 know whether it runs inside a virtual environment.
+:::
+
 
 ## Creating, using and removing an environment {#sec-venv-commands}
 
@@ -280,13 +281,16 @@ print(col + row)
   definition — the reason GPUs, which do thousands of multiplications in
   parallel, power deep learning.
 
+::: {.deep}
+## Properties of the matrix product, and why the order of multiplication matters
+
 ::: {#thm-matmul-assoc}
 ## The matrix product is associative but not commutative
 For conformable matrices, $(AB)C = A(BC)$; in general $AB \ne BA$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-matmul-assoc
+::: {.deep kind="proof"}
+## Proof of @thm-matmul-assoc
 By @eq-matmul twice,
 $$
 \big((AB)C\big)_{ij} = \sum_{l} (AB)_{il}C_{lj} = \sum_l\sum_k A_{ik}B_{kl}C_{lj}
@@ -314,6 +318,8 @@ print(np.allclose((A @ B) @ C, A @ (B @ C)))
 S = np.array([[3.0, 1.0], [1.0, 2.0]]); y = np.array([9.0, 8.0])
 print(np.linalg.solve(S, y))              # solve the linear system S x = y
 ```
+:::
+
 
 ### pandas: tables of data {#sec-pandas}
 
@@ -350,6 +356,9 @@ correction*, which makes $s^2$ an unbiased estimator of the variance; we will
 prove it in the statistics part of the book). Two identities used constantly
 are worth proving now:
 
+::: {.deep}
+## Two identities for the mean and the variance
+
 ::: {#prp-variance-identity}
 ## Two identities for the mean and the variance
 For numbers $x_1,\dots,x_n$ with mean $\bar x$: (a)
@@ -357,8 +366,8 @@ $\sum_i (x_i - \bar x) = 0$; (b)
 $\frac1n\sum_i (x_i-\bar x)^2 = \frac1n\sum_i x_i^2 - \bar x^{\,2}$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-variance-identity
+::: {.deep kind="proof"}
+## Proof of @prp-variance-identity
 (a) $\sum_i(x_i - \bar x) = \sum_i x_i - n\bar x = n\bar x - n\bar x = 0$.
 (b) Expanding the square,
 $\frac1n\sum_i (x_i^2 - 2x_i\bar x + \bar x^2) = \frac1n\sum_i x_i^2 - 2\bar x\cdot\frac1n\sum_i x_i + \bar x^2 = \frac1n\sum_i x_i^2 - 2\bar x^2 + \bar x^2$.
@@ -366,6 +375,8 @@ $\blacksquare$ (Numerically, formula (b) suffers from cancellation when the
 variance is small compared with the mean, cf. @thm-sum-error; libraries use
 the two-pass formula or Welford's algorithm [@welford1962].)
 :::
+:::
+
 
 ### Matplotlib: plotting {#sec-matplotlib}
 

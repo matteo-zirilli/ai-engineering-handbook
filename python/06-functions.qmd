@@ -25,10 +25,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 6.1 *Introduction to functions*. Practice: 6.2 *Functions* ·
-6.3 *Positional and keyword arguments* · 6.4 *Return values* ·
-6.5 *More function examples*.
+## Topics covered
+Defining and calling functions; positional and keyword arguments; return values; worked examples.
 :::
 
 ## Intuition: a machine with a slot and a chute
@@ -184,8 +182,8 @@ arguments or globals, no I/O). Pure functions are easy to test and reason
 about — the result depends only on the input, like a mathematical function.
 Procedures act on the world (print, write files). Good design keeps them
 separate: compute with pure functions, perform I/O in a thin outer layer — a
-recommendation the project brief also makes ("keep the interaction logic out
-of the domain classes").
+principle that the project turns into requirement R3 (interface separated from
+logic, @sec-project-brief).
 
 ## Scope: where names live {#sec-scope}
 
@@ -266,7 +264,7 @@ menu from method names, @sec-ch-project-phonebook).
 from Church's notation $\lambda x.\, x^2$. Use lambdas for short `key=`
 functions; give anything longer a name with `def`.
 
-### Closures
+### Closures {.deep}
 
 A nested function **remembers** the variables of its enclosing scope even
 after that scope has finished: the pair (function, captured environment) is a
@@ -282,7 +280,7 @@ double, triple = make_multiplier(2), make_multiplier(3)
 print(double(10), triple(10), double.__closure__[0].cell_contents)
 ```
 
-### Decorators (a first look)
+### Decorators (a first look) {.deep}
 
 A **decorator** is a function that takes a function and returns a new one;
 `@decorator` above a `def` applies it (PEP 318 [@pep318]). We will use the
@@ -335,8 +333,8 @@ is eventually reached — the "smaller" is a variant, as in @sec-loop-invariants
 For every $n \in \mathbb N$, `factorial(n)` terminates and returns $n!$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-factorial
+::: {.deep kind="proof"}
+## Proof of @prp-factorial
 Induction on $n$. Base: `factorial(0)` returns 1 $= 0!$ without recursive
 calls. Step: assume `factorial(n)` terminates returning $n!$. Then
 `factorial(n+1)` makes one call `factorial(n)` (which terminates with $n!$ by
@@ -393,8 +391,8 @@ for n in [10, 20, 25]:
 outermost one). Hence $C(n) \ge \varphi^{\,n-1}$: the cost is exponential.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-fib-calls
+::: {.deep kind="proof"}
+## Proof of @prp-fib-calls
 $C(0) = C(1) = 1$ (base cases) and $C(n) = 1 + C(n-1) + C(n-2)$ for $n\ge2$.
 Check the formula: $2F_1 - 1 = 1$, $2F_2 - 1 = 1$ ✓. Step (strong induction):
 $C(n) = 1 + (2F_n - 1) + (2F_{n-1} - 1) = 2(F_n + F_{n-1}) - 1 = 2F_{n+1} - 1$.
@@ -424,7 +422,7 @@ calls is $n+1$: from exponential to linear. This idea — solve each
 sub-problem once and reuse it — is **dynamic programming**, which reappears in
 reinforcement learning (Bellman's equations).
 
-### Fast exponentiation
+### Fast exponentiation {.deep}
 
 Computing $x^n$ with $n-1$ multiplications is slow for large $n$ (cryptography
 uses $n$ with hundreds of digits). Using $x^{2k} = (x^k)^2$ we can do much
@@ -455,8 +453,8 @@ print(pow(3, 13, 1000))         # built-in, with an optional modulus
 multiplications (for $n\ge1$).
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-fast-pow
+::: {.deep kind="proof"}
+## Proof of @thm-fast-pow
 *Invariant* $I$: $\text{result}\cdot\text{base}^{e} = x^n$. Initially
 $1\cdot x^n = x^n$ ✓. *Maintenance*: if $e$ is even, $e = 2k$, the body sets
 $\text{base}' = \text{base}^2$, $e' = k$, so
@@ -471,7 +469,7 @@ i.e. $\lfloor \log_2 n\rfloor + 1$ times (@thm-base-representation), with at
 most 2 multiplications per iteration. $\blacksquare$
 :::
 
-### The Towers of Hanoi
+### The Towers of Hanoi {.deep}
 
 The puzzle, published by Édouard Lucas in 1883: move a tower of $n$ disks
 from peg A to peg C, one disk at a time, never placing a larger disk on a
@@ -499,8 +497,8 @@ The recursive algorithm uses $T(n) = 2^n - 1$ moves, and **no** algorithm can
 use fewer.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-hanoi
+::: {.deep kind="proof"}
+## Proof of @thm-hanoi
 *Count.* $T(0) = 0$ and $T(n) = 2T(n-1) + 1$. By induction:
 $T(n) = 2(2^{n-1}-1) + 1 = 2^n - 1$.
 

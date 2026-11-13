@@ -25,10 +25,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 7.1 *Introduction to classes and objects* · 7.2 *Inheritance and
-polymorphism*. Practice: 7.3 *Your first class* · 7.4 *Special methods* ·
-7.5 *Docstrings* · 7.6 *Inheritance and polymorphism*.
+## Topics covered
+Classes and objects; special methods; docstrings; inheritance and polymorphism.
 :::
 
 ## Intuition: blueprints and houses
@@ -48,7 +46,7 @@ the operations allowed on it, so that the rest of the program interacts with
 the data **only through those operations**. That bundle is the unit of
 design.
 
-## A short history of the ideas {#sec-oop-history}
+## A short history of the ideas {#sec-oop-history .deep}
 
 - **Simula 67** (Ole-Johan Dahl and Kristen Nygaard, Norwegian Computing
   Center) introduced classes, objects, inheritance and virtual methods, to
@@ -196,8 +194,8 @@ raise, `acct.balance >= 0` after each call (assuming no code touches
 `_balance` directly).
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-invariant-preserved
+::: {.deep kind="proof"}
+## Proof of @prp-invariant-preserved
 Induction on the number of calls. After `__init__`, $b = \text{balance} \ge 0$
 because negative values raise. If $b \ge 0$ before `deposit(a)`, the method
 either raises (state unchanged) or $a > 0$ and the new balance is $b + a > 0$.
@@ -278,7 +276,13 @@ print(Contact("Ada", "L", "1") == Contact("ada", "l", "1"),
 type"; Python then tries the reflected operation on the other operand and, for
 `==`, falls back to identity.
 
-### The laws behind `__eq__` and `__lt__`
+Built-in tools **assume** that `__eq__` behaves like a true equality and
+`__lt__` like a true order. If they do not, sets, dicts and `sorted`
+misbehave silently, without any error. Comparing **key tuples**, as above, is
+the safe recipe; the deep dive below states the exact laws and proves why the
+recipe works.
+
+### The laws behind `__eq__` and `__lt__` {.deep}
 
 Built-in algorithms *assume* that your methods behave like mathematical
 relations. If they do not, sets, dicts and `sorted` silently misbehave.
@@ -310,8 +314,8 @@ $(a,b) < (a',b') \iff a <_1 a' \ \vee\ (a = a' \wedge b <_2 b')$,
 is a strict total order. By induction the same holds for tuples of any length.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-lex-order
+::: {.deep kind="proof"}
+## Proof of @thm-lex-order
 *Irreflexive*: $(a,b)<(a,b)$ would need $a<_1 a$ or $b <_2 b$, both false.
 
 *Transitive*: let $(a,b) < (a',b')$ and $(a',b') < (a'',b'')$. If $a <_1 a'$
@@ -490,7 +494,12 @@ except TypeError as err:
 m = MemoryStorage(); m.save([{"name": "Ada"}]); print(m.load())
 ```
 
-### Multiple inheritance and the method resolution order {#sec-mro}
+A class may also have **several** base classes. Python then looks for methods
+in a fixed order, the **method resolution order** (MRO), visible as
+`Class.__mro__`, and `super()` follows that order. The deep dive below explains
+how the order is computed.
+
+### Multiple inheritance and the method resolution order {#sec-mro .deep}
 
 Python allows a class to inherit from several bases. Then a question arises:
 when a method is defined in more than one ancestor, **which one is used?** The
@@ -562,8 +571,8 @@ $L[C]$ extends the linearisation of each base, i.e. the relative order of the
 classes in $L[B_i]$ is preserved in $L[C]$ (**monotonicity**).
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-c3-properties
+::: {.deep kind="proof"}
+## Proof of @prp-c3-properties
 Both properties follow from one invariant of **merge**: *an element is output
 only when it is the head of every list that contains it.* Indeed, it is chosen
 only if it appears in no tail; so in every list where it appears, it is at the
@@ -672,10 +681,9 @@ numbering plan, which caps international numbers at 15 digits [@itue164].
 The first five are known by the acronym **SOLID**.
 
 ::: {.project-link}
-**In the project.** The brief asks for *"a `Contact` class representing the
-single record and a `PhoneBook` class managing the collection … keep the
-interaction logic with the user out of the domain classes"* — i.e. the
-**single-responsibility** principle. The implementation in `ai-projects`
+**In the project.** Requirements R2 and R3 (@sec-project-brief) ask for one
+class for a single contact, one for the collection, and the user interaction
+kept outside both — i.e. the **single-responsibility** principle. The implementation in `ai-projects`
 defines `Contatto` (with `__init__`, `__eq__` comparing all four fields, and
 `__lt__` comparing `(surname, name)` tuples — a strict weak order,
 @thm-lex-order) and `Rubrica`, which *has* a list of contacts (composition).

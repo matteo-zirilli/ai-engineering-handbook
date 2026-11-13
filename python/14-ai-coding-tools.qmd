@@ -23,10 +23,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 14.1 *Code generation with ChatGPT* · 14.2 *Code generation with
-Cursor* · 14.3 *Code generation with Copilot in Visual Studio Code* ·
-14.4 *Vibe coding vs. structured prompt engineering*.
+## Topics covered
+Generating code with chat assistants (ChatGPT), AI editors (Cursor) and IDE assistants (Copilot in VS Code); vibe coding versus structured prompt engineering.
 :::
 
 ## Intuition: a very well-read, overconfident intern
@@ -69,8 +67,8 @@ $$
 P(x_1,\dots,x_T) = \prod_{t=1}^{T} P(x_t \mid x_1,\dots,x_{t-1}).
 $$ {#eq-chain-rule}
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @eq-chain-rule
+::: {.deep kind="proof"}
+## Proof of @eq-chain-rule
 By the definition of conditional probability, $P(A\cap B) = P(A)\,P(B\mid A)$.
 For $T = 1$ the formula is trivial. Assuming it for $T-1$:
 $P(x_1..x_T) = P(x_1..x_{T-1})\,P(x_T\mid x_1..x_{T-1}) = \prod_{t=1}^{T-1}P(x_t\mid x_{<t})\cdot P(x_T\mid x_{<T})$.
@@ -114,8 +112,8 @@ Let $z \in \mathbb{R}^{|V|}$.
 (deterministic, repetitive); high temperature flattens the choice (diverse,
 error-prone).
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-softmax
+::: {.deep kind="proof"}
+## Proof of @thm-softmax
 1. Exponentials are positive, and the numerators sum to the denominator.
 2. $\dfrac{e^{(z_i + c)/\tau}}{\sum_j e^{(z_j+c)/\tau}} = \dfrac{e^{c/\tau}e^{z_i/\tau}}{e^{c/\tau}\sum_j e^{z_j/\tau}} = p_i(\tau)$.
 3. By 2, subtract $z_m$: $p_m(\tau) = 1\big/\big(1 + \sum_{j\ne m} e^{(z_j - z_m)/\tau}\big)$.
@@ -275,6 +273,9 @@ $= 1 - 0.7^{10} \approx 0.97$ — sampling several solutions and **testing** the
 is very effective, which is precisely why tests are so valuable when working
 with AI.
 
+::: {.deep}
+## Estimating pass@$k$ without bias
+
 In practice $p$ is unknown. Chen et al. generate $n \ge k$ samples per
 problem, count the $c$ correct ones, and use the estimator
 $$
@@ -292,8 +293,8 @@ $k$ samples chosen at random among the $n$ are all wrong; averaging over the
 randomness of the $n$ samples gives the probability that $k$ fresh samples are
 all wrong.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-passk-unbiased
+::: {.deep kind="proof"}
+## Proof of @thm-passk-unbiased
 Generate the $n$ samples, and independently choose a subset $S$ of $k$ of
 them uniformly at random. Compute the probability $q$ that all samples in $S$
 are wrong in two ways.
@@ -345,6 +346,8 @@ for _ in range(trials):
     plugin += 1 - (1 - c / n) ** k
 print(f"true {1 - (1 - p) ** k:.4f} | unbiased {unbiased / trials:.4f} | plug-in {plugin / trials:.4f}")
 ```
+:::
+
 
 ## Vibe coding versus structured prompt engineering {#sec-vibe-vs-structured}
 
@@ -528,11 +531,11 @@ read, understood and verified.**
 :::
 
 ::: {.project-link}
-**In the project.** The brief closes with *"if you have doubts about how to
-set up the classes, write to me before starting"* — today you could also ask an
-assistant, and this chapter shows how to do it well: give it the brief as a
-**structured prompt** (requirements, constraints such as "keep the interaction
-logic out of the domain classes", the JSON format), ask for a **design and its
+**In the project.** Before writing any code you can discuss the design with an
+assistant, and this chapter shows how to do it well: give it the requirements
+of @sec-project-brief as a **structured prompt** (requirements, constraints
+such as "keep the interaction logic out of the domain classes", the JSON
+format), ask for a **design and its
 rationale** before any code, then use it to **generate edge-case tests** for
 your own implementation (empty file, duplicate contact, non-numeric choice,
 interrupted save). The phone-number normaliser above is a ready-made

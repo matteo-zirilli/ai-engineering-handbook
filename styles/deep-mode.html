@@ -1,0 +1,196 @@
+<script>
+/* =============================================================================
+   Reading modes: "Essentials" (deep dives collapsed) and "Full" (all expanded).
+   - Deep-dive blocks come from filters/deep.lua (div.deep) and from headings
+     marked {.deep} (section.deep), turned here into collapsible blocks.
+   - The chosen mode is remembered across pages (localStorage, if available).
+   - Each chapter gets a banner with the mode switch, reading times and the
+     list of the deep dives on the page; the right-hand table of contents marks
+     deep-dive sections with a microscope icon.
+   ========================================================================== */
+(function () {
+  "use strict";
+  var KEY = "aieh-reading-mode";
+  var DEFAULT_MODE = "essentials";
+  var WPM_TEXT = 200, WPM_PROOF = 120;
+
+  function getMode() {
+    try { return localStorage.getItem(KEY) || DEFAULT_MODE; } catch (e) { return DEFAULT_MODE; }
+  }
+  function saveMode(m) {
+    try { localStorage.setItem(KEY, m); } catch (e) { /* storage unavailable: keep in memory */ }
+  }
+  function words(el) {
+    var t = (el.textContent || "").trim();
+    return t ? t.split(/\s+/).length : 0;
+  }
+  function minutes(n, wpm) { return Math.max(1, Math.round(n / wpm)); }
+
+  var main = document.querySelector("main#quarto-document-content") || document.querySelector("main");
+  if (!main) return;
+
+  /* ---- 1. Turn sections marked {.deep} into collapsible blocks ------------ */
+  main.querySelectorAll("section.deep").forEach(function (sec) {
+    var head = sec.querySelector(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5");
+    var body = document.createElement("div");
+    body.className = "deep-body";
+    Array.prototype.slice.call(sec.children).forEach(function (child) {
+      if (child !== head) body.appendChild(child);
+    });
+    var summary = document.createElement("div");
+    summary.className = "deep-summary";
+    summary.innerHTML = '<span class="deep-title">🔬 Everything in this section is a deep dive</span>';
+    sec.appendChild(summary);
+    sec.appendChild(body);
+    sec.setAttribute("data-kind", "section");
+  });
+
+  /* ---- 2. Decorate every deep block -------------------------------------- */
+  var blocks = Array.prototype.slice.call(main.querySelectorAll("div.deep, section.deep"));
+  var LABEL = { proof: "Proof", section: "Deep-dive section", deep: "Deep dive" };
+  var ICON = { proof: "∎", section: "🔬", deep: "🔬" };
+  blocks.forEach(function (el, i) {
+    var kind = el.getAttribute("data-kind") || "deep";
+    var summary = el.querySelector(":scope > .deep-summary");
+    var body = el.querySelector(":scope > .deep-body");
+    if (!summary || !body) return;
+    if (!el.id) el.id = "deep-auto-" + (i + 1);
+    var w = words(body);
+    var mins = minutes(w, kind === "proof" ? WPM_PROOF : WPM_TEXT);
+    el.setAttribute("data-minutes", mins);
+    if (!summary.querySelector(".deep-title")) {
+      summary.innerHTML = '<span class="deep-title">' + summary.innerHTML + "</span>";
+    }
+    if (kind !== "section") {
+      summary.insertAdjacentHTML("afterbegin",
+        '<span class="deep-badge">' + ICON[kind] + " " + LABEL[kind] + "</span>");
+    }
+    summary.insertAdjacentHTML("beforeend",
+      '<span class="deep-meta">~' + mins + ' min<span class="deep-action" aria-hidden="true"></span></span>');
+    summary.setAttribute("role", "button");
+    summary.setAttribute("tabindex", "0");
+    var toggle = function () {
+      el.classList.toggle("collapsed");
+      summary.setAttribute("aria-expanded", el.classList.contains("collapsed") ? "false" : "true");
+    };
+    summary.addEventListener("click", function (ev) {
+      if (ev.target.closest("a")) return;          // let links inside the title work
+      toggle();
+    });
+    summary.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+    });
+  });
+
+  /* ---- 3. Reading times --------------------------------------------------- */
+  var topLevel = blocks.filter(function (el) { return !el.parentElement.closest("div.deep, section.deep"); });
+  var total = words(main);
+  var deepWords = topLevel.reduce(function (s, el) {
+    var b = el.querySelector(":scope > .deep-body");
+    return s + (b ? words(b) : 0);
+  }, 0);
+  var essMin = minutes(total - deepWords, WPM_TEXT);
+  var fullMin = essMin + topLevel.reduce(function (s, el) { return s + (+el.getAttribute("data-minutes") || 0); }, 0);
+
+  /* ---- 4. Mode switches (banner + sidebar) ------------------------------- */
+  var helpLink = document.querySelector('a[href$="how-to-study.html"]');
+  var helpHref = (helpLink ? helpLink.getAttribute("href") : "how-to-study.html") + "#sec-reading-modes";
+
+  function switchHTML(extraClass) {
+    return '<div class="rm-switch ' + extraClass + '" role="group" aria-label="Reading mode">' +
+      '<button type="button" data-mode="essentials" title="Show only what you must know; deep dives are collapsed">Essentials</button>' +
+      '<button type="button" data-mode="full" title="Expand every deep dive and proof">Full</button></div>';
+  }
+
+  if (blocks.length > 0) {
+    var items = topLevel.map(function (el) {
+      var kind = el.getAttribute("data-kind") || "deep";
+      var title;
+      if (kind === "section") {
+        var h = el.querySelector(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5");
+        title = h ? h.textContent.replace(/\s+/g, " ").trim() : "Section";
+      } else {
+        var t = el.querySelector(":scope > .deep-summary .deep-title");
+        title = t ? t.textContent.trim() : LABEL[kind];
+      }
+      return '<li><a href="#' + el.id + '"><span class="rm-kind">' + ICON[kind] + "</span> " +
+        title + '</a> <span class="rm-min">~' + el.getAttribute("data-minutes") + " min</span></li>";
+    }).join("");
+    var banner = document.createElement("div");
+    banner.className = "reading-mode-banner";
+    banner.innerHTML =
+      '<div class="rm-row"><span class="rm-label">Reading mode</span>' + switchHTML("") +
+      '<span class="rm-times">Essentials ≈ ' + essMin + " min · Full ≈ " + fullMin + " min</span>" +
+      '<a class="rm-help" href="' + helpHref + '">What are the two modes?</a></div>' +
+      '<details class="rm-list"><summary>' + topLevel.length + " deep dive" + (topLevel.length > 1 ? "s" : "") +
+      " on this page — show list</summary><ol>" + items + "</ol></details>";
+    var header = main.querySelector("#title-block-header");
+    if (header) header.insertAdjacentElement("afterend", banner);
+    else main.insertAdjacentElement("afterbegin", banner);
+  }
+
+  var sidebar = document.querySelector("#quarto-sidebar .sidebar-menu-container") || document.querySelector("#quarto-sidebar");
+  if (sidebar) {
+    var box = document.createElement("div");
+    box.className = "rm-sidebar";
+    box.innerHTML = '<div class="rm-sidebar-label">Reading mode</div>' + switchHTML("rm-small");
+    sidebar.insertAdjacentElement("afterbegin", box);
+  }
+
+  function applyMode(mode) {
+    document.body.classList.toggle("mode-essentials", mode === "essentials");
+    document.body.classList.toggle("mode-full", mode === "full");
+    blocks.forEach(function (el) {
+      el.classList.toggle("collapsed", mode === "essentials");
+      var s = el.querySelector(":scope > .deep-summary");
+      if (s) s.setAttribute("aria-expanded", mode === "essentials" ? "false" : "true");
+    });
+    document.querySelectorAll(".rm-switch button").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-mode") === mode);
+      b.setAttribute("aria-pressed", b.getAttribute("data-mode") === mode ? "true" : "false");
+    });
+  }
+  document.querySelectorAll(".rm-switch button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var m = b.getAttribute("data-mode");
+      saveMode(m);
+      applyMode(m);
+    });
+  });
+
+  /* ---- 5. Table of contents: mark deep-dive entries ---------------------- */
+  document.querySelectorAll("#TOC a[href^='#']").forEach(function (a) {
+    var target = document.getElementById(decodeURIComponent(a.getAttribute("href").slice(1)));
+    if (target && target.closest("div.deep, section.deep")) {
+      a.classList.add("toc-deep");
+      a.setAttribute("title", "Deep dive — collapsed in Essentials mode");
+    }
+  });
+
+  /* ---- 6. Opening a link to something inside a collapsed block ----------- */
+  function reveal(id) {
+    var el = id && document.getElementById(id);
+    if (!el) return;
+    var p = el.closest("div.deep.collapsed, section.deep.collapsed");
+    while (p) {
+      p.classList.remove("collapsed");
+      p = p.parentElement ? p.parentElement.closest("div.deep.collapsed, section.deep.collapsed") : null;
+    }
+  }
+  document.addEventListener("click", function (ev) {
+    var a = ev.target.closest("a[href*='#']");
+    if (!a) return;
+    var url = new URL(a.href, location.href);
+    if (url.pathname === location.pathname && url.hash) reveal(decodeURIComponent(url.hash.slice(1)));
+  }, true);
+  window.addEventListener("hashchange", function () { reveal(decodeURIComponent(location.hash.slice(1))); });
+
+  applyMode(getMode());
+  if (location.hash) {
+    var id = decodeURIComponent(location.hash.slice(1));
+    reveal(id);
+    var target = document.getElementById(id);
+    if (target) setTimeout(function () { target.scrollIntoView(); }, 50);
+  }
+})();
+</script>

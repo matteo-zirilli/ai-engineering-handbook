@@ -23,11 +23,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 3.1 *Introduction to collections*. Practice: 3.2 *Lists* ·
-3.3 *Modify and check* · 3.4 *Nested lists* · 3.5 *Tuples* · 3.6 *Sets* ·
-3.7 *Dictionaries* · 3.8 *Length of a collection* · 3.9 *Casting between
-collections*.
+## Topics covered
+Lists (creating, modifying, checking, nesting), tuples, sets, dictionaries; the size of a collection; converting one collection into another.
 :::
 
 ## Intuition: four ways to keep things
@@ -98,8 +95,8 @@ $0\le k\le n$; (c) `s[i:j] + s[j:k] == s[i:k]` for $i\le j \le k \le n$.
 *In one line:* half-open slices have length "end minus start" and glue
 together perfectly — Dijkstra's argument made executable.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-slices
+::: {.deep kind="proof"}
+## Proof of @prp-slices
 By definition `s[i:j]` contains the elements with indices in
 $\{i, i+1, \dots, j-1\}$, a set with $j - i$ elements, in increasing order:
 (a). For (c), $\{i,\dots,j-1\}$ and $\{j, \dots, k-1\}$ are disjoint, their union
@@ -150,6 +147,9 @@ dynamic tables [@knuth1997, §2.2.2; @cormen2022, §16.4], is to grow
 **geometrically**: multiply the capacity by a constant factor $g > 1$ instead of
 adding a constant.
 
+::: {.deep}
+## Proof that `append` is fast on average, and CPython's growth in action
+
 ::: {#thm-amortized-append}
 ## Amortised cost of `append`
 Suppose that when a full array of capacity $c$ grows, the new capacity is at
@@ -162,8 +162,8 @@ total is at most $2N$.
 *In one line:* expensive resizes are rare — each one is paid for by the many
 cheap appends since the previous resize.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-amortized-append (aggregate method)
+::: {.deep kind="proof"}
+## Proof of @thm-amortized-append (aggregate method)
 
 Copies happen only during resizes. Let the resizes that occur during the $N$
 appends happen when the array is full with sizes $c_1 < c_2 < \dots < c_m$;
@@ -209,6 +209,8 @@ print("(length when the block grew, bytes):", sizes)
 
 Each time the size jumps, a resize occurred; the jumps become further apart as
 the list grows — geometric growth in action.
+:::
+
 
 Not every operation is cheap. Inserting or deleting at the **front** shifts all
 the other references: $\Theta(n)$. The costs below come from the CPython
@@ -360,7 +362,11 @@ strategies handle collisions:
 
 The crucial parameter is the **load factor** $\alpha = n/m$ (keys per slot).
 
-### Expected cost
+In practice, as long as the table is kept partly empty, a lookup takes a
+**constant number of steps on average** — $O(1)$ *expected* time — however many
+keys are stored. The deep dive below makes this precise and proves it.
+
+### Expected cost {.deep}
 
 We cannot avoid bad luck with *every* set of keys (any fixed $h$ maps at least
 $n/m$ keys to some slot). The analysis assumes that $h$ "looks random":
@@ -383,8 +389,8 @@ deletion take $O(1)$ expected time.
 *In one line:* on average each slot holds $\alpha$ keys, and an unsuccessful
 search must look at all of them.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-chaining
+::: {.deep kind="proof"}
+## Proof of @thm-chaining
 Let the stored keys be $k_1,\dots,k_n$ and search for a key $k$ not in the
 table. The search scans the chain at slot $h(k)$. For each $i$, define the
 indicator $X_i = 1$ if $h(k_i) = h(k)$ and $0$ otherwise. By simple uniform
@@ -412,8 +418,8 @@ probes in an unsuccessful search is at most $\dfrac{1}{1-\alpha}$.
 $\alpha$, so the number of probes behaves like waiting for the first "free"
 outcome in repeated trials.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-open-addressing
+::: {.deep kind="proof"}
+## Proof of @thm-open-addressing
 Let $X$ be the number of probes. The first probe always happens. A second
 probe happens only if the first slot is occupied: probability $n/m$. Given
 that, a third happens only if the second slot (a different, uniformly random
@@ -475,8 +481,8 @@ change while it is stored in a set or dict.
 *In one line:* the table looks for a key only along the probe sequence of its
 hash, so an equal key with a different hash would never be found.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — why the contract is necessary
+::: {.deep kind="proof"}
+## Why the contract is necessary
 Suppose `a == b` but `hash(a) != hash(b)`, and insert `a`. A lookup of `b`
 starts at the slot determined by `hash(b)` and follows its probe sequence,
 comparing with `==` only the keys it meets there; nothing forces that sequence
@@ -617,7 +623,7 @@ already-sorted **runs** in the data, so it takes $O(n)$ time on sorted or
 nearly sorted input and $O(n\log n)$ in the worst case. (Since Python 3.11 the
 merge strategy is the *powersort* variant of Munro and Wild [@munro2018].)
 
-### Why $n \log n$ is the best possible
+### Why $n \log n$ is the best possible {.deep}
 
 Can a cleverer algorithm sort with fewer comparisons? Not if it only learns
 about the data by **comparing** pairs of elements.
@@ -633,8 +639,8 @@ $\log_2(n!) = \Theta(n \log n)$.
 distinguish at most $2^k$ cases, but there are $n!$ possible orders to
 distinguish.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-sort-lower-bound (decision trees)
+::: {.deep kind="proof"}
+## Proof of @thm-sort-lower-bound (decision trees)
 
 Fix $n$ and an algorithm. Its behaviour on inputs of $n$ distinct elements can
 be drawn as a binary **decision tree**: each internal node is a comparison
@@ -694,9 +700,9 @@ print(f"list: {t_list:.4f} s   set: {t_set:.6f} s   ratio ≈ {t_list / t_set:,.
 | count occurrences | `collections.Counter` |
 
 ::: {.project-link}
-**In the project.** The brief asks to *"choose with care the data structure …
-lists, dictionary or a combination: assess what makes search and modification
-more efficient, and motivate the choice"*. The implementation in
+**In the project.** Requirement R4 (@sec-project-brief) asks for a data
+structure suited to orderly and efficient storage, **with the choice
+explained**: a list, a dictionary, or a combination. The implementation in
 [`ai-projects`](https://github.com/matteo-zirilli/ai-projects/blob/main/Phone_Book_Python_OOP.ipynb)
 stores contacts in a **list** of `Contatto` objects, sorted with `list.sort()`
 (Timsort, relying on `__lt__` which compares the tuples `(surname, name)`
@@ -705,8 +711,8 @@ keeps order and allows duplicates of names (two "Mario Rossi" with different
 numbers), but `in`, search and duplicate checks are $O(n)$ scans; a `dict`
 keyed by a normalised `(surname, name, number)` tuple would make the duplicate
 check $O(1)$ expected. For a personal phone book ($n$ in the hundreds) both are
-instantaneous — and *saying so, with the numbers*, is exactly the motivation the
-brief asks for.
+instantaneous — and *saying so, with the numbers*, is exactly the explanation R4
+asks for.
 :::
 
 ## Common pitfalls

@@ -5,14 +5,18 @@ in English and published as a website with [Quarto](https://quarto.org).
 
 📖 **Read it online:** <https://matteo-zirilli.github.io/ai-engineering-handbook/>
 
-The handbook follows, course by course, the twelve courses of the Master in AI
-Engineering attended by the author, going far beyond the lectures:
+The handbook follows, course by course, the topics of the twelve courses of the
+Master in AI Engineering attended by the author, going far beyond them. It is an
+independent work, not affiliated with the course provider, and it does not
+reproduce any course material. It is:
 
 - **self-contained** — it assumes no prior knowledge and builds every concept
   from the foundations;
 - **proof-driven** — every formula is derived or proved, with the idea behind
-  it and the paper, book or standard where it was first proposed (proofs are
-  in collapsible boxes, so they never get in the way);
+  it and the paper, book or standard where it was first proposed;
+- **two-layered** — a *Reading mode* switch (Essentials / Full) shows only the
+  must-know content or also every deep dive (proofs, history, internals,
+  extra code), which sit in place as collapsible coloured bars;
 - **example-rich** — each idea is shown as an intuition, a worked example by
   hand, and runnable code whose output is produced by actually executing it;
 - **interactive** — some pages contain small simulations that run in the
@@ -67,16 +71,50 @@ After changing a chapter's code, render it locally and commit the updated
 
 Every chapter follows the same template:
 
-1. **Learning objectives** and the course lessons covered;
+1. **Learning objectives** and **Topics covered** (in my own words);
 2. **Intuition** (no formulas);
 3. **Theory**: definitions, theorems and algorithms, each with its history and
-   primary source; each proof sits in a collapsed
-   `callout-caution` box titled *"For the interested reader — proof of …"*,
-   preceded by a one-line *"In one line:"* statement of what it proves;
+   primary source, and with a one-line *"In one line:"* explanation after each
+   statement;
 4. **Worked examples** (by hand) and **practice** (executed code);
 5. **In the project** box linking the chapter to the course project;
 6. **Common pitfalls**, **Summary**, **Exercises** (collapsed solutions),
    **Further reading** (annotated, with section numbers).
+
+### Essentials and deep dives
+
+Every page has two layers, switched by the *Reading mode* control
+(Essentials by default; explained in `how-to-study.qmd#sec-reading-modes`):
+
+- **Essentials** — must-know content, self-sufficient for later chapters and
+  the project. Plain text, no markup.
+- **Deep dives** — proofs, history, internals, extra code. Mark them in place:
+
+  ```markdown
+  ::: {.deep kind="proof"}          <!-- a proof (amber bar) -->
+  ## Proof of @thm-something
+  ...
+  :::
+
+  ::: {.deep}                       <!-- any other deep dive (purple bar) -->
+  ## Title shown on the bar
+  ...
+  :::
+
+  ### A whole section {.deep}       <!-- the entire section collapses under its heading -->
+  ```
+
+  Rule: if a deep dive introduces something used later, the essentials must
+  contain at least its statement.
+
+Implementation: `filters/deep.lua` (blocks), `styles/deep-mode.html` (switch,
+banner, reading times, table-of-contents marks), `styles/handbook.css`.
+
+### Course material
+
+The handbook never reproduces the course provider's material (lectures,
+slides, texts, project assignments, lesson titles). Topics and project
+requirements are always restated in my own words.
 
 Cross-references use Quarto ids: `sec-`, `thm-`, `lem-`, `def-`, `prp-`,
 `exm-`, `exr-`, `eq-`, `fig-`, `tbl-`. Citation keys are `firstauthorYEAR`.

@@ -22,10 +22,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 12.1 *Introduction to the Python Package Index*. Practice:
-12.2 *Installing and uninstalling a package with pip* · 12.3 *Selecting the
-version and upgrading a package* · 12.4 *Exporting and importing new modules*.
+## Topics covered
+The Python Package Index; installing, removing, choosing versions of and upgrading packages with `pip`; exporting and re-creating a set of dependencies.
 :::
 
 ## Intuition: an app store for code
@@ -211,6 +209,13 @@ pip uses a **backtracking resolver** (*resolvelib*) that does exactly this;
 before, pip installed whatever it met first and could produce broken
 environments.
 
+In unlucky cases this search can take very long or end with a conflict that
+no choice of versions can satisfy — one more reason to **pin** the versions of
+an application with a lock file (@sec-requirements).
+
+::: {.deep}
+## Why dependency resolution is hard: NP-completeness and a toy resolver
+
 How hard can it be? In the worst case, **very**: it contains the Boolean
 satisfiability problem.
 
@@ -244,8 +249,8 @@ two versions and every dependency is a disjunction of at most three versions.
 dependencies the role of clauses, so a resolver that always answered quickly
 would solve 3-SAT quickly.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-dependency-np (reduction from 3-SAT)
+::: {.deep kind="proof"}
+## Proof of @thm-dependency-np (reduction from 3-SAT)
 This result was established for Debian and RPM packages by the EDOS project
 [@dicosmo2006]; see also @cox2016 for a readable account. The reduction below
 follows their idea.
@@ -322,6 +327,8 @@ print(resolve(repo, "app"))
 The brute-force resolver tries up to $\prod_p (\text{number of versions of } p)$
 combinations — exponential in the number of packages; real resolvers prune this
 space aggressively but cannot avoid the worst case (unless P = NP).
+:::
+
 
 ## Choosing packages wisely {#sec-choosing-packages}
 

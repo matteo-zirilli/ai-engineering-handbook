@@ -23,10 +23,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 8.1 *Introduction to exceptions* · 8.2 *Anatomy of an exception* ·
-8.3 *Main exception types*. Practice: 8.4 *Try – except – finally* ·
-8.5 *Raise and assert*.
+## Topics covered
+What exceptions are and what a traceback tells you; the main exception types; `try`/`except`/`finally`; `raise` and `assert`.
 :::
 
 ## Intuition: the fire alarm
@@ -143,6 +141,9 @@ BaseException
                 └── UnicodeDecodeError
 ```
 
+::: {.deep}
+## Generating the real hierarchy from Python itself
+
 We can generate the real tree from Python itself, walking `__subclasses__()`
 recursively (a nice exercise in recursion and OOP introspection):
 
@@ -157,6 +158,8 @@ def show_tree(cls, depth=0, max_depth=2):
 
 show_tree(ArithmeticError); show_tree(LookupError); show_tree(OSError, max_depth=1)
 ```
+:::
+
 
 ### The main exception types
 
@@ -417,7 +420,7 @@ except CorruptedFileError as err:
     print(err, "| caused by:", repr(err.__cause__))
 ```
 
-### Exception groups
+### Exception groups {.deep}
 
 Python 3.11 added `ExceptionGroup` and `except*` to raise and handle **several
 exceptions at once** — for instance when validating all fields of a form, or
@@ -543,6 +546,9 @@ with open(path, "w", encoding="utf-8") as f:
 # here f is closed, whatever happened inside the block
 ```
 
+::: {.deep}
+## How `with` works inside, and how to write your own context manager
+
 An object usable in `with` is a **context manager**: it has `__enter__`
 (called at the start; its return value is bound by `as`) and
 `__exit__(exc_type, exc, tb)` (called at the end, with the exception
@@ -582,8 +588,10 @@ with timer("sum of squares"):
     total = sum(i * i for i in range(200_000))
 print(total)
 ```
+:::
 
-## Performance note
+
+## Performance note {.deep}
 
 Since Python 3.11, entering a `try` block costs essentially nothing
 ("zero-cost" exceptions); raising and catching an exception is more expensive
@@ -592,10 +600,9 @@ input, a missing file). Do not use exceptions for ordinary control flow in
 hot loops; do use them for errors.
 
 ::: {.project-link}
-**In the project.** The brief's two "practical recommendations" are exactly
-this chapter: *handle invalid input and out-of-menu choices without crashing
-the program*, and *consider the case of a missing or empty file at first
-start*. The implementation handles them with `try`/`except ValueError` around
+**In the project.** Requirements R8 and R9 (@sec-project-brief) are exactly
+this chapter: wrong input and invalid menu choices must never crash the
+program, and a missing, empty or damaged file must not stop it. The implementation handles them with `try`/`except ValueError` around
 every `int(input(...))`, `except json.JSONDecodeError` when loading, and
 `raise ValueError(...)` in `Contatto.__init__` when the number is not numeric.
 Two refinements follow from this chapter (see @sec-ch-project-phonebook):

@@ -24,11 +24,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 9.1 *File types*. Practice: 9.2 *Reading a text file* · 9.3 *Writing to
-a text file* · 9.4 *Reading a file in binary format* · 9.5 *Reading from CSV
-files* · 9.6 *Writing to CSV files* · 9.7 *Working with TSV files* ·
-9.8 *Working with JSON files*.
+## Topics covered
+Kinds of files; reading and writing text; reading binary data; CSV, TSV and JSON files.
 :::
 
 ## Intuition: memory forgets, files remember
@@ -173,7 +170,7 @@ fixed-size binary fields, specifying **byte order** (`>` big-endian, `<`
 little-endian) and field types (`I` = unsigned 32-bit int, `H` = 16-bit, `B` =
 byte, `d` = float64…).
 
-### A real binary format: PNG
+### A real binary format: PNG {.deep}
 
 To see how a binary format is designed, we build a tiny PNG image **by hand**
 following the specification [@png2003], then read it back. A PNG file is:
@@ -221,7 +218,7 @@ with Image.open(img_path) as im:
     print(im.format, im.size, im.mode, im.getpixel((3, 2)))
 ```
 
-### How a checksum detects corruption
+### How a checksum detects corruption {.deep}
 
 The CRC-32 in each chunk lets a reader detect corrupted data. A **cyclic
 redundancy check** (CRC), introduced by Peterson and Brown [@peterson1961],
@@ -244,8 +241,8 @@ positions). CRC-32 detects every burst of length $\le 32$.
 *In one line:* such an error is $x^i B(x)$ with $\deg B < r$; $G$ shares no
 factor with $x^i$, so it would have to divide $B$, which is too small.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-crc-burst
+::: {.deep kind="proof"}
+## Proof of @thm-crc-burst
 A burst of length $\ell \le r$ starting at bit position $i$ has error
 polynomial $E(x) = x^i B(x)$ with $B(0) = 1$ and $\deg B = \ell - 1 < r$.
 Suppose $G \mid E$. Polynomials over a field admit Euclidean division
@@ -294,6 +291,9 @@ Grace,Hopper,+1 202 0000,"Said ""It's easier to ask forgiveness"""
 This is why `line.split(",")` is **wrong**: it breaks the second record into
 five fields. Quoting makes the encoding reversible:
 
+::: {.deep}
+## Why quoting makes CSV unambiguous
+
 ::: {#prp-csv-roundtrip}
 ## CSV quoting is unambiguous
 Let $\mathrm{enc}(s) = $ `'"' + s.replace('"', '""') + '"'`. Then a parser that
@@ -303,8 +303,8 @@ field, recovers exactly $s$; hence any list of fields can be encoded and
 decoded without loss.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-csv-roundtrip
+::: {.deep kind="proof"}
+## Proof of @prp-csv-roundtrip
 In $\mathrm{enc}(s)$, between the opening and the closing quote, every quote
 character of $s$ appears **doubled**, so the content consists of non-quote
 characters and *pairs* of quotes. Scanning from the left, the parser meets
@@ -317,6 +317,8 @@ the separator that follows (comma or line break) starts the next field. By
 induction on the number of fields, the whole record is recovered.
 $\blacksquare$
 :::
+:::
+
 
 ### Reading and writing CSV with the `csv` module
 
@@ -487,6 +489,9 @@ specified to be **atomic** — other processes see either the old file or the ne
 one, never a mix [@posixrename]; Python exposes this as `os.replace`, which is
 also atomic on Windows when source and destination are on the same volume.
 
+::: {.deep}
+## An `atomic_write_json` implementation
+
 ```{python}
 import os, tempfile
 
@@ -507,6 +512,8 @@ def atomic_write_json(path: Path, obj) -> None:
 atomic_write_json(json_path, book)
 print(json.loads(json_path.read_text(encoding="utf-8"))[1]["name"])
 ```
+:::
+
 
 ## Choosing a format {#sec-choosing-format}
 
@@ -521,9 +528,9 @@ print(json.loads(json_path.read_text(encoding="utf-8"))[1]["name"])
 | images, audio | PNG/JPEG, WAV/MP3 | use a library (Pillow, …) |
 
 ::: {.project-link}
-**In the project.** Persistence is a hard requirement: *"contacts must be saved
-and reloaded automatically at start-up, so the user finds their phone book"*,
-with JSON suggested. The implementation in `ai-projects` loads with
+**In the project.** Persistence is a hard requirement (R7, @sec-project-brief):
+contacts are loaded automatically at start-up and saved at the end, in
+JSON. The implementation in `ai-projects` loads with
 `json.load` into a list of dicts and rebuilds `Contatto` objects, and saves with
 `json.dump(..., indent=4)`, converting objects to dicts dynamically through
 `inspect.signature(Contatto.__init__)`. With this chapter you can also see the

@@ -36,7 +36,7 @@ Every chapter follows the same rhythm:
 | **Intuition** | An everyday picture of the idea, with no formulas. |
 | **Theory** | Definitions, theorems, algorithms, with their history and sources. |
 | **Worked examples** | Problems solved step by step, by hand. |
-| **Practice** | Annotated, runnable code, following the *Practice* lessons of the course. |
+| **Practice** | Annotated, runnable code that puts the theory to work. |
 | **In the project** | Where and how the chapter is used in the course's final project. |
 | **Common pitfalls** | The errors that beginners (and experts) make most often. |
 | **Summary** | The ideas to remember. |
@@ -65,16 +65,74 @@ Orange boxes warn you about pitfalls and frequent misconceptions.
 Red boxes highlight a result you must remember.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proofs
-Proofs live in collapsed boxes like this one. Each box is **preceded** by a
-one-line statement of its result. Open it to see the full derivation.
-:::
+Deep dives and proofs have their own purple and amber bars, explained in the
+next section.
 
 Theorems, lemmas, definitions, equations, figures and tables are numbered
 per chapter — *Theorem 2.3* is the third theorem of Chapter 2 — and every
 reference to them is a link, so that a proof can always point precisely to the
 results it uses.
+
+## Two reading modes: Essentials and Full {#sec-reading-modes .unnumbered}
+
+The handbook is deliberately detailed, but not every detail is needed to
+understand and use an idea. Every page therefore separates two layers:
+
+- **Essentials** — what you **must** read and understand: intuitions,
+  definitions, the statements of the key results (each with its *"In one
+  line"* explanation), the core examples and code, the pitfalls and the
+  summary. The essentials of a chapter are **self-sufficient**: everything the
+  later chapters and the project rely on is in this layer.
+- **Deep dives** — what you **may** read if you want to go further: proofs,
+  the history and origin of an idea, how things work inside (the bits of a
+  floating-point number, the internals of a hash table, …), extra code and
+  technicalities. They are placed **exactly where they belong** in the text,
+  never in a separate appendix, and you can open them one at a time.
+
+The switch **Reading mode: Essentials | Full** — at the top of each chapter
+and in the left sidebar — controls them all at once:
+
+- in **Essentials** mode (the default) every deep dive is **collapsed into a
+  coloured bar**, so you always see *what* you are skipping and *where*;
+  click a bar to open just that one;
+- in **Full** mode every deep dive is open.
+
+Your choice is remembered when you move between pages. Three more aids tell
+you what is hidden:
+
+- the banner at the top of each chapter shows the **reading time** in both
+  modes and, under *"N deep dives on this page"*, the **list** of the deep
+  dives with direct links;
+- in the table of contents on the right, deep-dive sections are marked with
+  🔬 (and greyed out in Essentials mode);
+- clicking a link to something inside a collapsed deep dive (for instance a
+  theorem referenced from another page) opens it automatically.
+
+The bars look like this — try them:
+
+::: {.deep}
+## An example deep dive
+Deep dives use a **purple** bar. Inside you find the material for curious
+readers: historical notes, internal details, additional code. Nothing in the
+Essentials layer depends on reading it.
+:::
+
+::: {.deep kind="proof"}
+## An example proof
+Proofs use an **amber** bar marked ∎. Each one is **preceded** by the
+statement it proves and by a one-line explanation (*"In one line: …"*), so you
+can take the result on faith and keep reading.
+:::
+
+A heading can also be marked as a deep dive: then the **whole section** is
+collapsed under its title, which stays visible with a 🔬 *deep dive* label.
+
+::: {.callout-tip}
+## A suggested way to use the modes
+On a first reading, stay in **Essentials** and do the exercises. Come back in
+**Full** mode for the chapters that matter most to you, or whenever an
+essential statement makes you ask *"why?"*.
+:::
 
 ## Code and outputs {.unnumbered}
 

@@ -23,9 +23,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 5.1 *Introduction to loops*. Practice: 5.2 *The while loop* ·
-5.3 *The for loop* · 5.4 *Break and continue*.
+## Topics covered
+Repetition with `while` and `for`; leaving or skipping iterations with `break` and `continue`.
 :::
 
 ## Intuition: shampoo instructions
@@ -126,8 +125,8 @@ For `step > 0`, `len(range(start, stop, step))`
 $= \max\!\big(0, \lceil (\text{stop}-\text{start})/\text{step}\rceil\big)$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-range-length
+::: {.deep kind="proof"}
+## Proof of @prp-range-length
 The elements are $\text{start} + k\cdot\text{step}$ for the integers $k \ge 0$
 with $\text{start} + k\cdot\text{step} < \text{stop}$, i.e.
 $k < (\text{stop}-\text{start})/\text{step} =: x$. If $x \le 0$ there is no such
@@ -218,7 +217,12 @@ for n in range(10):
 print()
 ```
 
-## Proving loops correct {#sec-loop-invariants}
+A loop is correct when it computes the right result **and** always stops.
+Testing checks a few inputs; the next section shows how to *prove* both
+properties for every input — with induction, invariants and variants — and is
+the basis of the correctness argument for binary search.
+
+## Proving loops correct {#sec-loop-invariants .deep}
 
 Testing a loop on a few inputs shows that it works *on those inputs*. A
 **proof** shows that it works on *all* of them. The method was introduced by
@@ -240,8 +244,8 @@ for every $n \ge n_0$.
 *In one line:* knock over the first domino; each domino knocks over the next;
 all dominoes fall.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — why induction is valid
+::: {.deep kind="proof"}
+## Why induction is valid
 Suppose not: the set $S = \{n \ge n_0 : P(n) \text{ is false}\}$ is non-empty.
 By well-ordering (@lem-division) it has a least element $m$. $m \ne n_0$
 because $P(n_0)$ is true, so $m - 1 \ge n_0$, and $P(m-1)$ is true because
@@ -359,8 +363,8 @@ $\lfloor \log_2 n\rfloor + 1$ iterations.
 everything from `hi` on is big enough; the gap between them at least halves at
 each step.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-binary-search
+::: {.deep kind="proof"}
+## Proof of @thm-binary-search
 **Invariant** $I$: $0 \le lo \le hi \le n$, $a[k] < x$ for all $k < lo$, and
 $a[k]\ge x$ for all $k \ge hi$ (with $k < n$).
 
@@ -452,8 +456,8 @@ $n$. The obvious test tries all $d$ from 2 to $n-1$; we can stop much earlier.
 If $n \ge 2$ is not prime, it has a divisor $d$ with $2 \le d \le \sqrt n$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-sqrt-divisor
+::: {.deep kind="proof"}
+## Proof of @prp-sqrt-divisor
 If $n$ is not prime, $n = ab$ with $1 < a \le b < n$. Then
 $a^2 \le ab = n$, so $a \le \sqrt n$. $\blacksquare$
 :::
@@ -473,7 +477,7 @@ print([n for n in range(50) if is_prime(n)])
 print(is_prime(1_000_000_007))  # about 31,623 iterations instead of a billion
 ```
 
-### The sieve of Eratosthenes
+### The sieve of Eratosthenes {.deep}
 
 To list **all** primes up to $N$, the sieve attributed to Eratosthenes of
 Cyrene (3rd century BC) crosses out the multiples of each prime:
@@ -503,7 +507,7 @@ $k \ge 2$ is at most $\int_{k-1}^{k} dx/x$). So the sieve is $O(N \log N)$. The
 sharper bound $O(N\log\log N)$ follows from Mertens' theorem
 $\sum_{p \le x} 1/p = \ln\ln x + O(1)$ [@hardy2008, §22.7].
 
-### A loop nobody can prove: Collatz
+### A loop nobody can prove: Collatz {.deep}
 
 Not every loop can be analysed. Take any $n \ge 1$; if it is even halve it,
 otherwise replace it with $3n+1$; repeat until you reach 1.

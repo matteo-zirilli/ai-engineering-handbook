@@ -23,11 +23,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 11.1 *Introduction to the standard library*. Practice: 11.2 *The `sys`
-module* · 11.3 *Command-line arguments with `sys`* · 11.4 *The `os` module* ·
-11.5 *The `time` module* · 11.6 *The `datetime` module* · 11.7 *The `math`
-module*.
+## Topics covered
+An overview of the standard library; `sys` and command-line arguments; `os`; `time`; `datetime`; `math`.
 :::
 
 ## Intuition: a toolbox that comes with the house
@@ -163,6 +160,9 @@ print(time.gmtime(0))                              # the epoch itself, broken do
 print(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(1_000_000_000)))
 ```
 
+::: {.deep}
+## The year-2038 problem
+
 ::: {#exm-y2038}
 ## The year-2038 problem
 Many older systems store timestamps in a **signed 32-bit integer**
@@ -181,6 +181,8 @@ import datetime as dt
 print(dt.datetime.fromtimestamp(2**31 - 1, dt.timezone.utc))
 print(dt.datetime.fromtimestamp(-2**31, dt.timezone.utc))
 ```
+:::
+
 
 ### Which clock to use
 
@@ -242,6 +244,9 @@ it refers to, so it cannot be compared reliably with times elsewhere. One
 - exchange dates as **ISO 8601** strings (`2026-11-13T18:29:00+01:00`)
   [@iso8601], which sort correctly as text.
 
+::: {.deep}
+## A daylight-saving trap
+
 ```{python}
 rome = ZoneInfo("Europe/Rome")
 before = datetime(2026, 3, 29, 1, 30, tzinfo=rome)        # DST starts at 02:00 that night
@@ -255,8 +260,10 @@ Adding a `timedelta` to an aware `datetime` moves the **wall clock** (it gave
 02:30, a time that does not exist that night); converting to UTC first gives
 the **elapsed-time** answer. This is the kind of subtlety that makes "store in
 UTC" a rule.
+:::
 
-### Counting leap years and finding the weekday
+
+### Counting leap years and finding the weekday {.deep}
 
 The `datetime` module uses the **proleptic Gregorian calendar**: the
 Gregorian rules (@sec-leap-years) extended backwards to year 1. Two formulas
@@ -273,8 +280,8 @@ $$
 *In one line:* count the multiples of 4, remove the multiples of 100, put back
 the multiples of 400 (**inclusion–exclusion**).
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-leap-count
+::: {.deep kind="proof"}
+## Proof of @thm-leap-count
 For a positive integer $d$, the multiples of $d$ in $\{1,\dots,y\}$ are
 $d, 2d, \dots, qd$ with $qd \le y < (q+1)d$, i.e. $q = \lfloor y/d\rfloor$ of
 them. Let $A_d$ be that set. The leap years are
@@ -296,8 +303,8 @@ w(y) = \big(y - 1 + L(y-1)\big) \bmod 7 .
 $$
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-weekday
+::: {.deep kind="proof"}
+## Proof of @thm-weekday
 Between 1 January of year 1 and 1 January of year $y$ lie the complete years
 $1, \dots, y-1$: $y - 1$ years of 365 days plus one extra day for each leap
 year, $D = 365(y-1) + L(y-1)$ days. The weekday advances by $D \bmod 7$. Since
@@ -344,8 +351,8 @@ $P(n,k) = \frac{n!}{(n-k)!}$; the number of unordered ones (subsets of size
 $k$) is $\binom nk = \frac{n!}{k!\,(n-k)!}$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-comb
+::: {.deep kind="proof"}
+## Proof of @thm-comb
 Ordered: $n$ choices for the first item, $n-1$ for the second, …, $n-k+1$ for
 the $k$-th: $n(n-1)\cdots(n-k+1) = n!/(n-k)!$ (product rule). Unordered: each
 subset of size $k$ can be ordered in $k!$ ways (that is $P(k,k)$), and every
@@ -354,7 +361,16 @@ $P(n,k) = k!\binom nk$. $\blacksquare$ For a poker hand,
 $\binom{52}{5} = 2{,}598{,}960$, as printed above.
 :::
 
-### Why `math.fsum` exists: error in floating-point sums
+::: {.callout-important}
+## Summing many floats
+Every floating-point addition may round (@sec-floats), and the errors of a
+long sum add up. When accuracy matters, use `math.fsum`, which is exact up to
+a single final rounding. (Since Python 3.12 the built-in `sum` is also
+compensated for floats; a plain `for` loop with `s += x` is not.) The deep
+dive below measures the error and explains the remedies.
+:::
+
+### Why `math.fsum` exists: error in floating-point sums {.deep}
 
 Recall the model of @thm-rounding-error: each floating-point addition returns
 $\mathrm{fl}(a+b) = (a+b)(1+\delta)$ with $|\delta| \le u = 2^{-53}$. What
@@ -367,8 +383,8 @@ $\prod_{k=1}^m (1+\delta_k) = 1 + \theta_m$ with
 $|\theta_m| \le \gamma_m := \dfrac{mu}{1 - mu}$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @lem-gamma
+::: {.deep kind="proof"}
+## Proof of @lem-gamma
 Upper bound: $\prod(1+\delta_k) \le (1+u)^m$. Since $(1+u)(1-u) = 1-u^2 \le 1$,
 $(1+u)^m \le (1-u)^{-m}$, and by **Bernoulli's inequality**
 $(1-u)^m \ge 1 - mu$ (induction: $(1-u)^{m+1} \ge (1-mu)(1-u) \ge 1-(m+1)u$),
@@ -390,8 +406,8 @@ $$
 partial sum, so the worst-case error grows linearly with $n$ — and is measured
 against $\sum|x_i|$, which can be much larger than $|s|$ when terms cancel.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-sum-error
+::: {.deep kind="proof"}
+## Proof of @thm-sum-error
 Let $\hat s_1 = x_1$ and $\hat s_k = (\hat s_{k-1} + x_k)(1+\delta_k)$ for
 $k = 2..n$, $|\delta_k|\le u$. Unrolling,
 $$

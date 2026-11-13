@@ -21,10 +21,8 @@ By the end of this chapter you will be able to:
 :::
 
 ::: {.callout-tip}
-## Course lessons covered
-Theory: 4.1 *Boolean expressions* · 4.2 *Logical operators* · 4.3
-*Introduction to conditional statements*. Practice: 4.4 *If* · 4.5 *The
-if-else statement* · 4.6 *Elif* · 4.7 *The if expression*.
+## Topics covered
+Boolean expressions and logical operators; `if`, `if`–`else`, `elif` chains; the conditional expression.
 :::
 
 ## Intuition: a railway switch
@@ -114,8 +112,8 @@ For all Boolean values $p, q, r$:
 *In one line:* "not (A and B)" means "not A, or not B" — to negate a
 conjunction, negate each part and swap *and* with *or*.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-boolean-laws
+::: {.deep kind="proof"}
+## Proof of @thm-boolean-laws
 Each law involves at most three variables, so it can be checked on all
 $2^3 = 8$ combinations of truth values (@thm-bit-strings): this is a complete
 proof, called **proof by exhaustion** or by truth table. For De Morgan's first
@@ -168,7 +166,7 @@ if len(pw) < 12 or not any(c.isdigit() for c in pw):
 which reads as the list of reasons for rejection.
 :::
 
-### Any condition can be built from `and`, `or`, `not`
+### Any condition can be built from `and`, `or`, `not` {.deep}
 
 A Boolean function of $n$ inputs is a table with $2^n$ rows. Can every such
 table be written with our three connectives? Yes.
@@ -182,8 +180,8 @@ $\wedge$, $\vee$, $\neg$.
 *In one line:* write one *and*-term for each row where $f$ is true, and join
 the terms with *or*.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-dnf
+::: {.deep kind="proof"}
+## Proof of @thm-dnf
 For a row $a = (a_1,\dots,a_n) \in \{\text{F},\text{T}\}^n$ define the
 **minterm** $m_a = \ell_1\wedge\dots\wedge \ell_n$, where $\ell_i = x_i$ if
 $a_i = \text{T}$ and $\ell_i = \neg x_i$ if $a_i = \text{F}$. By construction
@@ -391,7 +389,7 @@ for c in ["exit", "add Ada 12345", "search Ada Lovelace", "dance"]:
 simple comparisons with a few constants, an `if`–`elif` chain or a dict lookup
 is often simpler.
 
-## Why three constructs are enough: Böhm–Jacopini {#sec-bohm-jacopini}
+## Why three constructs are enough: Böhm–Jacopini {#sec-bohm-jacopini .deep}
 
 Early programs were written with **jumps** (`goto`) anywhere, producing
 "spaghetti code". In 1966 Corrado Böhm and Giuseppe Jacopini proved that jumps
@@ -410,8 +408,8 @@ cost of possibly adding one extra variable.
 *In one line:* keep a variable saying "which box I am in", and simulate the
 flowchart with a single loop containing an `if`–`elif` chain.
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @thm-bohm-jacopini (the "folk" construction)
+::: {.deep kind="proof"}
+## Proof of @thm-bohm-jacopini (the "folk" construction)
 Number the boxes of the flowchart $1, \dots, k$ and add a special number $0$
 meaning "stop". Each box $i$ is either an **action** $S_i$ followed by an arrow
 to box $j_i$, or a **decision** on condition $c_i$ with arrows to $t_i$ (if
@@ -490,8 +488,8 @@ print("97 leap years per 400:", sum(is_leap(y) for y in range(2000, 2400)))
 `is_leap(y) == is_leap_elif(y)` for every integer $y$.
 :::
 
-::: {.callout-caution collapse="true"}
-## For the interested reader — proof of @prp-leap-equivalence
+::: {.deep kind="proof"}
+## Proof of @prp-leap-equivalence
 Case analysis following the chain. (1) If $400\mid y$: then $4 \mid y$, and the
 formula is $\text{T} \wedge (\dots\vee \text{T}) = \text{T}$; the chain returns
 `True`. (2) If $400 \nmid y$ and $100 \mid y$: then $4\mid y$ and the formula is

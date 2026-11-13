@@ -3,97 +3,80 @@
 > *"Programs must be written for people to read, and only incidentally for
 > machines to execute."* — @abelson1996, preface to the first edition.
 
-This part covers the first course of the master, **Programming with Python**.
-It is aimed at people who want to learn how to design and build Python
-programs that solve computational problems and manage data in real
-applications. It starts from the role of programming, of algorithms and of the
-development environment; it then teaches how to use variables and types to
-acquire, transform and present information; how to organise related data in
-collections and control the flow of a program with conditions and loops; how to
-build reusable functions and model the world with classes and hierarchies of
-objects. Once these foundations are in place, it shows how to handle errors at
-run time, how to read, transform and save data in files, how to organise code
-into modules and packages, how to use the standard library, and how to manage
-dependencies in isolated, reproducible environments. It closes with the use of
-AI tools to write and — above all — to *verify* code.
+This part corresponds to the first course of the master: an introduction to
+programming in Python. It takes a reader who has never programmed to the point
+of writing a small but well-structured application that stores its data in
+files, handles errors gracefully, uses third-party packages in an isolated
+environment — and can judge code written by an AI assistant.
+
+The chapters follow the natural order in which the skills build on each other:
+how computers and programs work; values and types; collections of data;
+decisions and repetition; functions; classes and objects; errors; files;
+organising code into modules and packages; the standard library; installing
+packages; virtual environments; and, finally, AI tools for writing code.
 
 ::: {.callout-note}
-## Why this course matters for an AI engineer
-Every later part of the book (data analysis, machine learning, deep learning,
-reinforcement learning, generative AI) is written in Python. Being able to
-structure programs, handle data and manage dependencies is the technical
-foundation that lets you move from a computational problem to organised,
-working code.
+## Why this part matters for an AI engineer
+Every later part of the book — data analysis, machine learning, deep learning,
+reinforcement learning, generative AI — is written in Python. Structuring
+programs, handling data and managing dependencies are the skills that turn a
+computational idea into working, maintainable code.
 :::
 
-## Learning objectives of the course {.unnumbered}
+## What you will be able to do {.unnumbered}
 
-At the end of this part you will be able to:
-
-1. describe the role of Python and of algorithms in building software for
-   different problems (@sec-ch-intro);
-2. use variables, types and conversions to acquire, process and present data
-   (@sec-ch-variables);
-3. organise and manipulate related data with Python collections chosen
-   according to their properties and access patterns (@sec-ch-collections);
-4. implement program decisions by combining Boolean conditions and conditional
-   branches (@sec-ch-conditionals);
-5. implement iterations that process sequences and repeat operations until a
-   termination condition holds (@sec-ch-loops);
-6. design reusable functions that encapsulate operations and return
-   consistent results (@sec-ch-functions);
-7. build classes and hierarchies of objects that represent entities and
-   behaviours through attributes and methods (@sec-ch-oop);
-8. handle run-time errors by catching exceptions and defining appropriate
-   checks (@sec-ch-exceptions);
-9. read, transform and persist data through files and formats suited to their
-   structure (@sec-ch-files);
-10. organise code into reusable modules and packages, managing their
-    dependencies and their public interface (@sec-ch-modules);
-11. apply standard-library modules to common needs of system, time and
-    calculation (@sec-ch-stdlib);
-12. manage dependencies by choosing packages and controlling their
-    installation, versions and distribution (@sec-ch-pip);
-13. configure isolated, reproducible Python environments to run and share
-    projects (@sec-ch-venv);
-14. evaluate and verify code produced by AI tools, formulating adequate
-    requirements and context (@sec-ch-ai-tools).
+1. Explain what a program and an algorithm are, and measure how the cost of an
+   algorithm grows (@sec-ch-intro).
+2. Store and transform data with Python's types, and present it neatly
+   (@sec-ch-variables).
+3. Pick the right collection for a job and know what each operation costs
+   (@sec-ch-collections).
+4. Write correct decisions with Boolean logic (@sec-ch-conditionals).
+5. Write loops and convince yourself — or prove — that they are correct and
+   terminate (@sec-ch-loops).
+6. Break a problem into reusable functions (@sec-ch-functions).
+7. Model entities with classes, special methods and inheritance (@sec-ch-oop).
+8. Detect and handle errors instead of crashing (@sec-ch-exceptions).
+9. Read and write text, CSV, JSON and binary files safely (@sec-ch-files).
+10. Organise code into modules and installable packages (@sec-ch-modules).
+11. Use the standard library for system, time and numeric tasks
+    (@sec-ch-stdlib).
+12. Install and pin third-party packages (@sec-ch-pip).
+13. Create reproducible, isolated environments (@sec-ch-venv).
+14. Use AI coding tools productively and verify what they produce
+    (@sec-ch-ai-tools).
 
 ## Prerequisites {.unnumbered}
 
 None. You only need a computer with a web browser. Chapter
 [-@sec-ch-intro] explains how to install Python or how to use it online.
 
-## Map of the course {.unnumbered}
+## Map of the part {.unnumbered}
 
-The table maps each module of the course (with its theory and practice
-lessons) to the chapter of this book that covers it, and lists what the book
-adds beyond the lectures.
-
-| Module | Lessons (Theory / Practice) | Chapter | Additions in the book |
-|---|---|---|---|
-| 1. Introduction | course intro; computer programming; the development environment | @sec-ch-intro | von Neumann model, binary numbers (with proofs), algorithms and Euclid's algorithm, asymptotic notation, CPython and bytecode |
-| 2. Variables and data types | input & output; variables & constants; data types; casting / I/O, types, casting, formatting | @sec-ch-variables | names vs objects, arbitrary-precision integers, two's complement, IEEE 754 floating point with error bounds, Unicode and UTF-8, format-spec mini-language |
-| 3. Data collections | introduction to collections / lists; modify & check; nested lists; tuples; sets; dictionaries; length; casting between collections | @sec-ch-collections | dynamic arrays and amortised analysis, hash tables and their expected cost, sorting and its lower bound, aliasing and copies |
-| 4. Conditional statements | Boolean expressions; logical operators; intro to conditionals / if; if-else; elif; the if expression | @sec-ch-conditionals | Boolean algebra and De Morgan's laws, short-circuit evaluation, truthiness, `match` |
-| 5. Loops | introduction to loops / while; for; break & continue | @sec-ch-loops | iteration protocol, loop invariants and termination proofs, binary search, comprehensions |
-| 6. Procedural programming | introduction to functions / functions; positional & keyword arguments; return values; more examples | @sec-ch-functions | scope (LEGB), recursion and induction, the call stack, higher-order functions, type hints |
-| 7. Object-oriented programming | classes & objects; inheritance & polymorphism / first class; special methods; docstrings; inheritance & polymorphism | @sec-ch-oop | the Python data model, MRO and C3 linearisation, Liskov substitution, dataclasses, abstract base classes |
-| 8. Exceptions | introduction; anatomy of an exception; main exception types / try-except-finally; raise & assert | @sec-ch-exceptions | exception hierarchy, exception chaining, EAFP vs LBYL, context managers |
-| 9. Working with files | file types / text read & write; binary; CSV; TSV; JSON | @sec-ch-files | encodings, RFC 4180 and RFC 8259, `pathlib`, atomic writes |
-| 10. Modularising code | introduction to modules / module; package; a (real) package | @sec-ch-modules | the import system, information hiding, `pyproject.toml` and wheels |
-| 11. The standard library | introduction / `sys`; command-line arguments; `os`; `time`; `datetime`; `math` | @sec-ch-stdlib | Unix time, the Gregorian calendar, compensated summation, `argparse`, `pathlib` |
-| 12. PyPI and pip | the Python Package Index / install & uninstall; versions & upgrades; export & import | @sec-ch-pip | version specifiers (PEP 440), semantic versioning, dependency resolution is NP-complete |
-| 13. Virtual environments | virtual environments / create-use-remove; Jupyter; Python version; sharing; crash courses | @sec-ch-venv | how `venv` works (PEP 405), kernels, lock files; primers on NumPy, pandas, Matplotlib |
-| 14. AI tools for coding | code generation with ChatGPT, Cursor, Copilot; vibe coding vs structured prompt engineering | @sec-ch-ai-tools | how LLMs generate code, sampling and temperature, the pass@k estimator, verification checklist |
-| Project | Terminal contact-book prototype | @sec-ch-project-phonebook | requirement-to-chapter map, design, full walkthrough |
+| Chapter | Core topics | What the book adds |
+|---|---|---|
+| @sec-ch-intro | programs, algorithms, the development environment | von Neumann model, binary numbers (with proofs), Euclid's algorithm, the halting problem, asymptotic notation, CPython and bytecode |
+| @sec-ch-variables | input/output, variables, types, conversions, formatting | names vs objects, two's complement, IEEE 754 floating point with error bounds, Unicode and UTF-8, the format-spec mini-language |
+| @sec-ch-collections | lists, tuples, sets, dictionaries | dynamic arrays and amortised analysis, hash tables and their expected cost, sorting and its lower bound, aliasing |
+| @sec-ch-conditionals | Boolean expressions, `if`/`elif`/`else` | Boolean algebra, De Morgan's laws, short-circuit evaluation, truthiness, `match`, Böhm–Jacopini |
+| @sec-ch-loops | `while`, `for`, `break`, `continue` | iteration protocol, induction, loop invariants, binary search, comprehensions |
+| @sec-ch-functions | defining functions, arguments, return values | scope, closures, decorators, recursion and its cost, generators |
+| @sec-ch-oop | classes, special methods, inheritance, polymorphism | class invariants, the laws of `__eq__`/`__lt__`, Liskov substitution, C3 linearisation, dataclasses |
+| @sec-ch-exceptions | exceptions, `try`/`except`/`finally`, `raise`, `assert` | the exception hierarchy, chaining, EAFP vs LBYL, context managers |
+| @sec-ch-files | text, binary, CSV, TSV, JSON files | encodings, the PNG format and CRC checksums, RFC 4180 and RFC 8259, atomic writes |
+| @sec-ch-modules | modules and packages | the import system, information hiding, dependency graphs, `pyproject.toml` and wheels |
+| @sec-ch-stdlib | `sys`, `os`, `time`, `datetime`, `math` | Unix time, calendar arithmetic, error of floating-point sums, `argparse` |
+| @sec-ch-pip | PyPI, `pip`, versions, `requirements.txt` | PEP 440, semantic versioning, dependency resolution is NP-complete |
+| @sec-ch-venv | virtual environments, Jupyter kernels, sharing projects | how `venv` works, lock files, conda and containers; NumPy, pandas, Matplotlib primer |
+| @sec-ch-ai-tools | ChatGPT, Cursor, Copilot; vibe coding vs structured prompting | how LLMs generate code, temperature, the pass@$k$ estimator, a verification checklist |
+| @sec-ch-project-phonebook | the final project | requirements, design, code review, tested reference implementation |
 
 ## The final project {.unnumbered}
 
-The course ends with the **terminal phone-book prototype** for the (fictional)
-software house *ContactEase Solutions*: an interactive console application,
-designed with object-oriented principles, that adds, lists, edits, deletes and
-searches contacts, saves them to a JSON file, and never crashes on wrong input.
-@sec-ch-project-phonebook restates the brief, maps every requirement to the
-chapters above, and walks through the implementation published in
+The course ends with a **terminal phone-book prototype**: an interactive
+console application, designed with object-oriented principles, that adds,
+lists, edits, deletes and searches contacts, saves them to a JSON file, and
+never crashes on wrong input. @sec-ch-project-phonebook states the
+requirements in my own words, maps each of them to the chapters above, and
+walks through the implementation published in
 [`Phone_Book_Python_OOP.ipynb`](https://github.com/matteo-zirilli/ai-projects/blob/main/Phone_Book_Python_OOP.ipynb).
