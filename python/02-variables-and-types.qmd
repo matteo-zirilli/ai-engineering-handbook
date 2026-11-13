@@ -1,0 +1,956 @@
+# Variables, data types and casting {#sec-ch-variables}
+
+> *"What's in a name? That which we call a rose / By any other name would
+> smell as sweet."* — W. Shakespeare, *Romeo and Juliet*, II.2.
+> In Python, quite literally: a name is just a label on an object.
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- read input from the keyboard and print output (`input`, `print`);
+- explain what a **variable** is in Python (a *name bound to an object*), and
+  distinguish **identity**, **type** and **value** (`is` vs `==`);
+- use the built-in types `int`, `float`, `bool`, `str`, `complex`, `None`, and
+  predict the result of every arithmetic operator, including `//` and `%` on
+  negative numbers;
+- explain and **prove** how integers are stored (two's complement) and how
+  real numbers are approximated (IEEE 754), and why `0.1 + 0.2 != 0.3`;
+- explain how text is stored (Unicode code points, UTF-8 bytes);
+- convert between types (**casting**) and know which conversions can fail or
+  lose information;
+- format output precisely with **f-strings** and the format-spec
+  mini-language.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 2.1 *Input and output* · 2.2 *Variables and constants* · 2.3 *Data
+types* · 2.4 *Casting*. Practice: 2.5 *Input and output* · 2.6 *Data types* ·
+2.7 *Casting* · 2.8 *Formatting*.
+:::
+
+## Intuition: sticky notes, not boxes
+
+Many textbooks say "a variable is a box that contains a value". For Python
+this picture is **wrong**, and it causes real bugs (we will see one in
+@sec-aliasing). A better picture:
+
+- every value — the number `42`, the text `"Ada"`, a list — is an **object**
+  living somewhere in memory;
+- a **variable** is a **sticky note with a name** that you attach to an object.
+
+Writing `x = 42` means "create (or find) the object `42`, and stick the note
+`x` on it". Writing then `y = x` does **not** copy anything: it sticks a second
+note, `y`, on the *same* object. Writing `x = 7` moves the note `x` to another
+object; `y` stays where it was.
+
+## Input and output
+
+A program that cannot communicate is useless. The two simplest channels are
+the **standard output** (normally the screen) and the **standard input**
+(normally the keyboard). Python exposes them through two built-in functions
+[@pythonlibrary, *Built-in Functions*].
+
+### `print`: writing to standard output
+
+`print(*objects, sep=' ', end='\n', file=sys.stdout, flush=False)` converts each
+argument to text (with `str`, @sec-casting), writes them separated by `sep`,
+and finishes with `end`:
+
+```{python}
+print("Hello", "world")                 # default separator: one space
+print("2026", "11", "13", sep="-")      # custom separator
+print("no newline here", end=" | ")     # custom terminator
+print("same line")
+print()                                 # an empty line
+print("Total:", 3 + 4)                  # any object can be printed
+```
+
+The string `"\n"` is the **newline** character; `\` starts an **escape
+sequence** (@tbl-escapes).
+
+### `input`: reading from standard input
+
+`input(prompt)` prints `prompt`, waits until the user presses <kbd>Enter</kbd>,
+and **always returns a string** (without the final newline):
+
+```{python}
+#| eval: false
+name = input("What is your name? ")      # the user types: Ada
+age_text = input("How old are you? ")    # the user types: 36
+print("Hi", name, "- next year you will be", int(age_text) + 1)
+# Output:  Hi Ada - next year you will be 37
+```
+
+::: {.callout-warning}
+## `input` returns text
+`age_text + 1` would raise `TypeError: can only concatenate str (not "int") to
+str`. You must **convert** the text to a number with `int(...)` or
+`float(...)` — and the conversion fails if the user types `"thirty"`. Handling
+that failure is the topic of @sec-ch-exceptions, and is a central requirement of
+the project (@sec-ch-project-phonebook).
+:::
+
+## Variables and constants {#sec-variables}
+
+### Objects: identity, type, value
+
+The Python Language Reference [@pythonreference, §3.1] states: *every object
+has an identity, a type and a value*.
+
+- The **identity** never changes once the object is created; think of it as
+  its address in memory. `id(obj)` returns it as an integer, and the operator
+  `is` compares identities.
+- The **type** determines which operations the object supports and which
+  values it can have; `type(obj)` returns it. It never changes either.
+- The **value** may or may not change: objects whose value can change are
+  **mutable** (lists, dicts — @sec-ch-collections), the others **immutable**
+  (numbers, strings, tuples).
+
+### Assignment is binding
+
+::: {#def-binding}
+## Name binding
+The assignment statement `name = expression` first **evaluates** the
+expression, obtaining an object, then **binds** `name` to that object in the
+current namespace. If `name` was already bound, the old binding is replaced; the
+old object is not modified.
+:::
+
+```{python}
+x = 42           # bind x to an int object with value 42
+y = x            # bind y to the SAME object
+print(x is y, id(x) == id(y))   # same identity
+x = 7            # re-bind x; y is untouched
+print(x, y)
+```
+
+Because the right-hand side is evaluated completely **before** binding, the
+swap of two variables needs no temporary variable:
+
+```{python}
+a, b = 1, 2
+a, b = b, a      # right side builds the pair (2, 1), then unpacks it
+print(a, b)
+```
+
+**Augmented assignment** `x += 1` is shorthand for `x = x + 1` (for immutable
+objects; for mutable ones it may modify the object in place —
+@sec-ch-collections).
+
+### `==` versus `is`
+
+- `a == b` asks: *do the two objects have equal value?* (it calls the method
+  `__eq__`, @sec-ch-oop);
+- `a is b` asks: *are they the same object?*
+
+```{python}
+p = [1, 2, 3]
+q = [1, 2, 3]        # a different list with equal content
+print(p == q, p is q)
+r = p
+print(r is p)
+```
+
+Use `is` only to compare with singletons such as `None` (`if x is None:`), as
+recommended by PEP 8 [@pep8].
+
+### Names: rules and conventions
+
+A name (an **identifier**) is a sequence of letters, digits and underscores
+that does not start with a digit and is not a **keyword** (`if`, `for`, `class`,
+`True`, … — see `import keyword; keyword.kwlist`). Names are case-sensitive:
+`total` and `Total` are different. PEP 8 recommends:
+
+| Kind | Convention | Example |
+|---|---|---|
+| variables, functions | `lower_snake_case` | `phone_number`, `add_contact()` |
+| classes | `CapWords` | `Contact`, `PhoneBook` |
+| constants | `UPPER_SNAKE_CASE` | `DEFAULT_COUNTRY_CODE = 39` |
+| "internal" names | leading underscore | `_contacts` |
+
+### Constants
+
+Python has **no truly constant variables**: any name can be rebound. A constant
+is a **convention**: a module-level name in upper case that nobody should
+reassign. Static type checkers can enforce it if you annotate it with
+`typing.Final` [@pep591]:
+
+```{python}
+from typing import Final
+
+SECONDS_PER_DAY: Final = 24 * 60 * 60   # a type checker will flag reassignment
+print(SECONDS_PER_DAY)
+```
+
+### Dynamic and strong typing
+
+Python is **dynamically typed**: types belong to *objects*, not to names, and
+are checked while the program runs. The same name can be bound to an `int` and
+later to a `str`. It is also **strongly typed**: it does not silently convert
+between unrelated types (`"3" + 4` is an error, while in JavaScript it gives
+`"34"`). Optional **type hints** (`x: int = 3`, PEP 484 [@pep484]) document the
+intended types and let tools such as `mypy` check them *before* running; the
+interpreter itself ignores them.
+
+## Numbers {#sec-numbers}
+
+### Integers (`int`) and their arithmetic
+
+Python integers have **arbitrary precision**: they grow as needed, limited only
+by memory.
+
+```{python}
+print(2 ** 100)
+print(type(2 ** 100), (2 ** 100).bit_length(), "bits")
+```
+
+CPython stores a large integer as an array of "digits" in base $2^{30}$ — the
+positional notation of @thm-base-representation with a huge base. The
+arithmetic operators are:
+
+| Operator | Meaning | Example | Result |
+|---|---|---|---|
+| `+`, `-`, `*` | sum, difference, product | `7 * 3` | `21` |
+| `/` | **true** division, always a `float` | `7 / 2` | `3.5` |
+| `//` | **floor** division $\lfloor a/b\rfloor$ | `7 // 2`, `-7 // 2` | `3`, `-4` |
+| `%` | remainder (modulo) | `7 % 2`, `-7 % 2` | `1`, `1` |
+| `**` | power | `2 ** 10` | `1024` |
+| `divmod(a, b)` | the pair `(a // b, a % b)` | `divmod(17, 5)` | `(3, 2)` |
+
+The operators `//` and `%` are linked by an invariant that Python guarantees
+for every pair of integers with $b\neq0$ [@pythonreference, §6.7]:
+$$
+a = (a \,/\!/\, b)\cdot b + (a \,\%\, b), \qquad \text{and } a\,\%\,b \text{ has the sign of } b \text{ (or is 0)},\ \lvert a \,\%\, b\rvert < \lvert b\rvert.
+$$ {#eq-floor-div}
+
+For $b > 0$ this is exactly Euclidean division (@lem-division). Other languages
+(C, Java, JavaScript) **truncate** towards zero instead, so in C `-7 / 2 == -3`
+and `-7 % 2 == -1`. Python's choice has a practical advantage: `n % 7` is always
+in $\{0,\dots,6\}$, which is what you want for days of the week, circular
+buffers or hash tables (@sec-hash-tables).
+
+::: {#exm-negative-modulo}
+## Floor division with negative numbers
+$-7 / 2 = -3.5$, and $\lfloor -3.5 \rfloor = -4$ (floor goes *down*, towards
+$-\infty$). Then $-7 \,\%\, 2 = -7 - (-4)(2) = 1$. Check: $(-4)\cdot 2 + 1 = -7$. ✓
+With a negative divisor: $7 \,/\!/ -2 = \lfloor -3.5\rfloor = -4$ and
+$7 \,\%\, {-2} = 7 - (-4)(-2) = -1$, which has the sign of the divisor. ✓
+:::
+
+```{python}
+for a, b in [(7, 2), (-7, 2), (7, -2), (-7, -2)]:
+    q, r = a // b, a % b
+    assert a == q * b + r                     # the invariant @eq-floor-div
+    print(f"{a:>3} // {b:>2} = {q:>3}   {a:>3} % {b:>2} = {r:>2}")
+```
+
+**Operator precedence** follows mathematics: `**` binds tighter than unary `-`,
+which binds tighter than `*, /, //, %`, which bind tighter than `+, -`. So
+`-2 ** 2 == -4` (it is $-(2^2)$) and `2 + 3 * 4 == 14`. `**` is
+right-associative: `2 ** 3 ** 2 == 2 ** 9 == 512`. When in doubt, use
+parentheses [@pythonreference, §6.17].
+
+### How fixed-width integers are stored: two's complement {#sec-twos-complement}
+
+Python hides the bit-level representation of integers, but most other systems
+— the CPU, C, NumPy arrays, GPUs — use **fixed-width** integers of 8, 16, 32 or
+64 bits, and you will meet them as soon as you use NumPy or PyTorch. With $n$
+bits we can represent $2^n$ values (@thm-bit-strings). Unsigned integers use
+them for $0, \dots, 2^n-1$. For signed integers, virtually every modern machine
+uses **two's complement**, a representation of negative numbers already
+adopted in von Neumann's EDVAC design [@vonneumann1945].
+
+::: {#def-twos-complement}
+## Two's complement
+An $n$-bit pattern $d_{n-1}d_{n-2}\dots d_0$ represents the integer
+$$
+v = -d_{n-1}\,2^{n-1} + \sum_{i=0}^{n-2} d_i\, 2^i .
+$$ {#eq-twos}
+The most significant bit has **negative** weight.
+:::
+
+::: {#exm-int8}
+## 8-bit examples
+$00000101 = 5$; $\;01111111 = 127$; $\;10000000 = -128$;
+$\;11111111 = -128 + 127 = -1$; $\;11111011 = -128 + 123 = -5$.
+:::
+
+::: {#thm-twos-complement}
+## Properties of two's complement
+With $n$ bits:
+
+1. the representable range is $[-2^{n-1},\ 2^{n-1}-1]$, and each integer in it
+   has exactly one pattern;
+2. the value $v$ of a pattern and its *unsigned* value
+   $u = \sum_{i=0}^{n-1} d_i 2^i$ satisfy $v \equiv u \pmod{2^n}$; hence the
+   same adder circuit (which works modulo $2^n$) adds signed and unsigned
+   numbers;
+3. negation is "invert all bits, then add 1": $-v \equiv \overline{v} + 1 \pmod {2^n}$.
+:::
+
+*In one line:* two's complement is arithmetic modulo $2^n$ with the upper half
+of the range relabelled as negative numbers.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-twos-complement
+
+(2) From @eq-twos, $v = u - d_{n-1}2^{n-1} - d_{n-1}2^{n-1} = u - d_{n-1}2^n$,
+so $v \equiv u \pmod{2^n}$.
+
+(1) If $d_{n-1} = 0$, then $v = u \in [0, 2^{n-1}-1]$. If $d_{n-1}=1$, then
+$v = u - 2^n$ with $u \in [2^{n-1}, 2^n-1]$, so $v \in [-2^{n-1}, -1]$. The map
+from patterns to values is therefore injective on each half and the two halves
+are disjoint; since there are $2^n$ patterns and $2^n$ integers in the range,
+it is a bijection.
+
+(3) Let $\overline{v}$ be the pattern with every bit flipped. Bitwise,
+$d_i + \overline{d_i} = 1$ for every $i$, so the unsigned values satisfy
+$u + \overline{u} = \sum_{i=0}^{n-1} 2^i = 2^n - 1$. Hence
+$u + (\overline u + 1) = 2^n \equiv 0$, i.e.
+$\overline u + 1 \equiv -u \equiv -v \pmod{2^n}$. $\blacksquare$
+:::
+
+::: {.callout-warning}
+## Overflow
+Fixed-width arithmetic **wraps around**: in 8 bits, $127 + 1$ gives the pattern
+$10000000 = -128$. Python's `int` never overflows, but NumPy arrays do:
+```{python}
+import numpy as np
+x = np.array([127], dtype=np.int8)
+print(x + np.int8(1))        # wraps around to -128
+```
+:::
+
+Python's **bitwise operators** behave *as if* integers were written in two's
+complement with infinitely many sign bits: `&` (and), `|` (or), `^` (xor),
+`~` (not), `<<` and `>>` (shifts). By property 3, `~x == -x - 1`:
+
+```{python}
+x = 0b1010                     # 10
+print(bin(x & 0b0110), bin(x | 0b0101), bin(x ^ 0b1111))
+print(~x, -x - 1)              # invert all bits = -x - 1
+print(x << 3, x >> 1)          # shifting left by k multiplies by 2**k; right divides (floor)
+```
+
+### Booleans (`bool`)
+
+`bool` has two values, `True` and `False`, produced by comparisons
+(`3 < 5`, `x == y`) and combined with `and`, `or`, `not`
+(@sec-ch-conditionals). For historical reasons `bool` is a **subclass of
+`int`** [@pep285]: `True == 1` and `False == 0`, so `sum([True, False, True])`
+counts the true values.
+
+### Floating-point numbers (`float`) {#sec-floats}
+
+#### Intuition: scientific notation with a fixed number of digits
+
+A physicist writes the speed of light as $2.998 \times 10^{8}$ m/s: a
+**significand** ($2.998$, with a fixed number of significant digits) times a
+power of the **base** 10 with an **exponent** ($8$). This keeps the *relative*
+precision constant whether the number is tiny or huge. Computers do the same in
+base 2. The format is fixed by the **IEEE 754** standard [@ieee754], designed in
+the late 1970s largely under the leadership of William Kahan (who received the
+1989 Turing Award for it). Python's `float` is the IEEE 754 **binary64** format
+("double precision").
+
+::: {#def-binary64}
+## IEEE 754 binary64
+A `float` occupies 64 bits: 1 **sign** bit $s$, 11 **exponent** bits $e$
+(an unsigned integer $0\le e\le 2047$), and 52 **fraction** bits
+$f = f_1f_2\dots f_{52}$. Its value is:
+
+- if $1 \le e \le 2046$ (**normal** numbers):
+$$
+x = (-1)^s \times \Big(1 + \sum_{i=1}^{52} f_i 2^{-i}\Big) \times 2^{\,e - 1023};
+$$ {#eq-binary64}
+- if $e = 0$ (**subnormal** numbers and zero): $x = (-1)^s \times \big(\sum_i f_i 2^{-i}\big) \times 2^{-1022}$;
+- if $e = 2047$: $\pm\infty$ when $f = 0$, otherwise **NaN** (*Not a Number*).
+
+The number $1.f_1\dots f_{52}$ is the **significand**: 53 significant bits,
+since the leading 1 of a normal number is implicit ("hidden bit"). The constant
+1023 is the **bias**.
+:::
+
+::: {#exm-float-one}
+## Decoding a few doubles
+- $1.0$: $s=0$, $f=0$, $e - 1023 = 0 \Rightarrow e = 1023 = (01111111111)_2$.
+- $-2.5 = -(1.01)_2\times 2^1$: $s=1$, $e = 1024$, $f = 0100\dots0$.
+- The largest double: $e = 2046$, all $f_i=1$:
+  $(2 - 2^{-52})\times2^{1023}\approx 1.798\times10^{308}$.
+- The smallest positive normal: $2^{-1022}\approx 2.2\times10^{-308}$; the
+  smallest subnormal: $2^{-52}\times2^{-1022} = 2^{-1074}\approx 4.9\times 10^{-324}$.
+:::
+
+#### Which numbers are exactly representable?
+
+Every double is of the form $m \times 2^{E}$ with integers $m$ and $E$: a
+**dyadic rational**. This has a surprising consequence.
+
+::: {#thm-dyadic}
+## Finite binary fractions
+A rational number $p/q$ in lowest terms ($q > 0$) has a finite binary expansion
+if and only if $q$ is a power of 2. In particular $0.1 = 1/10$ is **not**
+exactly representable as a `float`.
+:::
+
+*In one line:* in base 2 you can only write exactly the fractions whose
+denominator is a power of 2 — just as in base 10 you cannot write $1/3$
+exactly.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-dyadic
+
+If $q = 2^k$, then $p/q = p\cdot 2^{-k}$, and writing $p$ in binary and moving
+the point $k$ places to the left gives a finite expansion.
+
+Conversely, a finite binary expansion $b_0.b_1\dots b_k$ equals
+$N / 2^k$ for an integer $N$. If $p/q = N/2^k$ then $p\,2^k = N q$. Let $r$ be an
+odd prime dividing $q$. Then $r \mid p\,2^k$; $r \nmid 2^k$ (the only prime
+factor of $2^k$ is 2) and $r\nmid p$ (since $\gcd(p,q)=1$) — but a prime that
+divides a product divides one of the factors (Euclid's lemma), a contradiction.
+So $q$ has no odd prime factor: it is a power of 2.
+
+For $1/10$: $q = 10 = 2 \cdot 5$ has the odd prime factor 5. In fact the binary
+expansion is periodic: $0.1 = (0.0\overline{0011})_2$. $\blacksquare$
+:::
+
+So when you type `0.1`, Python stores the **nearest** double. We can see its
+exact value with the `decimal` module, which converts a float exactly:
+
+```{python}
+from decimal import Decimal
+print(Decimal(0.1))
+print(Decimal(0.2))
+print(Decimal(0.3))
+print(0.1 + 0.2, 0.1 + 0.2 == 0.3)
+```
+
+Both `0.1` and `0.2` are stored slightly **above** their true value, and their
+sum is rounded to the double just above `0.3`'s nearest double. Hence the
+famous `0.30000000000000004`.
+
+#### How big is the error? Machine epsilon and unit roundoff
+
+::: {#def-epsilon}
+## Machine epsilon and unit roundoff
+**Machine epsilon** $\varepsilon = 2^{-52} \approx 2.22\times10^{-16}$ is the
+distance from $1$ to the next larger double. The **unit roundoff** is
+$u = \varepsilon/2 = 2^{-53} \approx 1.11\times 10^{-16}$.
+:::
+
+IEEE 754 requires that the basic operations $+,-,\times,\div,\sqrt{\ }$ be
+**correctly rounded**: the result must be the exact mathematical result,
+rounded to the nearest double (ties to the one with even last bit). The
+following theorem then bounds every individual error.
+
+::: {#thm-rounding-error}
+## Relative rounding error
+Let $x$ be a real number in the normal range and let $\mathrm{fl}(x)$ be the
+double nearest to $x$. Then
+$$
+\mathrm{fl}(x) = x\,(1 + \delta), \qquad \lvert \delta \rvert \le u = 2^{-53}.
+$$ {#eq-fl}
+Consequently, for any two doubles $a, b$ and $\circ \in \{+,-,\times,\div\}$,
+the computed result is $(a \circ b)(1+\delta)$ with $|\delta| \le u$
+(as long as no overflow or underflow occurs).
+:::
+
+*In one line:* each single operation loses at most about 16 significant decimal
+digits' worth of precision — the relative error is at most $1.1\times10^{-16}$.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-rounding-error
+
+Assume $x > 0$ (the negative case is symmetric) and let $E$ be the integer with
+$2^E \le x < 2^{E+1}$. In the interval $[2^E, 2^{E+1}]$ the doubles are
+$2^E(1 + j\,2^{-52})$ for $j = 0, 1, \dots, 2^{52}$, i.e. they are **equally
+spaced** with gap $2^{E-52}$ (from @eq-binary64 with exponent $E$; the right
+endpoint $2^{E+1}$ is also a double). The nearest double is at most half a gap
+away:
+$$
+\lvert \mathrm{fl}(x) - x\rvert \le \tfrac12\, 2^{E-52} = 2^{E-53} \le 2^{-53}\, x ,
+$$
+where the last step uses $2^E \le x$. Dividing by $x$ gives
+$\lvert\delta\rvert = \lvert \mathrm{fl}(x)-x\rvert/x \le 2^{-53}$.
+The statement about operations follows because correct rounding means
+"compute $a\circ b$ exactly, then apply $\mathrm{fl}$". $\blacksquare$
+:::
+
+Errors **accumulate** across many operations. Adding $0.1$ ten times does not
+give exactly $1.0$, and the order of the additions matters (floating-point
+addition is **not associative**):
+
+```{python}
+import math, sys
+total = 0.0
+for _ in range(10):
+    total += 0.1
+print(total, total == 1.0)
+print((0.1 + 0.2) + 0.3, 0.1 + (0.2 + 0.3))      # not associative
+print(sys.float_info.epsilon == 2 ** -52)        # machine epsilon
+print(1.0 + 2 ** -53 == 1.0)                     # half an epsilon is lost (tie -> even)
+print(float(2 ** 53) == float(2 ** 53 + 1))      # integers above 2**53 are not all representable
+print(math.isclose(total, 1.0), math.fsum([0.1] * 10) == 1.0)
+```
+
+::: {.callout-important}
+## Rule: never test floats for exact equality
+Use `math.isclose(a, b, rel_tol=1e-9, abs_tol=0.0)`, which checks
+$|a-b| \le \max(\text{rel\_tol}\cdot\max(|a|,|b|),\ \text{abs\_tol})$
+[@pep485]. For sums of many terms use `math.fsum` (exact up to the final
+rounding, @sec-math-module). For money use `decimal.Decimal` or integers
+counting cents.
+:::
+
+#### Try it yourself: the bits of a double {.unnumbered}
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof floatText = Inputs.text({label: "Number", value: "0.1", submit: "Decode"})
+floatInfo = {
+  const x = Number(floatText);
+  const dv = new DataView(new ArrayBuffer(8));
+  dv.setFloat64(0, x);
+  const bits = dv.getUint32(0).toString(2).padStart(32, "0") + dv.getUint32(4).toString(2).padStart(32, "0");
+  const s = bits[0], e = bits.slice(1, 12), f = bits.slice(12);
+  const eInt = parseInt(e, 2);
+  let exact = "—";
+  if (eInt !== 2047) {
+    const mant = BigInt("0b" + f) + (eInt === 0 ? 0n : (1n << 52n));
+    const E = (eInt === 0 ? -1022 : eInt - 1023) - 52;
+    if (mant === 0n) exact = "0";
+    else if (E >= 0) exact = (mant << BigInt(E)).toString();
+    else {
+      const k = -E;
+      let str = (mant * 5n ** BigInt(k)).toString().padStart(k + 1, "0");
+      exact = (str.slice(0, str.length - k) + "." + str.slice(str.length - k)).replace(/0+$/, "").replace(/\.$/, "");
+    }
+    if (s === "1") exact = "-" + exact;
+  }
+  return {x, s, e, f, eInt, exact};
+}
+html`<p><code style="color:#c01c28">${floatInfo.s}</code> <code style="color:#1a5fb4">${floatInfo.e}</code> <code style="color:#26a269">${floatInfo.f}</code></p>
+<ul><li>sign <b>s = ${floatInfo.s}</b></li>
+<li>exponent field <b>e = ${floatInfo.eInt}</b> → unbiased exponent ${floatInfo.eInt === 0 ? "−1022 (subnormal)" : floatInfo.eInt === 2047 ? "special (inf/NaN)" : floatInfo.eInt - 1023}</li>
+<li>exact value stored: <code style="word-break:break-all">${floatInfo.exact}</code></li></ul>`
+```
+:::
+
+Try `0.1`, `0.5`, `1e-320` (a subnormal), `9007199254740993` ($2^{53}+1$,
+which is rounded to $2^{53}$), `-0` and `1e309` (overflow to infinity).
+
+### Complex numbers
+
+Python also has a built-in `complex` type: `z = 3 + 4j` (the imaginary unit is
+written `j`, as in electrical engineering). `abs(z)` is the modulus
+$\sqrt{3^2+4^2}=5$, and `z.real`, `z.imag` give the parts. The `cmath` module
+provides complex functions. Complex numbers appear in signal processing (the
+Fourier transform) and in some neural-network architectures.
+
+## Text: strings (`str`) {#sec-strings}
+
+### Unicode code points
+
+A Python string is an **immutable sequence of Unicode code points**. The
+**Unicode** standard [@unicode] assigns a number, the **code point**, to every
+character of every writing system: `A` is U+0041 (65), `è` is U+00E8 (232),
+`€` is U+20AC (8364), the emoji `🐍` is U+1F40D (128013). `ord` and `chr`
+convert between characters and code points:
+
+```{python}
+for ch in ["A", "è", "€", "🐍"]:
+    print(ch, ord(ch), hex(ord(ch)))
+print(chr(65), chr(0x1F40D))
+```
+
+### Bytes on disk: the UTF-8 encoding {#sec-utf8}
+
+Code points go up to U+10FFFF (1,114,111), which needs 21 bits. When text is
+saved to a file or sent over a network it must be turned into **bytes**: this
+is called **encoding**. The dominant encoding on the web
+is **UTF-8** (used by the overwhelming majority of web pages), designed by Ken
+Thompson and Rob Pike in 1992 and standardised in
+RFC 3629 [@rfc3629]:
+
+| Code point range | Bytes | Byte pattern (x = payload bits) |
+|---|---|---|
+| U+0000 – U+007F | 1 | `0xxxxxxx` |
+| U+0080 – U+07FF | 2 | `110xxxxx 10xxxxxx` |
+| U+0800 – U+FFFF | 3 | `1110xxxx 10xxxxxx 10xxxxxx` |
+| U+10000 – U+10FFFF | 4 | `11110xxx 10xxxxxx 10xxxxxx 10xxxxxx` |
+
+: UTF-8 encoding scheme {#tbl-utf8}
+
+::: {#exm-utf8}
+## Encoding `è` and `€` by hand
+`è` = U+00E8 = $(11101000)_2$ needs 8 bits → 2-byte form with 11 payload bits:
+pad to `00011 101000` → `110`**`00011`** `10`**`101000`** = `C3 A8`.
+
+`€` = U+20AC = $(0010\,0000\,1010\,1100)_2$ → 3-byte form with 16 payload bits:
+`1110`**`0010`** `10`**`000010`** `10`**`101100`** = `E2 82 AC`.
+:::
+
+```{python}
+for ch in ["A", "è", "€", "🐍"]:
+    data = ch.encode("utf-8")                 # str -> bytes
+    print(ch, len(ch), "code point ->", len(data), "bytes:", data.hex(" ").upper())
+print(b"\xe2\x82\xac".decode("utf-8"))        # bytes -> str
+```
+
+::: {#prp-utf8}
+## Why UTF-8 is well designed
+(a) ASCII text (code points below 128) is unchanged, byte for byte.
+(b) The first byte of a character tells how many bytes follow (count the
+leading 1s). (c) **Self-synchronisation**: continuation bytes always start with
+`10`, and no leading byte does; so starting from any position, one can find the
+beginning of the next character by skipping at most 3 bytes, and a lost byte
+corrupts only one character.
+:::
+
+*In one line:* the bit prefixes make the code **prefix-free** and
+self-describing.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — justification of @prp-utf8
+(a) The 1-byte form is `0xxxxxxx` with the 7 bits of the code point, which is
+exactly ASCII. (b) Leading bytes begin with `0`, `110`, `1110`, `11110`: the
+number of leading ones (0, 2, 3, 4) equals the length (1 meaning "one byte").
+(c) Continuation bytes begin with `10`, a prefix that none of the four
+leading-byte prefixes has; so the set of byte values used as leading bytes and
+the set used as continuation bytes are disjoint. A decoder that lands in the
+middle of a character sees a `10……` byte and simply skips forward; since a
+character has at most 3 continuation bytes, after at most 3 skips it reaches a
+leading byte. Prefix-freeness also guarantees **unique decodability**: no
+encoded character is a prefix of another, so a byte stream splits into
+characters in only one way. $\blacksquare$
+:::
+
+Rule of thumb, crucial for files (@sec-ch-files): **decode bytes into `str` as
+soon as data enters your program, work with `str`, encode back to bytes when it
+leaves**, always stating the encoding explicitly (`encoding="utf-8"`).
+
+### Writing strings
+
+```{python}
+s1 = 'single quotes'
+s2 = "double quotes - can contain 'single' ones"
+s3 = """triple quotes
+span several lines"""
+path = r"C:\new\table"        # raw string: backslashes are not escapes
+print(s2); print(s3); print(path)
+```
+
+| Escape | Meaning |
+|---|---|
+| `\n` | newline |
+| `\t` | tab |
+| `\\` | a backslash |
+| `\'`, `\"` | quote characters |
+| `\u00e8`, `\U0001F40D` | code point in hex (4 or 8 digits) |
+
+: Common escape sequences {#tbl-escapes}
+
+### Operations on strings
+
+Strings are **sequences**: they support `len`, indexing `s[i]` (from 0) and
+slicing `s[i:j]`, which are studied in detail with lists in
+@sec-ch-collections. They are **immutable**: methods return *new* strings.
+
+```{python}
+s = "  Ada Lovelace  "
+print(len(s), repr(s.strip()))           # remove surrounding whitespace
+name = s.strip()
+print(name.upper(), name.lower(), name.title())
+print(name[0], name[-1], name[0:3])      # first, last, a slice
+print(name.split(" "))                   # -> a list of words
+print("-".join(["2026", "11", "13"]))    # the inverse of split
+print(name.replace("Ada", "Augusta Ada"))
+print(name.startswith("Ada"), "Love" in name, name.find("Love"))
+print("ab" * 3, "ab" + "cd")             # repetition and concatenation
+```
+
+### `None`
+
+`None` is the single object of type `NoneType`, used to mean "no value" — for
+instance the result of a function that returns nothing (@sec-ch-functions), or
+an optional field that is missing. Test it with `is None`.
+
+## Casting: converting between types {#sec-casting}
+
+**Casting** (type conversion) means building an object of one type from an
+object of another type. In Python you call the type as a function:
+
+| Call | Result | Notes |
+|---|---|---|
+| `int("42")` | `42` | text must be an integer literal (spaces allowed around) |
+| `int("3.5")` | **`ValueError`** | not an integer literal |
+| `int(3.99)`, `int(-3.99)` | `3`, `-3` | truncates **towards zero** |
+| `int("ff", 16)`, `int("0b101", 0)` | `255`, `5` | explicit base; base 0 reads the prefix |
+| `float("3.5")`, `float("1e-3")` | `3.5`, `0.001` | also `"inf"`, `"nan"` |
+| `str(3.5)` | `'3.5'` | the shortest text that reads back to the same float |
+| `bool(0)`, `bool("")`, `bool([])` | `False` | "empty" or zero values are falsy (@sec-truthiness) |
+| `bool("False")` | **`True`** | any non-empty string is truthy! |
+| `round(2.5)`, `round(3.5)` | `2`, `4` | rounds half to **even** |
+
+```{python}
+print(int(" 42 "), int(3.99), int(-3.99), int("ff", 16))
+print(float("1e-3"), str(0.1), repr("text"))
+print(bool(0), bool(0.0), bool(""), bool("False"), bool([0]))
+print(round(0.5), round(1.5), round(2.5), round(2.675, 2))
+try:
+    int("3.5")
+except ValueError as err:          # exceptions: @sec-ch-exceptions
+    print("ValueError:", err)
+```
+
+### Implicit conversion in arithmetic
+
+In mixed arithmetic Python **widens** the narrower type:
+`bool` → `int` → `float` → `complex`. So `1 + 2.0` is `3.0` and `True + 1` is
+`2`. It never converts implicitly between numbers and strings.
+
+### Why `round` rounds half to even {#sec-banker-rounding}
+
+`round(2.5) == 2` surprises many people. Python implements the IEEE 754 default
+rounding, **round half to even** (also called *banker's rounding*): a value
+exactly halfway between two integers goes to the **even** one. The reason is
+statistical.
+
+::: {#prp-round-half-even}
+## Round half to even is unbiased on ties
+Consider the tie values $k + \tfrac12$ for $k = 0, 1, \dots, 2N-1$. Rounding
+half **up** adds a total error of $+\tfrac12 \cdot 2N = N$; rounding half to
+**even** adds a total error of $0$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-round-half-even
+Half up maps $k+\tfrac12 \mapsto k+1$, error $+\tfrac12$ each, $2N$ values:
+total $N$. Half to even maps $k+\tfrac12$ to $k$ if $k$ is even (error
+$-\tfrac12$) and to $k+1$ if $k$ is odd (error $+\tfrac12$). Among
+$k = 0,\dots,2N-1$ there are exactly $N$ even and $N$ odd values, so the errors
+cancel: total $0$. $\blacksquare$
+:::
+
+In long sums of rounded values (accounting, averaging sensor readings) the bias
+of half-up accumulates; half-to-even does not. Finally, `round(2.675, 2)` gives
+`2.67` not because of the rule but because `2.675` is stored as
+`2.67499999999999982236431605997495353221893310546875`
+(@thm-dyadic).
+
+## Formatting output {#sec-formatting}
+
+Presenting numbers well (aligned columns, two decimals, thousands separators)
+is the last mile of every program. Python has had three syntaxes; use the
+newest, **f-strings** (PEP 498, Python 3.6 [@pep498]): put `f` before the
+quotes and any expression inside `{}`.
+
+```{python}
+name, balance, rate = "Ada", 1234567.891, 0.0375
+print(f"{name} has {balance} euros")                 # plain interpolation
+print(f"{name} has {balance:,.2f} euros")            # thousands separator, 2 decimals
+print(f"Rate: {rate:.2%}")                           # percentage
+print(f"{balance=}")                                 # '=' (3.8+): shows expression and value, handy for debugging
+print(f"{name!r}")                                   # !r uses repr(): shows the quotes
+```
+
+After the colon comes a **format specification** following the
+*format-spec mini-language* [@pythonlibrary, *string — Format Specification
+Mini-Language*]:
+
+$$
+\texttt{[[fill]align][sign][\#][0][width][grouping][.precision][type]}
+$$
+
+| Spec | Meaning | `f"{x:spec}"` for `x = 3.14159` (or as shown) |
+|---|---|---|
+| `.2f` | fixed point, 2 decimals | `3.14` |
+| `10.3f` | width 10, right-aligned | `'     3.142'` |
+| `<10` / `^10` / `>10` | left / centre / right align | `'3.14159   '` … |
+| `*^11` | fill with `*`, centre | `'**3.14159**'` |
+| `+` | always show sign | `+3.14159` |
+| `.3e` | scientific notation | `3.142e+00` |
+| `.3g` | general: fixed or scientific | `3.14` |
+| `,` / `_` | grouping (`x = 1234567`) | `1,234,567` / `1_234_567` |
+| `b`, `o`, `x`, `X` | binary, octal, hex (`x = 255`) | `11111111`, `377`, `ff`, `FF` |
+| `08b` | zero-padded width 8 (`x = 5`) | `00000101` |
+| `%` | percentage (`x = 0.25`) | `25.000000%` |
+
+```{python}
+rows = [("apple", 3, 0.5), ("watermelon", 1, 3.25), ("kiwi", 12, 0.3)]
+print(f"{'item':<12}{'qty':>5}{'price':>9}{'total':>9}")
+print("-" * 35)
+for item, qty, price in rows:
+    print(f"{item:<12}{qty:>5d}{price:>9.2f}{qty * price:>9.2f}")
+print(f"{255:#x} {255:08b} {5:08b} {1234567:_}")
+```
+
+For completeness, the two older styles are `"%s has %.2f" % (name, balance)`
+(printf-style, inherited from C) and `"{} has {:.2f}".format(name, balance)`
+(PEP 3101, which introduced the mini-language that f-strings reuse
+[@pep3101]). You will meet both in existing code.
+
+## Worked example: a unit-conversion program
+
+**Problem.** Read a temperature in degrees Celsius and print it in Fahrenheit
+and Kelvin, with one decimal.
+
+**Analysis.** $F = \frac95 C + 32$ and $K = C + 273.15$. Input is text: convert
+with `float`. Output: format with `.1f`.
+
+```{python}
+#| eval: false
+celsius = float(input("Temperature in °C: "))     # e.g. 36.6
+fahrenheit = celsius * 9 / 5 + 32
+kelvin = celsius + 273.15
+print(f"{celsius:.1f} °C = {fahrenheit:.1f} °F = {kelvin:.1f} K")
+# Output: 36.6 °C = 97.9 °F = 309.8 K
+```
+
+Check by hand: $36.6\times 9/5 = 65.88$, $+32 = 97.88 \to 97.9$ ✓;
+$36.6 + 273.15 = 309.75 \to 309.8$ ✓. Notice that $309.75 = 1239/4$ is a
+dyadic rational, hence stored **exactly** (@thm-dyadic): it is a genuine tie
+between $309.7$ and $309.8$, and formatting rounds it **half to even**
+(@sec-banker-rounding), giving $309.8$ because $8$ is even. Try
+`f"{309.65:.1f}"`: $309.65$ is *not* exactly representable, so the result
+depends on whether the stored value is slightly above or below the tie.
+
+::: {.project-link}
+**In the project.** The phone book reads every field with `input()`, so all
+numeric fields (phone number, country code, menu choice) must be **cast** with
+`int(...)` — and the cast can fail. The project's `Contatto.__init__` does
+exactly this, raising a clear `ValueError` when the conversion fails, and the
+contact list is displayed with f-strings such as
+`f"{contact._nome} {contact._cognome}: +{contact._prefisso} {contact._numero}"`.
+Note a subtle design issue that this chapter lets you see: storing a phone
+number as an `int` **loses leading zeros** (`int("0612345678") == 612345678`),
+so in production phone numbers should be stored as validated **strings**
+(@sec-ch-project-phonebook discusses this).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Forgetting that `input` returns `str`.** Cast, and handle failures.
+- **Testing floats with `==`.** Use `math.isclose`.
+- **`is` instead of `==`** for numbers or strings. `x is 1000` may be
+  `False` even when `x == 1000`; CPython caches only small integers
+  ($-5\ldots256$). Python 3.8+ even warns: `SyntaxWarning: "is" with a literal`.
+- **`bool("False")` is `True`.** Parse booleans explicitly
+  (`text.strip().lower() in {"y", "yes", "true"}`).
+- **Integer division in other languages.** `-7 // 2` is `-4` in Python but
+  `-7 / 2` is `-3` in C/Java integer arithmetic.
+- **Numbers with leading zeros as `int`.** Phone numbers, ZIP codes, IDs are
+  *strings of digits*, not numbers.
+- **Shadowing built-ins.** `str = "hello"` hides the type `str` for the rest
+  of the scope; then `str(5)` fails. Never use `list`, `dict`, `str`, `id`,
+  `input`, `type` as variable names.
+:::
+
+## Summary
+
+- A variable is a **name bound to an object**; objects have identity (`is`,
+  `id`), type (`type`) and value (`==`).
+- `int` has arbitrary precision; `//` and `%` satisfy $a = (a/\!/b)b + a\%b$
+  with `%` taking the sign of the divisor. Fixed-width integers elsewhere use
+  **two's complement** and can **overflow**.
+- `float` is IEEE 754 binary64: 53 significant bits, relative error per
+  operation $\le 2^{-53}$; only dyadic rationals are exact, so `0.1` is not.
+- `str` is a sequence of Unicode code points; files store **bytes**, usually
+  in **UTF-8**.
+- Casting with `int()`, `float()`, `str()`, `bool()` can fail (`ValueError`) or
+  lose information (truncation, rounding half to even).
+- f-strings and the format-spec mini-language control the presentation.
+
+## Exercises
+
+::: {#exr-ch2-mod}
+Without running code, compute `17 // 5`, `17 % 5`, `-17 // 5`, `-17 % 5`,
+`17 // -5`, `17 % -5`. Then verify @eq-floor-div for each pair and check with
+Python.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$3, 2$; $\lfloor -3.4\rfloor = -4$, $-17 - (-4)(5) = 3$; $-4$,
+$17 - (-4)(-5) = -3$. Checks: $3\cdot5+2 = 17$, $-4\cdot5+3=-17$,
+$-4\cdot(-5)-3 = 17$. ✓
+:::
+
+::: {#exr-ch2-int8}
+In 8-bit two's complement, write $-1$, $-100$ and $100$. Compute
+$100 + 100$ with 8-bit wrap-around and explain the result using
+@thm-twos-complement.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$-1 = 11111111$. $100 = 01100100$; $-100$ = invert + 1 = $10011011 + 1 =
+10011100$. $100+100 = 200 = 11001000$ as an unsigned pattern; as signed,
+$200 - 256 = -56$ (property 2: values are congruent modulo $2^8$). Check with
+`np.int8(100) + np.int8(100)` (NumPy also emits an overflow warning).
+:::
+
+::: {#exr-ch2-float}
+(a) Which of $0.5, 0.25, 0.2, 0.75, 1/3, 3/8$ are exactly representable as
+floats? (b) What is the gap between consecutive doubles in $[1024, 2048)$?
+(c) Why does `0.1 + 0.2 == 0.3` fail while `0.5 + 0.25 == 0.75` succeeds?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) By @thm-dyadic: $0.5=1/2$, $0.25$, $0.75 = 3/4$, $3/8$ yes; $0.2 = 1/5$ and
+$1/3$ no. (b) $E = 10$, gap $2^{10-52} = 2^{-42}\approx 2.3\times10^{-13}$.
+(c) In the second sum all values are exact and the exact sum $0.75$ is a
+double, so correct rounding returns it exactly; in the first the inputs already
+carry representation errors.
+:::
+
+::: {#exr-ch2-utf8}
+Encode by hand in UTF-8 the character `ñ` (U+00F1) and the snake `🐍`
+(U+1F40D). Verify with `.encode("utf-8").hex()`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`ñ`: $\mathtt{F1} = 11110001$ → `00011 110001` → `11000011 10110001` = `C3 B1`.
+`🐍`: $\mathtt{1F40D}$ = `0 0001 1111 0100 0000 1101` (21 bits: `000 011111
+010000 001101`) → `11110000 10011111 10010000 10001101` = `F0 9F 90 8D`.
+:::
+
+::: {#exr-ch2-format}
+Write a program that reads a price and a VAT rate in percent and prints a
+receipt line like `Net:      100.00 €  VAT 22%:   22.00 €  Total:    122.00 €`,
+with columns of width 10 and two decimals.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+net = float(input("Net price: "))
+vat = float(input("VAT %: "))
+tax = net * vat / 100
+print(f"Net: {net:>10.2f} €  VAT {vat:g}%: {tax:>10.2f} €  Total: {net + tax:>10.2f} €")
+```
+:::
+
+## Further reading {.unnumbered}
+
+- @pythonreference, §3 *Data model* (objects, values, types) and §6
+  *Expressions* (arithmetic semantics, precedence) — the normative source.
+- @goldberg1991, *What Every Computer Scientist Should Know About
+  Floating-Point Arithmetic* — the classic tutorial; read §1.1–1.4 for
+  representation and rounding errors, the theorems in §1.4 for error bounds.
+- @higham2002, Chapter 2 — floating-point arithmetic with full proofs; the
+  model $\mathrm{fl}(x\circ y) = (x\circ y)(1+\delta)$ is its §2.2.
+- @ieee754 — the standard itself (paywalled; Goldberg and Higham are enough
+  for this book).
+- @knuth1997b, §4.1 and §4.2 — number systems and floating-point arithmetic.
+- @unicode, Chapter 2 *General Structure*, and @rfc3629 for UTF-8. For a
+  gentle introduction see @spolsky2003.
+- PEPs: @pep498 (f-strings), @pep3101 (format mini-language), @pep285 (`bool`),
+  @pep484 (type hints), @pep591 (`Final`), @pep485 (`isclose`).

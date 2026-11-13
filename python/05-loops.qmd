@@ -1,0 +1,703 @@
+# Loops {#sec-ch-loops}
+
+> *"Program testing can be used to show the presence of bugs, but never to
+> show their absence!"* — Edsger W. Dijkstra, *Notes on Structured
+> Programming* [@dijkstra1970].
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- write `while` loops (repeat **while** a condition holds) and `for` loops
+  (repeat **for each** element of an iterable);
+- use `range`, `enumerate`, `zip`, `reversed`, `sorted` in loops, and explain
+  the **iteration protocol** that makes `for` work;
+- control loops with `break`, `continue` and the loop `else` clause;
+- **prove** that a loop is correct with an **invariant** and that it
+  terminates with a **variant**, and connect this to **mathematical
+  induction**;
+- implement **binary search**, prove it correct and prove that it takes
+  $O(\log n)$ steps;
+- analyse the cost of nested loops, and write list, set and dict
+  **comprehensions**.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 5.1 *Introduction to loops*. Practice: 5.2 *The while loop* ·
+5.3 *The for loop* · 5.4 *Break and continue*.
+:::
+
+## Intuition: shampoo instructions
+
+A shampoo bottle says: *"Lather, rinse, repeat."* Taken literally, this is an
+infinite loop — there is no condition to stop. A correct loop always has two
+ingredients:
+
+1. a **body**: what to repeat;
+2. a **stopping rule**: when to stop — "repeat *until* the hair is clean"
+   (`while`), or "repeat *for each* of the three bottles" (`for`).
+
+The hard part, which this chapter takes seriously, is being *sure* that the
+loop does the right thing and does stop.
+
+## The `while` loop {#sec-while}
+
+```python
+while condition:
+    body            # executed again and again as long as condition is truthy
+```
+
+Semantics: (1) evaluate the condition; (2) if falsy, skip to the statement
+after the loop; (3) otherwise execute the body and go back to (1). If the
+condition is false at the start, the body runs zero times.
+
+```{python}
+# Countdown
+n = 3
+while n > 0:
+    print(n)
+    n -= 1              # without this line the loop would never end
+print("Lift-off!")
+```
+
+`while` is the right loop when you **do not know in advance** how many
+iterations are needed. The classic case is **input validation**: ask again
+until the input is valid.
+
+```{python}
+#| eval: false
+while True:                                  # "loop and a half" idiom
+    text = input("Enter your age (0-130): ")
+    if text.isdigit() and 0 <= int(text) <= 130:
+        age = int(text)
+        break                                # valid: leave the loop
+    print("Invalid age, try again.")
+print("Age:", age)
+# Sample session:
+#   Enter your age (0-130): abc
+#   Invalid age, try again.
+#   Enter your age (0-130): 36
+#   Age: 36
+```
+
+If you write a loop that never ends by mistake, stop it with
+<kbd>Ctrl</kbd>+<kbd>C</kbd> (in Jupyter/Colab: the *Interrupt* button), which
+raises `KeyboardInterrupt`.
+
+## The `for` loop {#sec-for}
+
+```python
+for target in iterable:
+    body            # executed once per element, with target bound to it
+```
+
+The `for` loop visits each element of an **iterable** — a list, tuple,
+string, set, dict, file, range… — in turn.
+
+```{python}
+for fruit in ["apple", "kiwi", "banana"]:
+    print(fruit.upper())
+
+for ch in "abc":
+    print(ch, ord(ch))
+
+ages = {"Ada": 36, "Alan": 41}
+for name, age in ages.items():          # unpack each (key, value) pair
+    print(f"{name} is {age}")
+```
+
+### `range`
+
+`range(stop)`, `range(start, stop)`, `range(start, stop, step)` represent the
+arithmetic progression $\text{start}, \text{start}+\text{step}, \dots$ that
+stays **before** `stop` — a half-open interval, as in @sec-indexing. A `range`
+does not store its elements: it computes them on demand, so `range(10**12)`
+uses a few bytes.
+
+```{python}
+print(list(range(5)), list(range(2, 10, 3)), list(range(10, 0, -3)))
+print(len(range(0, 10**12, 7)))       # computed by formula, not by counting
+```
+
+::: {#prp-range-length}
+## Length of a range
+For `step > 0`, `len(range(start, stop, step))`
+$= \max\!\big(0, \lceil (\text{stop}-\text{start})/\text{step}\rceil\big)$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-range-length
+The elements are $\text{start} + k\cdot\text{step}$ for the integers $k \ge 0$
+with $\text{start} + k\cdot\text{step} < \text{stop}$, i.e.
+$k < (\text{stop}-\text{start})/\text{step} =: x$. If $x \le 0$ there is no such
+$k$. Otherwise the valid $k$ are $0, 1, \dots, \lceil x\rceil - 1$ (the integers
+strictly below $x$), which are $\lceil x\rceil$ values. $\blacksquare$
+
+For instance `range(2, 10, 3)`: $x = 8/3$, $\lceil x\rceil = 3$: the elements
+$2, 5, 8$. ✓
+:::
+
+### `enumerate`, `zip`, `reversed`, `sorted`
+
+```{python}
+names = ["Ada", "Alan", "Grace"]
+years = [1815, 1912, 1906]
+
+for i, name in enumerate(names, start=1):       # index and element together
+    print(i, name)
+
+for name, year in zip(names, years):            # walk two sequences in parallel
+    print(f"{name} was born in {year}")
+
+for name in reversed(names):
+    print(name, end=" ")
+print()
+for name, year in sorted(zip(names, years), key=lambda p: p[1]):   # by year
+    print(name, year)
+```
+
+`zip` stops at the shortest input (since Python 3.10, `zip(..., strict=True)`
+raises an error if the lengths differ — a useful safety check).
+
+### The iteration protocol: how `for` really works {#sec-iteration-protocol}
+
+What makes an object usable in a `for` loop? The **iteration protocol**,
+defined in PEP 234 [@pep234]:
+
+- an **iterable** is an object with a method `__iter__` that returns an
+  **iterator**;
+- an **iterator** is an object with a method `__next__` that returns the next
+  element, or raises `StopIteration` when there are no more.
+
+The built-ins `iter(x)` and `next(it)` call these methods. A `for` loop is
+**exactly** equivalent to this `while` loop:
+
+```{python}
+items = ["a", "b", "c"]
+
+# for x in items: print(x)    is executed as:
+it = iter(items)                 # ask the iterable for an iterator
+while True:
+    try:
+        x = next(it)             # get the next element...
+    except StopIteration:        # ...until the iterator is exhausted
+        break
+    print(x)
+```
+
+An iterator is **consumed** as you use it: after it is exhausted, it stays
+exhausted. Lists can be iterated many times because each `for` asks for a
+*new* iterator; a `zip` or a file object is its own iterator and can be
+traversed only once. We will build our own iterators and **generators**
+(functions with `yield`) in @sec-generators.
+
+## `break`, `continue` and `else` {#sec-break-continue}
+
+- `break` exits the innermost loop immediately.
+- `continue` skips the rest of the current iteration and goes to the next one.
+- A loop may have an `else` block, executed **only if the loop ended normally**,
+  i.e. *not* via `break`. It is perfect for searches: "if I did not find it…".
+
+```{python}
+def first_negative(numbers):
+    for i, x in enumerate(numbers):
+        if x < 0:
+            print(f"found {x} at index {i}")
+            break
+    else:                              # no break happened
+        print("no negative numbers")
+
+first_negative([3, 1, -4, 1, -5])
+first_negative([2, 7, 1])
+
+for n in range(10):
+    if n % 3 == 0:
+        continue                       # skip multiples of 3
+    print(n, end=" ")
+print()
+```
+
+## Proving loops correct {#sec-loop-invariants}
+
+Testing a loop on a few inputs shows that it works *on those inputs*. A
+**proof** shows that it works on *all* of them. The method was introduced by
+Robert Floyd [@floyd1967] and Tony Hoare [@hoare1969], and is the backbone of
+every serious algorithms textbook [@cormen2022, §2.1].
+
+### Mathematical induction
+
+Proofs about loops rest on **induction**, which you have already used in
+@thm-bit-strings and @thm-lame.
+
+::: {#thm-induction}
+## Principle of mathematical induction
+Let $P(n)$ be a statement about natural numbers. If (base) $P(n_0)$ is true,
+and (step) for every $n \ge n_0$, $P(n)$ implies $P(n+1)$, then $P(n)$ is true
+for every $n \ge n_0$.
+:::
+
+*In one line:* knock over the first domino; each domino knocks over the next;
+all dominoes fall.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — why induction is valid
+Suppose not: the set $S = \{n \ge n_0 : P(n) \text{ is false}\}$ is non-empty.
+By well-ordering (@lem-division) it has a least element $m$. $m \ne n_0$
+because $P(n_0)$ is true, so $m - 1 \ge n_0$, and $P(m-1)$ is true because
+$m-1 < m$ is not in $S$. By the step, $P(m)$ is true — contradiction.
+$\blacksquare$
+
+**Strong induction** (assume $P(n_0),\dots,P(n)$ to prove $P(n+1)$) is proved
+in the same way, and is what we used for @thm-base-representation.
+:::
+
+::: {#exm-gauss}
+## Gauss' sum
+Legend has it that the young Carl Friedrich Gauss, asked to add the numbers
+from 1 to 100, wrote the sum forwards and backwards:
+$S = 1 + 2 + \dots + 100$ and $S = 100 + 99 + \dots + 1$; adding column by
+column gives $2S = 100 \times 101$, so $S = 5050$. In general:
+$$
+\sum_{i=1}^{n} i = \frac{n(n+1)}{2}.
+$$ {#eq-gauss}
+*Proof by induction.* Base $n = 0$: empty sum $= 0 = \frac{0\cdot1}2$. Step:
+if $\sum_{i=1}^n i = \frac{n(n+1)}2$, then
+$\sum_{i=1}^{n+1} i = \frac{n(n+1)}{2} + (n+1) = \frac{(n+1)(n+2)}{2}$.
+$\blacksquare$
+:::
+
+### Invariants and variants
+
+::: {#def-loop-invariant}
+## Loop invariant
+A **loop invariant** is a statement about the program's variables that
+1. (**initialisation**) is true before the first iteration,
+2. (**maintenance**) if true before an iteration, is true after it,
+3. (**termination**) when the loop ends, combined with the negated loop
+   condition, implies the desired result.
+:::
+
+By induction on the number of iterations, an invariant holds after any number
+of them. Hoare packaged this into the rule
+$$
+\frac{\{I \wedge B\}\ S\ \{I\}}{\{I\}\ \texttt{while } B: S\ \{I \wedge \neg B\}}
+$$
+which reads: *if the body $S$ preserves $I$ whenever the condition $B$ holds,
+then after the loop $I$ still holds and $B$ is false* [@hoare1969].
+
+The invariant says nothing about termination. For that we use a **variant**
+(Floyd's idea [@floyd1967]): an integer expression that is $\ge 0$ while the
+loop runs and **strictly decreases** at each iteration. Since a natural number
+cannot decrease forever (well-ordering), the loop must stop. We used exactly
+this for Euclid's algorithm (@thm-euclid-correct).
+
+::: {#exm-sum-invariant}
+## Proving a summation loop
+```python
+total, i = 0, 0
+while i < len(a):
+    total += a[i]
+    i += 1
+```
+**Invariant** $I$: `total` $= \sum_{k=0}^{i-1} a[k]$ and $0 \le i \le n$ (with
+$n$ = `len(a)`). *Init*: $i = 0$, empty sum $= 0$ ✓. *Maintenance*: if
+$I$ and $i < n$, after the body $\text{total}' = \sum_{k<i} a[k] + a[i] = \sum_{k < i+1} a[k]$
+and $i' = i+1 \le n$ ✓. *Termination*: the loop ends with $i \ge n$; with
+$i\le n$ this gives $i = n$, so total $= \sum_{k<n} a[k]$ ✓. **Variant**:
+$n - i$, which is $\ge 0$ and decreases by 1 each iteration.
+:::
+
+## Binary search {#sec-binary-search}
+
+### The problem and the idea
+
+Given a **sorted** list `a` of $n$ elements and a value $x$, find where $x$ is
+(or where it should be inserted). A linear scan costs $O(n)$. Binary search
+uses the order: compare $x$ with the **middle** element and discard the half
+that cannot contain it — like looking up a word in a paper dictionary. The idea
+dates back to 1946 (John Mauchly), yet Knuth notes that the first published
+binary search that worked correctly for all $n$ appeared only in 1962
+[@knuth1998, §6.2.1; @bentley1999, Column 4], and Bentley found that most professional programmers
+he tested failed to write it correctly [@bentley1999, Column 4]. An invariant
+makes it easy.
+
+```{python}
+def lower_bound(a, x):
+    """Return the first index i such that a[i] >= x (len(a) if none).
+
+    Precondition: a is sorted in non-decreasing order.
+    Invariant: every a[k] with k < lo is < x, and every a[k] with k >= hi is >= x.
+    """
+    lo, hi = 0, len(a)
+    while lo < hi:                  # variant: hi - lo
+        mid = (lo + hi) // 2        # lo <= mid < hi
+        if a[mid] < x:
+            lo = mid + 1            # a[0..mid] are all < x
+        else:
+            hi = mid                # a[mid..] are all >= x
+    return lo
+
+a = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+for x in [11, 12, 1, 30]:
+    i = lower_bound(a, x)
+    found = i < len(a) and a[i] == x
+    print(f"x={x:>2}: index {i}, found={found}")
+
+import bisect
+print(bisect.bisect_left(a, 12))    # the standard library implementation
+```
+
+::: {#thm-binary-search}
+## Correctness and cost of binary search
+If `a` is sorted, `lower_bound(a, x)` terminates and returns the smallest index
+$i$ such that $a[i] \ge x$ (or $n$ if there is none), after at most
+$\lfloor \log_2 n\rfloor + 1$ iterations.
+:::
+
+*In one line:* the invariant says that everything left of `lo` is too small and
+everything from `hi` on is big enough; the gap between them at least halves at
+each step.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-binary-search
+**Invariant** $I$: $0 \le lo \le hi \le n$, $a[k] < x$ for all $k < lo$, and
+$a[k]\ge x$ for all $k \ge hi$ (with $k < n$).
+
+*Initialisation*: $lo = 0$, $hi = n$: both conditions are about empty index sets ✓.
+
+*Maintenance*: assume $I$ and $lo < hi$. Then $mid = \lfloor (lo+hi)/2\rfloor$
+satisfies $lo \le mid < hi$. If $a[mid] < x$: for every $k \le mid$,
+sortedness gives $a[k] \le a[mid] < x$, so setting $lo = mid + 1$ preserves the
+first condition, and $mid + 1 \le hi$. Otherwise $a[mid]\ge x$: for every
+$k\ge mid$, $a[k] \ge a[mid] \ge x$, so setting $hi = mid \ge lo$ preserves the
+second condition.
+
+*Termination of the loop*: the variant $L = hi - lo$ is $\ge 0$. Writing
+$L = hi - lo$ and $mid - lo = \lfloor L/2 \rfloor$: in the first branch the new
+length is $hi - mid - 1 = L - \lfloor L/2\rfloor - 1 = \lceil L/2\rceil - 1$,
+in the second it is $mid - lo = \lfloor L/2\rfloor$. In both cases
+$L' \le \lfloor L/2 \rfloor < L$ (for $L \ge 1$).
+
+*Result*: at exit $lo \ge hi$, so with $I$, $lo = hi$. Every index below $lo$
+holds a value $< x$ and every index from $lo$ on holds a value $\ge x$: $lo$ is
+the smallest index with $a[lo]\ge x$ (or $n$).
+
+*Cost*: after $t$ iterations $L \le \lfloor n / 2^t\rfloor$ (by induction,
+using $\lfloor \lfloor y\rfloor/2\rfloor = \lfloor y/2\rfloor$). The loop runs
+while $L\ge1$, i.e. while $2^t \le n$, i.e. $t \le \log_2 n$: so the
+iterations are the values $t = 0, 1, \dots, \lfloor\log_2 n\rfloor$, at most
+$\lfloor\log_2 n\rfloor + 1$ of them. $\blacksquare$
+:::
+
+For $n = 10^9$ that is at most 30 comparisons. In languages with fixed-width
+integers, `(lo + hi) / 2` can **overflow** (@sec-twos-complement) when
+`lo + hi` exceeds $2^{31}-1$; this bug sat for years in the Java standard
+library [@bloch2006]. The safe form is `lo + (hi - lo) / 2`. Python integers
+cannot overflow, so `(lo + hi) // 2` is fine.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+bsArray = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53]
+viewof bsTarget = Inputs.range([0, 60], {step: 1, value: 23, label: "Search for x ="})
+bsSteps = {
+  let lo = 0, hi = bsArray.length, steps = [];
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const goRight = bsArray[mid] < bsTarget;
+    steps.push({lo, hi, mid, val: bsArray[mid], decision: goRight ? `a[${mid}]=${bsArray[mid]} < ${bsTarget} → lo = ${mid + 1}` : `a[${mid}]=${bsArray[mid]} ≥ ${bsTarget} → hi = ${mid}`});
+    if (goRight) lo = mid + 1; else hi = mid;
+  }
+  return {steps, result: lo};
+}
+html`<p>Array: <code>[${bsArray.join(", ")}]</code> (n = ${bsArray.length}, so at most ⌊log₂ n⌋ + 1 = 5 iterations)</p>
+<table class="table table-sm"><thead><tr><th>step</th><th>lo</th><th>hi</th><th>mid</th><th>decision</th></tr></thead>
+<tbody>${bsSteps.steps.map((s, i) => html`<tr><td>${i + 1}</td><td>${s.lo}</td><td>${s.hi}</td><td>${s.mid}</td><td>${s.decision}</td></tr>`)}</tbody></table>
+<p>Result: index <b>${bsSteps.result}</b> — ${bsSteps.result < bsArray.length && bsArray[bsSteps.result] === bsTarget ? "found!" : "not present (this is where it would be inserted)"}.</p>`
+```
+:::
+
+## Nested loops and their cost {#sec-nested-loops}
+
+A loop inside a loop multiplies the work. Counting iterations precisely is an
+application of sums like @eq-gauss.
+
+```{python}
+names = ["Ada", "Alan", "Grace", "Linus"]
+pairs = []
+for i in range(len(names)):
+    for j in range(i + 1, len(names)):      # j > i: each unordered pair once
+        pairs.append((names[i], names[j]))
+print(len(pairs), pairs)
+```
+
+The inner loop runs $n - 1 - i$ times for $i = 0, \dots, n-1$, so the total is
+$$
+\sum_{i=0}^{n-1}(n-1-i) = \sum_{j=0}^{n-1} j = \frac{(n-1)n}{2} = \binom n2 = \Theta(n^2),
+$$
+by @eq-gauss with $n-1$ in place of $n$. With $n = 4$: $6$ pairs ✓. Checking
+"is any element duplicated?" by comparing all pairs is therefore $\Theta(n^2)$,
+while the set-based check of @sec-sets is $O(n)$ expected.
+
+## Worked examples
+
+### Primality testing
+
+A natural number $n \ge 2$ is **prime** if its only positive divisors are 1 and
+$n$. The obvious test tries all $d$ from 2 to $n-1$; we can stop much earlier.
+
+::: {#prp-sqrt-divisor}
+## Divisors up to the square root
+If $n \ge 2$ is not prime, it has a divisor $d$ with $2 \le d \le \sqrt n$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-sqrt-divisor
+If $n$ is not prime, $n = ab$ with $1 < a \le b < n$. Then
+$a^2 \le ab = n$, so $a \le \sqrt n$. $\blacksquare$
+:::
+
+```{python}
+def is_prime(n: int) -> bool:
+    if n < 2:
+        return False
+    d = 2
+    while d * d <= n:          # d <= sqrt(n), with exact integer arithmetic
+        if n % d == 0:
+            return False       # found a divisor: not prime
+        d += 1
+    return True                # no divisor up to sqrt(n): prime (by the proposition)
+
+print([n for n in range(50) if is_prime(n)])
+print(is_prime(1_000_000_007))  # about 31,623 iterations instead of a billion
+```
+
+### The sieve of Eratosthenes
+
+To list **all** primes up to $N$, the sieve attributed to Eratosthenes of
+Cyrene (3rd century BC) crosses out the multiples of each prime:
+
+```{python}
+def sieve(N: int) -> list[int]:
+    is_p = [True] * (N + 1)
+    is_p[0:2] = [False, False]
+    p = 2
+    while p * p <= N:
+        if is_p[p]:
+            for multiple in range(p * p, N + 1, p):   # smaller multiples were already crossed out
+                is_p[multiple] = False
+        p += 1
+    return [i for i, flag in enumerate(is_p) if flag]
+
+print(sieve(60))
+print(len(sieve(1_000_000)), "primes below one million")
+```
+
+**Cost.** For each prime $p \le \sqrt N$ the inner loop runs at most $N/p$
+times. Bounding the sum over primes by the sum over all integers:
+$\sum_{p\le\sqrt N} N/p \le N \sum_{k=1}^{\sqrt N} \frac1k = N\, H_{\sqrt N}$,
+where the **harmonic number** $H_m = \sum_{k=1}^m 1/k$ satisfies
+$H_m \le 1 + \ln m$ (compare the sum with $\int_1^m dx/x$: each term $1/k$ for
+$k \ge 2$ is at most $\int_{k-1}^{k} dx/x$). So the sieve is $O(N \log N)$. The
+sharper bound $O(N\log\log N)$ follows from Mertens' theorem
+$\sum_{p \le x} 1/p = \ln\ln x + O(1)$ [@hardy2008, §22.7].
+
+### A loop nobody can prove: Collatz
+
+Not every loop can be analysed. Take any $n \ge 1$; if it is even halve it,
+otherwise replace it with $3n+1$; repeat until you reach 1.
+
+```{python}
+def collatz_steps(n: int) -> int:
+    steps = 0
+    while n != 1:
+        n = n // 2 if n % 2 == 0 else 3 * n + 1
+        steps += 1
+    return steps
+
+print([collatz_steps(n) for n in range(1, 16)])
+print("27 needs", collatz_steps(27), "steps")
+```
+
+It has been verified by computer for all $n$ up to beyond $10^{20}$, but
+**nobody knows** whether this loop terminates for every $n$ — the *Collatz
+conjecture* (1937) is open [@lagarias2010]. There is no known variant. Compare
+with @thm-halting: undecidability says no algorithm can settle *all* such
+questions; Collatz shows that even a specific, three-line loop can resist
+mathematics.
+
+## Comprehensions {#sec-comprehensions}
+
+Building a collection with a loop is so common that Python has a compact
+syntax for it, borrowed from **set-builder notation** in mathematics,
+$\{x^2 : x \in S,\ x \text{ even}\}$ (PEP 202 [@pep202]):
+
+```{python}
+nums = range(10)
+squares = [x * x for x in nums]                    # list comprehension
+even_squares = [x * x for x in nums if x % 2 == 0] # with a filter
+initials = {name[0] for name in ["Ada", "Alan", "Grace"]}   # set comprehension
+lengths = {name: len(name) for name in ["Ada", "Alan"]}     # dict comprehension
+grid = [[r * 3 + c for c in range(3)] for r in range(3)]    # nested
+print(squares, even_squares, initials, lengths, grid, sep="\n")
+```
+
+`[expr for x in it if cond]` is equivalent to:
+
+```python
+result = []
+for x in it:
+    if cond:
+        result.append(expr)
+```
+
+A **generator expression** — the same syntax in round brackets — produces
+the elements lazily, one at a time, without building a list (PEP 289
+[@pep289]). Use it when you only need to consume the values once:
+
+```{python}
+print(sum(x * x for x in range(1_000_001)))       # no million-element list is created
+print(any(n % 7 == 0 for n in [3, 5, 14]), all(n > 0 for n in [3, 5, 14]))
+```
+
+Keep comprehensions short; if one needs more than one `for` and one `if`, a
+normal loop is usually clearer.
+
+::: {.project-link}
+**In the project.** The phone book's main program is a `while` loop that
+keeps showing the menu until the user chooses *exit* (`break`), and every
+numeric input is read inside a validation loop — e.g. in
+`Contatto.input_valid_contact`, a `while not input_contact:` loop repeats
+`int(input(...))` until the conversion succeeds. The menu itself is printed
+with `for i, … in enumerate(funzionalita)`. As an exercise, write the invariant
+of the main loop ("the in-memory phone book contains no two equal contacts")
+and check that every menu action preserves it.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Infinite `while` loops**: the body must make progress towards making the
+  condition false (find the variant!).
+- **Off-by-one errors**: `range(1, n)` stops at $n-1$. Think in half-open
+  intervals.
+- **Modifying a list while iterating over it**: iterate over a copy or build a
+  new list.
+- **Reusing an exhausted iterator** (`zip`, `map`, generators, files): the
+  second loop does nothing.
+- **Using the loop variable after the loop**: it keeps its last value — or is
+  undefined if the loop ran zero times.
+- **Quadratic hidden costs**: `x in list` or `lst.insert(0, …)` inside a loop.
+:::
+
+## Summary
+
+- `while` repeats while a condition holds; `for` iterates over an iterable via
+  the **iteration protocol** (`iter`, `next`, `StopIteration`).
+- `range` is a lazy, half-open arithmetic progression; `enumerate`, `zip`,
+  `reversed`, `sorted` combine with `for`.
+- `break` exits, `continue` skips, the loop `else` runs when no `break`
+  happened.
+- A loop is proved correct by an **invariant** (initialisation, maintenance,
+  termination) and proved to terminate by a **variant**; the justification is
+  **induction**.
+- **Binary search** runs in $\lfloor\log_2 n\rfloor + 1$ iterations on sorted
+  data; nested loops over pairs cost $\binom n2 = \Theta(n^2)$.
+- Comprehensions and generator expressions build collections concisely.
+
+## Exercises
+
+::: {#exr-ch5-sum-squares}
+Prove by induction that $\sum_{i=1}^n i^2 = \frac{n(n+1)(2n+1)}{6}$, then check
+it in Python for $n = 0..100$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Base $n=0$: $0 = 0$. Step: $\frac{n(n+1)(2n+1)}6 + (n+1)^2 = \frac{(n+1)\,[n(2n+1) + 6(n+1)]}{6} = \frac{(n+1)(2n^2+7n+6)}6 = \frac{(n+1)(n+2)(2n+3)}6$,
+which is the formula for $n+1$.
+`all(sum(i*i for i in range(n+1)) == n*(n+1)*(2*n+1)//6 for n in range(101))`.
+:::
+
+::: {#exr-ch5-max-invariant}
+Write a `while` loop that computes the maximum of a non-empty list without
+using `max`, and state its invariant and variant.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+best, i = a[0], 1
+while i < len(a):
+    if a[i] > best:
+        best = a[i]
+    i += 1
+```
+Invariant: `best` $= \max(a[0], \dots, a[i-1])$ and $1 \le i \le n$. Variant:
+$n - i$. At exit $i = n$, so `best` is the maximum of the whole list.
+:::
+
+::: {#exr-ch5-bisect-right}
+Modify `lower_bound` into `upper_bound(a, x)` returning the first index with
+$a[i] > x$. What changes in the invariant? Use both to count the occurrences of
+$x$ in a sorted list in $O(\log n)$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Replace `a[mid] < x` with `a[mid] <= x`. Invariant: $a[k]\le x$ for $k < lo$,
+$a[k] > x$ for $k\ge hi$. Occurrences: `upper_bound(a, x) - lower_bound(a, x)`
+(the standard library has `bisect.bisect_right`).
+:::
+
+::: {#exr-ch5-triple}
+How many times does the innermost statement run in
+`for i in range(n): for j in range(i): for k in range(j): ...`? Give the exact
+formula and the $\Theta$ class.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+It runs once per triple $k < j < i < n$, i.e. $\binom n3 = \frac{n(n-1)(n-2)}{6} = \Theta(n^3)$.
+:::
+
+::: {#exr-ch5-menu}
+Write a menu loop that shows options `1) say hello  2) show time  3) exit`,
+handles non-numeric input and out-of-range numbers without crashing, and exits
+cleanly on 3.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+import datetime
+while True:
+    choice = input("1) say hello  2) show time  3) exit\n> ").strip()
+    if choice == "1":
+        print("Hello!")
+    elif choice == "2":
+        print(datetime.datetime.now().strftime("%H:%M:%S"))
+    elif choice == "3":
+        print("Bye.")
+        break
+    else:
+        print("Please type 1, 2 or 3.")
+```
+Comparing *strings* avoids the conversion error altogether; @sec-ch-exceptions
+shows the `try`/`except` alternative.
+:::
+
+## Further reading {.unnumbered}
+
+- @pythontutorial, §4.2–4.5 (`for`, `range`, `break`, `continue`, loop
+  `else`) and §5.1.3 (comprehensions); @pythonreference, §8.2–8.3.
+- @cormen2022, §2.1 — loop invariants with insertion sort; Appendix A —
+  summation formulas.
+- @hoare1969 and @floyd1967 — the origins of invariants and program proofs.
+- @dijkstra1976, *A Discipline of Programming* — deriving programs together
+  with their proofs.
+- @bentley1999, Column 4 — the binary search story; @knuth1998, §6.2.1.
+- @rosen2019, Chapter 5 — induction, strong induction, well-ordering.
+- @lagarias2010 — survey of the Collatz problem.

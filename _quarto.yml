@@ -2,25 +2,83 @@ project:
   type: book
   output-dir: _book
 
+# Python cells are executed locally once and their results are stored in
+# _freeze/ (committed to the repository). The GitHub Action therefore only
+# needs Quarto, not Python: it re-uses the frozen outputs.
+execute:
+  freeze: auto
+  echo: true
+  warning: true
+
 book:
   title: "AI Engineering Handbook"
-  subtitle: "A from-scratch, hands-on path to AI Engineering"
+  subtitle: "A from-scratch, proof-driven, hands-on path to AI Engineering"
   author: "Matteo Zirilli"
   date: today
+  date-format: "D MMMM YYYY"
   search: true
-  page-footer: "AI Engineering Handbook — © 2026 Matteo Zirilli"
+  repo-url: https://github.com/matteo-zirilli/ai-engineering-handbook
+  repo-actions: [source, issue]
+  page-navigation: true
+  page-footer:
+    left: "AI Engineering Handbook — © 2026 Matteo Zirilli"
+    right: "Built with [Quarto](https://quarto.org)"
   chapters:
     - index.qmd
-    - part: "Reinforcement Learning"
+    - how-to-study.qmd
+    - part: python/index.qmd
       chapters:
-        - rl-paradigm.qmd
+        - python/01-introduction.qmd
+        - python/02-variables-and-types.qmd
+        - python/03-collections.qmd
+        - python/04-conditionals.qmd
+        - python/05-loops.qmd
+        - python/06-functions.qmd
+        - python/07-oop.qmd
+        - python/08-exceptions.qmd
+        - python/09-files.qmd
+        - python/10-modules-and-packages.qmd
+        - python/11-standard-library.qmd
+        - python/12-pypi-and-pip.qmd
+        - python/13-virtual-environments.qmd
+        - python/14-ai-coding-tools.qmd
+        - python/15-project-phone-book.qmd
+  appendices:
+    - appendices/finding-sources.qmd
+    - references.qmd
 
 bibliography: references.bib
+csl: styles/chicago-author-date-notes.csl
+link-citations: true
+citations-hover: true
+footnotes-hover: true
+crossref:
+  thm-title: "Theorem"
+  lem-title: "Lemma"
+  def-title: "Definition"
+  cor-title: "Corollary"
+  prp-title: "Proposition"
+  exm-title: "Example"
+  exr-title: "Exercise"
 
 format:
   html:
-    theme: cosmo
+    theme:
+      light: [cosmo, styles/light.scss]
+      dark: [darkly, styles/dark.scss]
+    css: styles/handbook.css
     toc: true
     toc-depth: 3
+    toc-title: "On this page"
     number-sections: true
+    number-depth: 3
+    code-copy: true
     code-overflow: wrap
+    code-line-numbers: false
+    highlight-style: github
+    html-math-method: mathjax
+    fig-cap-location: bottom
+    tbl-cap-location: top
+    callout-appearance: default
+    smooth-scroll: true
+    anchor-sections: true

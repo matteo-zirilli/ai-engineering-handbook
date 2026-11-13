@@ -1,0 +1,749 @@
+# Project: a terminal phone-book prototype {#sec-ch-project-phonebook}
+
+> *"Make it work, make it right, make it fast."* — Kent Beck.
+
+::: {.callout-note}
+## What this chapter contains
+1. The **brief** of the project, as given by the (fictional) client
+   *ContactEase Solutions*.
+2. A **requirements matrix** that maps every requirement to the chapters of
+   this part that teach the necessary skills.
+3. The **design**: classes, data structure (with its cost analysis),
+   persistence, robustness, user experience.
+4. A **walkthrough and code review** of the implementation published in the
+   companion repository
+   [`Phone_Book_Python_OOP.ipynb`](https://github.com/matteo-zirilli/ai-projects/blob/main/Phone_Book_Python_OOP.ipynb)
+   ([open in Colab](https://colab.research.google.com/github/matteo-zirilli/ai-projects/blob/main/Phone_Book_Python_OOP.ipynb)).
+5. A **reference implementation** that applies every refinement suggested by
+   the review, with an executed demonstration and a test suite.
+6. **Extensions** to practise further.
+:::
+
+## The client {#sec-project-client}
+
+**ContactEase Solutions** is an Italian software house based in Bologna,
+founded in 2016 by developers coming from mobile applications. It builds light
+personal-productivity tools — address books, agendas, note managers, small
+synchronisation utilities — for private users, freelancers and micro-companies
+who want simple, fast solutions without needless complexity. Its catalogue
+includes desktop and mobile applications and command-line utilities, partly
+open source, under a mixed freemium/business-support model. About forty people
+work in development, design and support, with short release cycles and strong
+attention to code quality and clarity of the user experience.
+
+Its guiding values are **ease of use**, **protection of the users' personal
+data** (kept on the device whenever possible) and **maintainable,
+well-documented code** — a principle the company applies to its internal
+prototypes too.
+
+## The brief {#sec-project-brief}
+
+> *Hi, now that you are in the development team, here is your first
+> assignment.*
+>
+> *We are evaluating a niche that still seems uncovered: terminal tools for
+> people who work a lot on the command line and do not want to open a graphical
+> application just to look up a phone number. Before investing in a product
+> version, we need a **working prototype** that demonstrates the soundness of
+> the approach.*
+>
+> *What I have in mind:*
+>
+> - *an **interactive console application** written in Python, built on the
+>   principles of **object-oriented programming** (classes for the single
+>   contact and for the phone book, well-separated responsibilities);*
+> - *a suitable **data structure** to keep contacts in memory in an orderly and
+>   efficient way;*
+> - *a **main menu** with clear options, usable also by people unfamiliar with
+>   the terminal;*
+> - *the basic features: **add**, **view** the complete list, **edit** an
+>   existing contact, **delete**, **search** by first or last name;*
+> - ***file persistence** (JSON is fine): contacts must be saved and reloaded
+>   automatically at start-up, so the user finds their phone book again.*
+>
+> *A couple of practical recommendations: users always get something wrong, so
+> handle invalid input and out-of-menu choices without crashing the program;
+> and consider the case of a missing or empty file at first start.*
+>
+> *Deliver everything as a **public link to a Google Colab notebook**, with
+> commented code and a short demonstration of use.*
+>
+> *If you have doubts about how to set up the classes, write to me before
+> starting.* — Davide Lombardo
+
+### Didactic guidance
+
+The goal is a command-line phone-book prototype in Python that applies
+object-oriented principles correctly. The value of the work lies not only in
+making the operations work, but in the **cleanliness of the architecture**:
+classes with clear responsibilities, coherent methods, readable and commented
+code. The user experience at the terminal (clear messages, understandable
+menu) and robustness against wrong input matter too. Six operational tips
+accompany the brief:
+
+1. **Separate responsibilities between classes** — a `Contact` class for the
+   single record (first name, last name, phone, optional e-mail) and a
+   `PhoneBook` class managing the collection and its operations; keep the
+   user-interaction logic **outside** the domain classes.
+2. **Choose the data structure with care** — list, dictionary or a
+   combination: assess what makes search and modification more efficient, and
+   motivate the choice in a comment or a text cell.
+3. **Make persistence reliable** — serialise objects to a readable format such
+   as JSON; on loading, handle a missing or corrupted file without
+   interrupting execution.
+4. **Do not let the program crash** — use validation and `try`/`except` for
+   non-numeric input, non-existent indices, empty fields. A prototype that
+   ends with a traceback makes a terrible impression in a demo.
+5. **Take care of the menu and the messages** — a main loop with numbered
+   options, a confirmation after every operation, a clean way to exit that
+   saves the data.
+6. **Mind the Colab notebook** — interactive input works in Colab, but
+   organise the cells so that the evaluator can run the code and try the menu
+   smoothly; add a short demonstration of use.
+
+## Requirements matrix {#sec-project-requirements}
+
+| # | Requirement (from the brief and the guidance) | Skills needed | Chapters |
+|---|---|---|---|
+| R1 | Interactive console application | `input`/`print`, loops, menus | @sec-ch-variables, @sec-ch-loops |
+| R2 | OOP: `Contact` and `PhoneBook` classes, separated responsibilities | classes, special methods, encapsulation, composition | @sec-ch-oop |
+| R3 | Interaction logic outside the domain classes | single responsibility, modules | @sec-solid, @sec-ch-modules |
+| R4 | Suitable, motivated data structure for ordered, efficient storage | lists, dicts, hashing, sorting, complexity | @sec-ch-collections, @sec-asymptotic |
+| R5 | Main menu with clear numbered options | conditionals, dispatch tables | @sec-ch-conditionals, @sec-first-class |
+| R6 | Add, view, edit, delete, search by name/surname | functions, methods, string matching | @sec-ch-functions, @sec-strings |
+| R7 | JSON persistence, automatic load at start and save at exit | files, JSON, serialisation | @sec-ch-files |
+| R8 | Missing / empty / corrupted file handled | exceptions, EAFP | @sec-ch-exceptions |
+| R9 | Invalid input and out-of-menu choices never crash | casting, validation, `try`/`except` | @sec-casting, @sec-try |
+| R10 | Confirmations, clean exit that saves | UX, `finally`/context managers | @sec-context-managers |
+| R11 | Colab notebook: commented code, runnable top to bottom, demo of use | notebooks, docstrings | @sec-dev-environment, @sec-docstrings-functions |
+
+: Requirements and where the book teaches them {#tbl-project-requirements}
+
+## Design {#sec-project-design}
+
+### Responsibilities
+
+Following the guidance (and @sec-solid), the program splits into four
+responsibilities, each a class (or module, @sec-real-package):
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "Architecture of the phone book. Arrows are dependencies; the graph is acyclic (@thm-toposort) and the domain does not depend on the interface."
+flowchart LR
+    UI["ConsoleUI<br/>(menu, input, messages)"] --> BOOK["PhoneBook<br/>(collection, rules)"]
+    UI --> STORE["JsonStorage<br/>(load / save, file format)"]
+    BOOK --> MODEL["Contact<br/>(one record, validation)"]
+    STORE --> MODEL
+```
+
+- **`Contact`** — one record; validates its own fields (non-empty name, valid
+  phone number) so that an invalid contact cannot exist (a class invariant,
+  @sec-encapsulation).
+- **`PhoneBook`** — the collection and its rules: no duplicates, sorted
+  listing, search, edit, delete. No `input`, no `print`.
+- **`JsonStorage`** — the only component that knows the file format
+  (information hiding, @sec-modularity): loading tolerates a missing, empty or
+  corrupted file; saving is atomic.
+- **`ConsoleUI`** — the only component that talks to the user.
+
+### The data structure, with its costs
+
+What operations dominate? Listing (sorted), adding with a duplicate check,
+searching by name, editing and deleting. Two candidates:
+
+| Operation | `list` of contacts | `dict` keyed by identity `(name, surname, phone)` |
+|---|---|---|
+| duplicate check on add | $O(n)$ scan | $O(1)$ expected (@thm-chaining) |
+| add | $O(1)$ amortised + $O(n)$ check | $O(1)$ expected |
+| delete a known contact | $O(n)$ (find + shift) | $O(1)$ expected |
+| search by substring of name | $O(n)$ | $O(n)$ |
+| sorted listing | $O(n\log n)$ (or $O(n)$ if kept sorted) | $O(n \log n)$ |
+
+: Costs of the two candidate structures ($n$ contacts) {#tbl-project-structures}
+
+A **dict keyed by an identity tuple** makes the rule "no two identical
+contacts" cheap and explicit, and Python dicts keep insertion order
+(@sec-dicts); the sorted view is produced on demand with `sorted` (Timsort,
+@sec-sorting). Substring search is linear either way (a prefix index or a
+trie would be needed to do better — irrelevant for a personal phone book with
+hundreds of entries, where every operation takes microseconds). **Motivation
+for the notebook**: *"a dict gives $O(1)$ duplicate checks and deletions; at
+the scale of a personal phone book the difference is negligible, so the
+decisive reasons are clarity of the uniqueness rule and simplicity of the
+code."* That is exactly the kind of justification tip 2 asks for.
+
+### What identifies a contact?
+
+Two entries are "the same contact" if they have the same name, surname and
+phone number, ignoring letter case and spacing in the number. Homonyms with
+different numbers are allowed (two different "Mario Rossi"). This identity is
+an **equivalence relation** (@def-equivalence) because it is equality of a key
+tuple; the sort order is lexicographic on `(surname, name, phone)`, a strict
+total order on keys (@thm-lex-order).
+
+### Robustness and user experience
+
+- Every input goes through a small set of **validated readers** (`ask_text`,
+  `ask_choice`, `ask_yes_no`) that loop until the input is valid
+  (@sec-try) and are **injected** into the UI, so the UI can be tested with
+  scripted input.
+- Editing and deleting select a contact **from a numbered list of search
+  results**, instead of asking the user to retype the whole contact exactly.
+- <kbd>Ctrl</kbd>+<kbd>C</kbd> or end of input (`EOFError`) **save and exit**
+  instead of showing a traceback.
+- Saving is **atomic** (@sec-atomic-writes): a crash during the save never
+  destroys the phone book.
+
+## Walkthrough of the published implementation {#sec-project-walkthrough}
+
+The notebook in `ai-projects` is organised in four cells: the `Contatto`
+class, the `Rubrica` class, the Google Drive mount, and the main program. The
+class and method names are in Italian (the menu is generated from them); the
+notebook includes a glossary.
+
+**`Contatto`** stores first name, last name, number and country code
+(`prefisso`, default 39). Its constructor converts number and country code with
+`int(...)` and turns a failure into a clear `ValueError`. It defines `__eq__`
+(all four fields equal) and `__lt__`, which compares the tuples
+`(cognome, nome)` — so `list.sort()` orders contacts by surname, then name. A
+helper `input_valid_contact()` reads a contact from the keyboard, looping on
+`int(input(...))` until the number and country code are numeric.
+
+**`Rubrica`** wraps a list (`self._rubrica`), initialised with the `None`
+sentinel idiom to avoid the mutable-default trap (the code comment explains
+why). It offers `aggiungi_contatto` (add, refusing exact duplicates via
+`cerca_contatto`), `visualizza_contatti` (sort, then print), `modifica_contatto`
+(read the contact to edit, then the replacement, refusing duplicates),
+`elimina_contatto`, and `ricerca_contatto` (a sub-menu to search by name or by
+number). Persistence: `load_file_in_rubr` reads the JSON list and rebuilds the
+contacts; `convert_rubr_dict` turns contacts into dicts using
+`inspect.signature(Contatto.__init__)` to discover the field names;
+`load_rubr_in_file` writes the JSON with `indent=4`.
+
+**The menu** is built dynamically: `functionlaties()` lists, with `dir(self)`,
+the public method names that are not in an exclusion list, and the main loop
+prints them numbered, reads a choice, checks it with `assert`, and calls the
+method with `getattr(rubr, name)()` — a dispatch table built by introspection
+(@sec-first-class). The loop ends on `esci` (exit), after which the phone book
+is saved.
+
+**What it does well**: OOP structure with two classes; special methods for
+equality and ordering; the mutable-default idiom; validation loops on numeric
+input; handling of `JSONDecodeError`; docstrings on every method; persistence
+that round-trips; a menu that cannot drift out of sync with the methods.
+
+### Code review: refinements suggested by this book
+
+| # | Observation | Why it matters | Suggested change | Chapter |
+|---|---|---|---|---|
+| 1 | Phone numbers stored as `int` | leading zeros are lost (`06…` → `6…`); `+`, spaces impossible | store a validated, normalised **string** (E.164) | @sec-casting, @sec-verification |
+| 2 | `__eq__` defined without `__hash__` | contacts are unhashable: no sets/dict keys, duplicate checks stay $O(n)$ | define `__hash__` on the same key, or use a frozen dataclass | @prp-hash-contract |
+| 3 | `Rubrica` reads `contatto._nome` etc. | breaks encapsulation of `Contatto` | public read-only attributes or properties | @sec-encapsulation |
+| 4 | `input_valid_contact` has no `self` and calls `input()` inside the domain class | works only when called on the class; mixes UI and domain (against tip 1) | move it to the UI layer (or at least `@staticmethod`) | @sec-dataclasses, @sec-solid |
+| 5 | `cerca_contatto`, `cerca_name` print messages | domain methods with UI side effects; hard to test | return results; let the UI print | @sec-return |
+| 6 | `assert` used to validate the menu choice | disabled by `python -O` → `IndexError` | an explicit `if` with a message | @sec-assert |
+| 7 | `os.path.exists` before `open` | LBYL with a race window; an **empty** file raises `JSONDecodeError` and is reported as invalid | EAFP on `FileNotFoundError`; treat empty as an empty book | @exm-toctou |
+| 8 | Files opened without `encoding=` | accented names may break on another OS | `encoding="utf-8"` | @sec-text-vs-binary |
+| 9 | Save with mode `"w"` | a crash mid-save truncates the file | atomic write (temp file + `os.replace`) | @sec-atomic-writes |
+| 10 | Menu built from `dir()` | order is alphabetical, labels derive from method names, renaming a method changes the UI | an explicit dispatch table (label → function) | @sec-first-class |
+| 11 | Edit/delete require retyping the whole contact | error-prone UX; the notebook's own to-do notes the "name exists but number differs" case | pick from a numbered list of search results | @sec-project-design |
+| 12 | `Ctrl+C` / end of input | a traceback, and unsaved data | catch `KeyboardInterrupt`/`EOFError`, save, exit | @sec-try |
+| 13 | Data structure choice not motivated in the notebook | tip 2 asks for it explicitly | a text cell with the analysis of @tbl-project-structures | @sec-choosing-collection |
+| 14 | No automated tests | regressions go unnoticed | a small test suite with scripted input | @sec-verification |
+
+: Code review of the published implementation {#tbl-project-review}
+
+None of these prevents the prototype from working — it passed the course
+assessment. They are the difference between a prototype and a product, which is
+exactly the next step ContactEase is considering.
+
+## Reference implementation {#sec-project-reference}
+
+The code below applies all the refinements. It is written as four blocks that
+correspond to the four modules of @sec-real-package (`models`, `book`,
+`storage`, `cli`); in a notebook each block is one cell, in a package one file.
+
+### `models`: the contact
+
+```{python}
+"""models — the Contact record and its validation."""
+from __future__ import annotations
+import re
+from dataclasses import dataclass, asdict
+
+_SEPARATORS = " -.()"
+
+def normalize_phone(text: str, default_cc: str = "39") -> str:
+    """Return the number as '+<8..15 digits>' (E.164 style); see Chapter 14."""
+    s = "".join(ch for ch in str(text).strip() if ch not in _SEPARATORS)
+    if s.startswith("+"):
+        body = s[1:]
+    elif s.startswith("00"):
+        body = s[2:]
+    else:
+        body = default_cc + s
+    if not re.fullmatch(r"\d+", body):
+        raise ValueError(f"invalid characters in phone number: {text!r}")
+    if not 8 <= len(body) <= 15:
+        raise ValueError(f"a phone number needs 8-15 digits including the country code: {text!r}")
+    return "+" + body
+
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")      # deliberately simple
+
+@dataclass(frozen=True)
+class Contact:
+    """One phone-book entry. Instances are always valid (class invariant).
+
+    Identity (for duplicates): name, surname (case-insensitive) and phone.
+    Sort order: surname, name, phone (case-insensitive).
+    """
+    name: str
+    surname: str
+    phone: str
+    email: str = ""
+
+    def __post_init__(self):
+        # frozen dataclass: use object.__setattr__ to store the normalised values
+        name, surname, email = self.name.strip(), self.surname.strip(), self.email.strip()
+        if not name:
+            raise ValueError("the first name must not be empty")
+        if email and not _EMAIL.match(email):
+            raise ValueError(f"invalid e-mail address: {email!r}")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "surname", surname)
+        object.__setattr__(self, "email", email)
+        object.__setattr__(self, "phone", normalize_phone(self.phone))
+
+    @property
+    def identity(self) -> tuple[str, str, str]:
+        return (self.name.casefold(), self.surname.casefold(), self.phone)
+
+    @property
+    def sort_key(self) -> tuple[str, str, str]:
+        return (self.surname.casefold(), self.name.casefold(), self.phone)
+
+    def __str__(self) -> str:
+        full = f"{self.name} {self.surname}".strip()
+        extra = f"  <{self.email}>" if self.email else ""
+        return f"{full:<28} {self.phone}{extra}"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Contact":
+        return cls(name=d["name"], surname=d.get("surname", ""),
+                   phone=d["phone"], email=d.get("email", ""))
+
+c = Contact(" Ada ", "Lovelace", "+44 20 7946 0000", "ada@example.org")
+print(Contact("Mario", "Rossi", "06 1234 5678"))       # Italian landline: +39 added, leading 0 kept
+print(c, "|", c.identity)
+```
+
+### `book`: the collection and its rules
+
+```{python}
+"""book — the PhoneBook: a collection of unique contacts. No input/print here."""
+from typing import Iterator
+
+class PhoneBookError(Exception):
+    """Base class of phone-book errors."""
+
+class DuplicateContactError(PhoneBookError):
+    pass
+
+class ContactNotFoundError(PhoneBookError, LookupError):
+    pass
+
+class PhoneBook:
+    """Unique contacts, stored in a dict keyed by identity.
+
+    Invariant: no two stored contacts have the same identity.
+    Costs (n contacts): add/remove/contains O(1) expected; listing O(n log n);
+    search O(n).
+    """
+    def __init__(self, contacts: list[Contact] | None = None):
+        self._by_id: dict[tuple, Contact] = {}
+        for c in contacts or []:
+            self.add(c)
+
+    def add(self, c: Contact) -> None:
+        if c.identity in self._by_id:
+            raise DuplicateContactError(f"{c.name} {c.surname} ({c.phone}) is already in the phone book")
+        self._by_id[c.identity] = c
+
+    def remove(self, c: Contact) -> None:
+        try:
+            del self._by_id[c.identity]
+        except KeyError:
+            raise ContactNotFoundError(str(c)) from None
+
+    def replace(self, old: Contact, new: Contact) -> None:
+        """Edit: replace old with new, keeping the no-duplicates invariant."""
+        if old.identity not in self._by_id:
+            raise ContactNotFoundError(str(old))
+        if new.identity != old.identity and new.identity in self._by_id:
+            raise DuplicateContactError(f"{new.name} {new.surname} ({new.phone}) already exists")
+        del self._by_id[old.identity]
+        self._by_id[new.identity] = new
+
+    def search(self, text: str) -> list[Contact]:
+        """Contacts whose first or last name contains text (case-insensitive), sorted."""
+        t = text.strip().casefold()
+        return [c for c in self if t in c.name.casefold() or t in c.surname.casefold()]
+
+    def search_phone(self, text: str) -> list[Contact]:
+        target = normalize_phone(text)
+        return [c for c in self if c.phone == target]
+
+    def __iter__(self) -> Iterator[Contact]:
+        return iter(sorted(self._by_id.values(), key=lambda c: c.sort_key))
+
+    def __len__(self) -> int:
+        return len(self._by_id)
+
+    def __contains__(self, c: object) -> bool:
+        return isinstance(c, Contact) and c.identity in self._by_id
+```
+
+### `storage`: reliable JSON persistence
+
+```{python}
+"""storage — the only module that knows the file format (information hiding)."""
+import json, os, tempfile
+from pathlib import Path
+
+class CorruptedFileError(PhoneBookError):
+    pass
+
+class JsonStorage:
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+
+    def load(self) -> tuple[list[Contact], list[str]]:
+        """Return (contacts, warnings). Missing or empty file -> empty phone book."""
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:                       # EAFP: no race window
+            return [], [f"{self.path.name} not found: starting with an empty phone book"]
+        if not text.strip():
+            return [], [f"{self.path.name} is empty: starting with an empty phone book"]
+        try:
+            records = json.loads(text)
+        except json.JSONDecodeError as err:
+            raise CorruptedFileError(f"{self.path.name} is not valid JSON") from err
+        contacts, warnings = [], []
+        for i, rec in enumerate(records if isinstance(records, list) else []):
+            try:
+                contacts.append(Contact.from_dict(rec))
+            except (KeyError, TypeError, ValueError) as err:   # skip bad records, keep the rest
+                warnings.append(f"record {i} skipped: {err}")
+        return contacts, warnings
+
+    def save(self, contacts) -> None:
+        """Atomic write: temporary file in the same folder, then os.replace."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump([c.to_dict() for c in contacts], f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+```
+
+### `cli`: the console user interface
+
+```{python}
+"""cli — all interaction with the user lives here."""
+
+class ConsoleUI:
+    MENU = [("List all contacts", "list_all"), ("Add a contact", "add"),
+            ("Search by name", "search"), ("Search by phone number", "search_by_phone"),
+            ("Edit a contact", "edit"), ("Delete a contact", "delete"),
+            ("Save and exit", None)]
+
+    def __init__(self, book: PhoneBook, storage: JsonStorage, input_fn=input, print_fn=print):
+        self.book, self.storage = book, storage
+        self.input, self.print = input_fn, print_fn          # injected: testable without a keyboard
+
+    # ---- validated readers -------------------------------------------------
+    def ask_text(self, prompt: str, required: bool = True, default: str = "") -> str:
+        while True:
+            text = self.input(prompt).strip()
+            if text or not required:
+                return text or default
+            self.print("  This field cannot be empty.")
+
+    def ask_choice(self, prompt: str, n: int) -> int:
+        while True:
+            text = self.input(prompt).strip()
+            if text.isdigit() and 1 <= int(text) <= n:
+                return int(text)
+            self.print(f"  Please type a number between 1 and {n}.")
+
+    def ask_yes_no(self, prompt: str) -> bool:
+        while True:
+            text = self.input(prompt + " [y/n] ").strip().casefold()
+            if text in ("y", "yes", "s", "si", "sì"):
+                return True
+            if text in ("n", "no"):
+                return False
+            self.print("  Please answer y or n.")
+
+    def ask_contact(self, current: Contact | None = None) -> Contact:
+        """Read a valid contact; with `current`, an empty answer keeps the old value."""
+        while True:
+            hint = (lambda v: f" [{v}]") if current else (lambda v: "")
+            name = self.ask_text(f"First name{hint(current.name if current else '')}: ",
+                                 required=current is None, default=current.name if current else "")
+            surname = self.ask_text(f"Last name{hint(current.surname if current else '')}: ",
+                                    required=False, default=current.surname if current else "")
+            phone = self.ask_text(f"Phone{hint(current.phone if current else '')}: ",
+                                  required=current is None, default=current.phone if current else "")
+            email = self.ask_text(f"E-mail (optional){hint(current.email if current else '')}: ",
+                                  required=False, default=current.email if current else "")
+            try:
+                return Contact(name, surname, phone, email)
+            except ValueError as err:                       # the model validates; the UI explains
+                self.print(f"  Invalid contact: {err}. Please try again.")
+
+    def pick(self, candidates: list[Contact]) -> Contact | None:
+        if not candidates:
+            self.print("  No matching contact.")
+            return None
+        for i, c in enumerate(candidates, start=1):
+            self.print(f"  {i}) {c}")
+        return candidates[self.ask_choice("Which one? ", len(candidates)) - 1]
+
+    # ---- features ----------------------------------------------------------
+    def list_all(self):
+        if len(self.book) == 0:
+            self.print("  The phone book is empty.")
+        for c in self.book:
+            self.print(f"  {c}")
+
+    def add(self):
+        try:
+            self.book.add(self.ask_contact())
+            self.print("  Contact added.")
+        except DuplicateContactError as err:
+            self.print(f"  Not added: {err}.")
+
+    def search(self):
+        results = self.book.search(self.ask_text("Text to search in first/last name: "))
+        self.print(f"  {len(results)} result(s).")
+        for c in results:
+            self.print(f"  {c}")
+
+    def search_by_phone(self):
+        try:
+            results = self.book.search_phone(self.ask_text("Phone number: "))
+        except ValueError as err:
+            self.print(f"  {err}")
+            return
+        for c in results or []:
+            self.print(f"  {c}")
+        if not results:
+            self.print("  No contact with this number.")
+
+    def edit(self):
+        old = self.pick(self.book.search(self.ask_text("Who do you want to edit? ")))
+        if old is None:
+            return
+        self.print("  Press Enter to keep the current value.")
+        new = self.ask_contact(current=old)
+        try:
+            self.book.replace(old, new)
+            self.print("  Contact updated.")
+        except DuplicateContactError as err:
+            self.print(f"  Not updated: {err}.")
+
+    def delete(self):
+        victim = self.pick(self.book.search(self.ask_text("Who do you want to delete? ")))
+        if victim and self.ask_yes_no(f"  Delete {victim.name} {victim.surname}?"):
+            self.book.remove(victim)
+            self.print("  Contact deleted.")
+
+    # ---- main loop -----------------------------------------------------------
+    def run(self):
+        self.print(f"Phone book: {len(self.book)} contact(s) loaded.")
+        try:
+            while True:
+                self.print("\nMENU")
+                for i, (label, _) in enumerate(self.MENU, start=1):
+                    self.print(f"  {i}) {label}")
+                label, action = self.MENU[self.ask_choice("Choose an option: ", len(self.MENU)) - 1]
+                if action is None:
+                    break
+                getattr(self, action)()
+        except (KeyboardInterrupt, EOFError):
+            self.print("\nInterrupted.")
+        finally:                                            # always save on the way out
+            self.storage.save(self.book)
+            self.print(f"Saved {len(self.book)} contact(s) to {self.storage.path.name}. Bye!")
+
+def main(path: str = "phonebook.json") -> None:
+    storage = JsonStorage(path)
+    try:
+        contacts, warnings = storage.load()
+    except CorruptedFileError as err:
+        print(f"Error: {err}. The file was left untouched; fix or rename it and restart.")
+        return
+    for w in warnings:
+        print("Note:", w)
+    ConsoleUI(PhoneBook(contacts), storage).run()
+```
+
+### A demonstration of use
+
+In Colab or a terminal you would simply call `main()`. To make the
+demonstration reproducible in this book we **inject** a scripted sequence of
+answers instead of the keyboard (@sec-try) — including several deliberate
+mistakes — and print the session transcript.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+workdir = Path(tempfile.mkdtemp())
+book_file = workdir / "phonebook.json"
+
+def scripted(answers):
+    it = iter(answers)
+    def fake_input(prompt=""):
+        answer = next(it)                 # raises StopIteration -> we convert to EOFError below
+        print(f"{prompt}{answer}")
+        return answer
+    def safe_input(prompt=""):
+        try:
+            return fake_input(prompt)
+        except StopIteration:
+            raise EOFError
+    return safe_input
+
+session_1 = [
+    "9", "abc", "2",                                   # invalid menu choices, then "Add"
+    "Ada", "Lovelace", "+44 20 7946 0000", "ada@example.org",
+    "2", "Grace", "Hopper", "+1 202 555 0100", "",     # add, no e-mail
+    "2", "Alan", "Turing", "12ab", "",                 # invalid phone -> asked again
+    "Alan", "Turing", "+44 161 496 0000", "",
+    "2", "ada", "LOVELACE", "0044 20 7946 0000", "",   # same as Ada (case, 00 prefix) -> refused
+    "1",                                               # list
+    "7",                                               # save and exit
+]
+contacts, notes = JsonStorage(book_file).load()        # first start: file missing
+print("Notes:", notes)
+ConsoleUI(PhoneBook(contacts), JsonStorage(book_file), input_fn=scripted(session_1)).run()
+```
+
+Second session: the phone book is reloaded from the file, a contact is
+edited and another deleted, and the session ends abruptly (end of input),
+which still saves.
+
+```{python}
+session_2 = [
+    "5", "turing", "1", "", "", "", "alan.turing@example.org",   # edit Alan: keep fields, add e-mail
+    "6", "hop", "1", "maybe", "y",                               # delete Grace (after an invalid answer)
+    "3", "LOVE",                                                 # search
+    "1",
+    # no more input: simulates Ctrl+D -> EOFError -> save and exit
+]
+contacts, notes = JsonStorage(book_file).load()
+print("Loaded:", len(contacts), "contacts; notes:", notes)
+ConsoleUI(PhoneBook(contacts), JsonStorage(book_file), input_fn=scripted(session_2)).run()
+print("\nFile content:\n" + book_file.read_text(encoding="utf-8"))
+```
+
+### Tests
+
+A handful of automated checks for the behaviours the brief cares about
+(@sec-verification). In a real project they would live in
+`tests/test_phonebook.py` and run with `pytest`.
+
+```{python}
+def expect(exc, fn, *args):
+    try:
+        fn(*args)
+    except exc:
+        return True
+    return False
+
+tests = {}
+# Contact validation
+tests["phone keeps leading zero"] = Contact("A", "B", "06 1234 5678").phone == "+390612345678"
+tests["invalid phone rejected"] = expect(ValueError, Contact, "A", "B", "12ab")
+tests["empty name rejected"] = expect(ValueError, Contact, "  ", "B", "3331234567")
+# PhoneBook invariant
+b = PhoneBook([Contact("Mario", "Rossi", "3331112222")])
+tests["duplicate refused (case-insensitive)"] = expect(DuplicateContactError, b.add, Contact("mario", "ROSSI", "+39 333 111 2222"))
+b.add(Contact("Mario", "Rossi", "3339998888"))
+tests["homonym with other number allowed"] = len(b) == 2
+tests["edit into duplicate refused"] = expect(DuplicateContactError, b.replace,
+    Contact("Mario", "Rossi", "3339998888"), Contact("Mario", "Rossi", "3331112222"))
+tests["sorted listing"] = [c.surname for c in PhoneBook([Contact("Z", "Zeta", "3330000001"),
+                            Contact("A", "Alfa", "3330000002")])] == ["Alfa", "Zeta"]
+# Storage
+tmp = Path(tempfile.mkdtemp())
+tests["missing file -> empty book"] = JsonStorage(tmp / "none.json").load()[0] == []
+(tmp / "empty.json").write_text("", encoding="utf-8")
+tests["empty file -> empty book"] = JsonStorage(tmp / "empty.json").load()[0] == []
+(tmp / "bad.json").write_text("[{", encoding="utf-8")
+tests["corrupted file -> clear error"] = expect(CorruptedFileError, JsonStorage(tmp / "bad.json").load)
+s = JsonStorage(tmp / "round.json"); s.save(b)
+tests["save/load round trip"] = set(c.identity for c in s.load()[0]) == set(c.identity for c in b)
+(tmp / "mixed.json").write_text('[{"name": "Ok", "phone": "3331234567"}, {"name": "Bad", "phone": "x"}]', encoding="utf-8")
+loaded, warns = JsonStorage(tmp / "mixed.json").load()
+tests["bad records skipped, good kept"] = len(loaded) == 1 and len(warns) == 1
+
+for name, ok in tests.items():
+    print(f"{'PASS' if ok else 'FAIL'}  {name}")
+print(f"{sum(tests.values())}/{len(tests)} tests passed")
+```
+
+### How the reference implementation meets the brief
+
+| Requirement | Where |
+|---|---|
+| R1, R5, R10 interactive menu, confirmations, clean exit that saves | `ConsoleUI.run`, `MENU`, `finally: save` |
+| R2, R3 OOP, separated responsibilities, UI outside the domain | `Contact`, `PhoneBook`, `JsonStorage`, `ConsoleUI` |
+| R4 motivated data structure | `PhoneBook._by_id` + @tbl-project-structures |
+| R6 add, list, edit, delete, search | `ConsoleUI.add/list_all/edit/delete/search/search_by_phone` |
+| R7, R8 JSON persistence; missing/empty/corrupted file | `JsonStorage.load/save` (EAFP, atomic) |
+| R9 no crash on wrong input | `ask_text`, `ask_choice`, `ask_yes_no`, `ask_contact`, `EOFError` handling |
+| R11 commented code, demo of use | docstrings and comments; the scripted sessions above |
+
+## Extensions {#sec-project-extensions}
+
+1. **Package and command line.** Split the four blocks into the package layout
+   of @sec-real-package and add an `argparse` entry point
+   (`phonebook --file book.json --search Rossi`, @sec-argv).
+2. **Faster search.** Keep a sorted list of `sort_key`s and use binary search
+   (`bisect`, @sec-binary-search) for prefix search by surname in
+   $O(\log n + m)$ for $m$ results. Prove the bound.
+3. **Import/export CSV** (@sec-csv) so the phone book can be opened in a
+   spreadsheet, with correct quoting of names containing commas.
+4. **Undo.** Keep a stack of inverse operations (add ↔ remove, replace ↔
+   replace back) and add an *undo* menu entry.
+5. **Fuzzy search.** Match names with typos using `difflib.get_close_matches`
+   (standard library).
+6. **SQLite backend.** Implement a `SqliteStorage` with the same interface as
+   `JsonStorage` (an abstract base class `Storage`, @sec-inheritance) and
+   switch backends without touching the UI — the payoff of information hiding.
+7. **AI-assisted review.** Give an assistant the brief and your code as a
+   structured prompt (@sec-structured-prompting) and ask for a review and for
+   additional edge-case tests; verify each suggestion before accepting it.
+
+## Further reading {.unnumbered}
+
+- The companion notebook: [`Phone_Book_Python_OOP.ipynb`](https://github.com/matteo-zirilli/ai-projects/blob/main/Phone_Book_Python_OOP.ipynb)
+  (English) and its Italian original in the `it/` folder of
+  [`ai-projects`](https://github.com/matteo-zirilli/ai-projects).
+- @martin2003 — the SOLID principles applied in the design.
+- @parnas1972 — information hiding: why `JsonStorage` is the only component
+  that knows the file format.
+- @ramalho2022 — idiomatic data classes and special methods.
+- @itue164 — the international numbering plan behind `normalize_phone`.

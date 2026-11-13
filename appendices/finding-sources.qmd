@@ -1,0 +1,201 @@
+# Finding and reading the sources {#sec-finding-sources}
+
+This handbook cites more than a hundred sources: books, research papers,
+international standards, Python Enhancement Proposals, official documentation,
+and a few blog posts. This appendix explains **what each kind of source is**,
+**how to obtain it legally** (very often for free), **how to read it
+efficiently**, and **how to check** that a citation is accurate.
+
+## How to read a citation in this book {#sec-reading-citations}
+
+A citation such as @goldberg1991 or [@cormen2022, §16.4] is a link to the
+full entry in the [References](../references.qmd). The part after the comma,
+when present, says **where** in the source to look (a section, chapter, page
+or theorem number). Each entry in the references contains, whenever they
+exist:
+
+| Field | Example | What to do with it |
+|---|---|---|
+| **DOI** | `10.1145/103162.103163` | open `https://doi.org/10.1145/103162.103163`: it always redirects to the publisher's current page |
+| **arXiv id** | `2107.03374` | open `https://arxiv.org/abs/2107.03374`: free full text, with all versions |
+| **ISBN** | `978-0-262-04630-5` | the identifier of a book edition; use it in library catalogues and bookshops |
+| **URL** | `https://peps.python.org/pep-0008/` | for standards, documentation and web pages |
+| **Note** | "Free on the AMS website" | **how to obtain** the source and **which parts** this book uses |
+
+The notes are part of the design of this book: every entry tells you where a
+free, legal copy exists, or which library service to use.
+
+## Kinds of sources {#sec-kinds-of-sources}
+
+### Books
+
+Textbooks such as @knuth1997, @cormen2022 or @higham2002 are the most
+reliable sources: they are long-lived, carefully edited and self-contained.
+
+- **Editions matter**: section numbers change between editions. This book
+  always gives the edition in the entry (e.g. CLRS **4th** edition, 2022).
+- **Free legal copies**: some classics are free online from their publishers
+  or authors (e.g. @abelson1996, @mckinney2022); works in the **public domain**
+  (e.g. @boole1854) are on Project Gutenberg and the Internet Archive.
+- **Libraries**: university libraries give access to most of the others, often
+  as e-books. Public libraries offer interlibrary loan.
+- Avoid unauthorised copies: besides the legal issue, they are frequently the
+  wrong edition.
+
+### Research papers
+
+A **journal article** or **conference paper** reports original results after
+**peer review**. A **preprint** is the authors' version made public before or
+during review, typically on **arXiv** (<https://arxiv.org>) for mathematics,
+computer science and physics. In machine learning many influential papers are
+read primarily on arXiv (e.g. @vaswani2017, @chen2021).
+
+How to get the full text:
+
+1. Open the **DOI** link: many papers are **open access**.
+2. Search the title on **arXiv**, **Google Scholar** (click *"All N
+   versions"* to find free copies) or **Semantic Scholar**.
+3. Use the **Unpaywall** browser extension, which finds legal free versions
+   automatically.
+4. Look at the **authors' home pages**: many post their papers.
+5. Use your **university library** (proxy or VPN), which pays for
+   subscriptions.
+6. Write to the authors: they are usually glad to send a copy.
+
+When a preprint and a published version both exist, cite the **published**
+version (it has been reviewed), but feel free to *read* the preprint. Check
+that you are reading the latest arXiv version (`v1`, `v2`, … appear in the
+page's history).
+
+### Standards and specifications
+
+Standards define formats and protocols precisely; they are the ultimate
+authority on *what is correct*.
+
+| Body | Examples in this book | Access |
+|---|---|---|
+| **IETF** (RFCs) | @rfc3629 (UTF-8), @rfc4180 (CSV), @rfc8259 (JSON) | free at <https://www.rfc-editor.org> |
+| **W3C** | @png2003 (PNG) | free |
+| **The Open Group / IEEE** (POSIX) | @posixrename, @posixtime | free online edition |
+| **Unicode Consortium** | @unicode | free |
+| **ITU-T** | @itue164 | free download |
+| **IEEE** | @ieee754 | paywalled; through libraries |
+| **ISO** | @iso8601 | paywalled; often a free equivalent exists (e.g. RFC 3339 for dates) |
+
+Reading a standard is a skill: start from the table of contents, read the
+*terminology* and *conformance* sections, and look for the normative keywords
+**MUST**, **SHOULD**, **MAY**, whose meaning is itself standardised (RFC 2119).
+
+### Python Enhancement Proposals (PEPs)
+
+A **PEP** is a design document proposing a change to Python or describing a
+process [@pep1]. Each has a number, authors, a **status** (*Draft*,
+*Accepted*, *Final*, *Rejected*, *Superseded*…) and a creation date. PEPs are
+the best source for **why** Python works the way it does: each contains a
+*Motivation* and a *Rationale* section, often with rejected alternatives. Read
+them at <https://peps.python.org>. Once a feature ships, the **documentation**
+(below) becomes the normative reference and some PEPs carry a banner pointing
+to it.
+
+### Official documentation
+
+The Python documentation (<https://docs.python.org>) has several parts with
+different purposes:
+
+| Part | Purpose | Cited as |
+|---|---|---|
+| **Tutorial** | a guided introduction | @pythontutorial |
+| **Library Reference** | every built-in and standard module | @pythonlibrary |
+| **Language Reference** | the exact syntax and semantics | @pythonreference |
+| **HOWTOs** | in-depth guides (sorting, logging, descriptors, MRO…) | e.g. @simionato2003 |
+| **Glossary** | definitions of terms (EAFP, iterable, hashable…) | — |
+
+Always select the **version** matching your interpreter (drop-down menu at the
+top of each page): behaviour changes between versions, as we saw with
+`sum()` in Python 3.12 (@sec-math-module). The same applies to third-party
+libraries (NumPy, pandas, …) and to packaging (@ppug).
+
+### Blogs, mailing lists, social media
+
+A few sources in this book are blog posts or messages (e.g. @hettinger2012,
+@cox2016, @karpathy2025). They are cited when they are the **primary**
+source of an idea or a term. Treat them as primary evidence of *who said what
+and when*, not as peer-reviewed results. Web pages can change or disappear:
+the **Internet Archive's Wayback Machine** (<https://web.archive.org>) keeps
+snapshots; paste the URL there if a link is broken.
+
+## How to read a paper efficiently {#sec-how-to-read-a-paper}
+
+S. Keshav's **three-pass method** [@keshav2007] is a good default:
+
+1. **First pass (5–10 minutes)**: title, abstract, introduction, section
+   headings, conclusions, a glance at the references. Goal: *what is the
+   problem, what is the claim, is it relevant to me?*
+2. **Second pass (about an hour)**: read the paper but skip the proofs;
+   study figures, tables and the main equations; note what you do not
+   understand. Goal: *being able to summarise the contribution and the
+   evidence to someone else.*
+3. **Third pass (several hours)**: *re-derive* the paper — redo the proofs
+   and the experiments in your head (or in code), questioning every
+   assumption. This is what the "For the interested reader" boxes of this book
+   invite you to do.
+
+For mathematical texts, read with **pencil and paper**: after each definition
+write an example and a non-example; after each theorem, try to find why each
+hypothesis is needed.
+
+## How to verify a citation {#sec-verify-citation}
+
+Citations can be wrong — by mistake, through "citation chains" where a claim
+is copied without checking the original, or because an AI tool **invented**
+them (language models can produce plausible but non-existent references;
+@sec-ch-ai-tools). Checklist:
+
+1. **Resolve the identifier**: the DOI or arXiv id must open the right
+   document (same title, authors, year).
+2. **Find the exact place**: the section or page cited must actually contain
+   the claim.
+3. **Prefer the primary source**: if a textbook says "Lamé proved…", the
+   primary source is @lame1844; cite both when you used both.
+4. **Check status**: has the paper been **retracted** or corrected (the
+   publisher's page and the Retraction Watch database say so)? Has the PEP been
+   superseded? Is the documentation for your version?
+5. **Check numbers against the source**: percentages and dates are the
+   most frequently corrupted details (e.g. this book cross-checked the figures
+   of @peng2023, @becker2025, @pearce2022 and @spracklen2025 against the
+   original papers).
+
+## Building your own bibliography {#sec-own-bibliography}
+
+- Use a reference manager such as **Zotero** (free and open source): it
+  captures references from web pages with one click, stores PDFs, and exports
+  BibTeX.
+- Any DOI can be converted to a BibTeX entry automatically through
+  **content negotiation**:
+
+```bash
+curl -LH "Accept: application/x-bibtex" https://doi.org/10.1145/361598.361623
+```
+
+- arXiv pages have an *"Export BibTeX citation"* link; Google Scholar has a
+  *"Cite → BibTeX"* button (check its output: it is often incomplete).
+
+### How the bibliography of this book is organised
+
+The file `references.bib` in the repository is plain BibTeX, rendered by
+Quarto in the [References](../references.qmd) with the Chicago author–date
+style. Its conventions are:
+
+- keys are `firstauthorYEAR` (plus a suffix when needed: `knuth1997b`);
+- entries are grouped by part and chapter, in the order they are first used;
+- every entry carries a DOI, arXiv id, ISBN or URL when one exists, and a
+  `note` saying how to obtain it and which parts are used;
+- PEPs, RFCs and documentation pages are entries like any other, so that every
+  claim in the text can be traced to a source.
+
+## Further reading {.unnumbered}
+
+- @keshav2007 — how to read a paper (two pages).
+- @pep1 — what PEPs are and how they work.
+- The documentation of Zotero (<https://www.zotero.org/support/>) and of
+  Quarto citations (<https://quarto.org/docs/authoring/citations.html>).

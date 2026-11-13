@@ -1,0 +1,483 @@
+# Virtual environments {#sec-ch-venv}
+
+> *"It works on my machine."* — every developer, at least once. Virtual
+> environments exist so that you never have to say it again.
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain the problem virtual environments solve (conflicting dependencies,
+  reproducibility) and **how** `venv` works inside (`pyvenv.cfg`,
+  `sys.prefix`);
+- create, activate, use, deactivate and remove a virtual environment with
+  `venv` (and `virtualenv`);
+- use a virtual environment as a **Jupyter kernel**;
+- create environments for a **specific Python version**;
+- **share** a project so that anyone can recreate its environment, and know
+  when to reach for lock files, conda or containers;
+- get started with the three tools of the next courses — **NumPy**,
+  **pandas** and **Matplotlib** — in the optional crash course at the end.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 13.1 *Virtual environments*. Practice: 13.2 *Creating, using and
+removing a virtual environment* · 13.3 *Using the virtual environment with
+Jupyter Notebook* · 13.4 *Selecting the Python version* · 13.5 *Sharing Python
+projects with venv and pip* · 13.6 *Optional crash courses on the tools of the
+next courses* (NumPy, pandas, Matplotlib).
+:::
+
+## Intuition: one kitchen per recipe
+
+Imagine a single kitchen shared by every recipe you cook: one recipe wants the
+oven at 180 °C, another at 250 °C, at the same time. That is a single global
+Python installation shared by all your projects: project A needs `pandas 1.5`,
+project B needs `pandas 2.2`, and `site-packages` can hold only one of them.
+Upgrading for B silently breaks A.
+
+A **virtual environment** gives each project **its own kitchen**: its own
+`site-packages`, with its own versions, while sharing the same Python
+interpreter. Environments are cheap (a folder), disposable (delete the folder)
+and reproducible (a `requirements.txt` recreates one exactly,
+@sec-requirements).
+
+## How `venv` works {#sec-venv-internals}
+
+The `venv` module was added in Python 3.3 by PEP 405 [@pep405], standardising
+ideas from the earlier third-party tool **virtualenv** (Ian Bicking, 2007).
+`python -m venv .venv` creates a directory:
+
+```text
+.venv/
+├── pyvenv.cfg              ← "home = <path of the base Python>", version, options
+├── bin/        (Scripts\ on Windows)
+│   ├── python  → link (or copy) of the base interpreter
+│   ├── pip
+│   └── activate            ← shell script that edits PATH and the prompt
+└── lib/python3.13/site-packages/    ← this environment's own packages
+```
+
+The mechanism is simple and elegant [@pep405]: when the Python interpreter
+starts, it looks for a file named `pyvenv.cfg` **next to its executable or one
+directory above**. If it finds one, it sets `sys.prefix` to the environment's
+directory (while `sys.base_prefix` still points to the base installation), and
+therefore puts the **environment's** `site-packages` on `sys.path` instead of
+the global one. Nothing else is needed. In particular, **"activating" is only a
+convenience**: it prepends `.venv/bin` to the `PATH` so that typing `python` or
+`pip` finds the environment's executables first. Running `.venv/bin/python`
+directly works just as well.
+
+Let us verify all of this by creating an environment from Python (without pip,
+so that no network is needed):
+
+```{python}
+import venv, subprocess, sys, tempfile
+from pathlib import Path
+
+env_dir = Path(tempfile.mkdtemp()) / ".venv"
+venv.create(env_dir, with_pip=False)                # same as: python -m venv --without-pip .venv
+env_python = env_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
+print(sorted(p.name for p in env_dir.iterdir()))
+cfg = (env_dir / "pyvenv.cfg").read_text().splitlines()
+print([line.split(" = ")[0] for line in cfg])       # the keys stored in pyvenv.cfg
+
+probe = ("import sys; print('in venv:', sys.prefix != sys.base_prefix); "
+         "print('site-packages:', [p.split('/')[-4:] for p in sys.path if p.endswith('site-packages')])")
+print(subprocess.run([str(env_python), "-c", probe], capture_output=True, text=True).stdout)
+print("this kernel in a venv?", sys.prefix != sys.base_prefix)
+```
+
+The test `sys.prefix != sys.base_prefix` is the official way for a program to
+know whether it runs inside a virtual environment.
+
+## Creating, using and removing an environment {#sec-venv-commands}
+
+::: {.panel-tabset}
+
+### macOS / Linux
+
+```bash
+cd my-project
+python3 -m venv .venv               # create (".venv" is the conventional name)
+source .venv/bin/activate           # activate: the prompt shows (.venv)
+python -m pip install pandas        # installs into .venv only
+python -m pip list                  # only this environment's packages
+deactivate                          # leave the environment
+rm -rf .venv                        # remove it: it is just a folder
+```
+
+### Windows (PowerShell)
+
+```powershell
+cd my-project
+py -m venv .venv
+.venv\Scripts\Activate.ps1          # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+python -m pip install pandas
+deactivate
+Remove-Item -Recurse -Force .venv
+```
+
+:::
+
+Good practices:
+
+- **one environment per project**, created inside the project folder;
+- **never commit** the environment folder to Git: add `.venv/` to
+  `.gitignore` (it contains machine-specific paths and binaries); commit the
+  `requirements.txt` instead;
+- environments are **not relocatable**: if you move or rename the project
+  folder, delete and recreate the environment;
+- `virtualenv` (`pip install virtualenv; virtualenv .venv`) is a faster
+  third-party alternative with the same layout; `uv venv` is a newer, very fast
+  one.
+
+## Using an environment with Jupyter {#sec-venv-jupyter}
+
+Jupyter runs code in a **kernel** (@sec-dev-environment), and a kernel is a
+specific Python interpreter. To use your environment's packages in a notebook,
+**register the environment as a kernel**:
+
+```bash
+source .venv/bin/activate                     # Windows: .venv\Scripts\activate
+python -m pip install ipykernel
+python -m ipykernel install --user --name my-project --display-name "Python (my-project)"
+jupyter kernelspec list                       # shows the registered kernels
+```
+
+This writes a small `kernel.json` file whose `argv` points to
+`.venv/bin/python`; in Jupyter (or VS Code) choose *Kernel → Change kernel →
+Python (my-project)*. Inside a notebook, check which interpreter you are using
+with `import sys; sys.executable`, and install packages with `%pip install …`,
+which always targets the running kernel. Remove a kernel with
+`jupyter kernelspec uninstall my-project`.
+
+**Google Colab** is different: each notebook runs in a fresh, pre-configured
+cloud machine. You do not create virtual environments there; you install
+missing packages with `%pip install` at the top of the notebook, and they last
+until the runtime is recycled.
+
+## Choosing the Python version {#sec-python-versions}
+
+A virtual environment uses the interpreter that created it: **the Python
+version is fixed at creation time**. To create an environment for another
+version, invoke that version's interpreter:
+
+```bash
+python3.12 -m venv .venv          # macOS/Linux, if python3.12 is installed
+py -3.12 -m venv .venv            # Windows: the py launcher selects installed versions (py --list)
+```
+
+To install several Python versions side by side use the official installers,
+your system's package manager, **pyenv** (macOS/Linux), or `uv python install
+3.12`. Declare the versions your project supports in `pyproject.toml`
+(`requires-python = ">=3.10"`, @sec-real-package) and document the one you
+used. Each Python release is supported for five years; check the status page
+before choosing [@pythonversions].
+
+## Sharing a project {#sec-sharing-projects}
+
+To let someone else (or yourself in six months, or a grader) run your project:
+
+1. work in a clean virtual environment;
+2. export the dependencies: `python -m pip freeze > requirements.txt`
+   (@sec-requirements), or better maintain direct dependencies by hand and
+   generate a lock file;
+3. commit code, `requirements.txt` (or `pyproject.toml` + lock file) and a
+   `README` with the **exact setup commands** — but not `.venv/`;
+4. the recipient runs:
+
+```bash
+git clone https://github.com/<user>/<project>.git
+cd <project>
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -r requirements.txt
+python main.py
+```
+
+Levels of reproducibility, from weakest to strongest:
+
+| Mechanism | Pins | Does not pin |
+|---|---|---|
+| `requirements.txt` with ranges | direct dependencies, loosely | transitive deps, Python, OS |
+| `pip freeze` / lock file | all Python packages, exactly (with hashes: byte-for-byte) | Python version, system libraries |
+| **conda** environment (`environment.yml`) | also Python itself and non-Python libraries (CUDA, MKL) | the OS |
+| **container** (Docker image) | the whole user-space system | the hardware and kernel |
+
+For data science and deep learning, conda (or its fast re-implementation
+mamba) is popular because packages such as PyTorch with GPU support depend on
+compiled non-Python libraries; containers are the standard for deploying
+models to production.
+
+::: {.project-link}
+**In the project.** The phone book needs no third-party packages and is
+delivered on Colab, so no virtual environment is required. If you develop it
+locally (e.g. in VS Code, turning it into the package of @sec-real-package),
+create a `.venv`, register it as a Jupyter kernel to run the notebook with the
+same interpreter, and ship a `README` with the commands above — the habit you
+will need from the next project on, when NumPy, pandas, scikit-learn and
+PyTorch enter the scene.
+:::
+
+## Optional crash course: NumPy, pandas, Matplotlib {#sec-crash-courses}
+
+The next courses rely on three libraries. The master offers optional crash
+courses on them; this section gives you the essential concepts, with the
+mathematics behind them, so that the next parts of the book can build on them.
+(Each library will be studied in depth where it is used.)
+
+### NumPy: arrays and vectorised computation {#sec-numpy}
+
+**NumPy** [@harris2020] provides the **`ndarray`**: an $n$-dimensional array of
+elements **of one type** (`dtype`) stored **contiguously** in memory. Unlike a
+list of Python objects (@sec-dynamic-arrays), the elements are raw machine
+numbers, so operations run in compiled C loops — **vectorisation** — typically
+10–100× faster than Python loops.
+
+```{python}
+import numpy as np
+import time
+
+a = np.array([1.0, 2.0, 3.0])
+M = np.arange(12).reshape(3, 4)          # 3 rows, 4 columns
+print(a.dtype, a.shape, M.shape, M.ndim, M.size)
+print(M[1, 2], M[:, 0], M[0, ::2])       # indexing and slicing in each dimension
+print(a * 2, a + a, a ** 2, np.sqrt(a))  # element-wise operations: no loops
+print(M.sum(), M.sum(axis=0), M.mean(axis=1))   # reductions along an axis
+
+x = np.random.default_rng(0).random(1_000_000)
+t0 = time.perf_counter(); s1 = sum(v * v for v in x); t1 = time.perf_counter()
+s2 = float(np.dot(x, x)); t2 = time.perf_counter()
+print(f"python loop {t1 - t0:.3f} s, numpy {t2 - t1:.5f} s, same result: {np.isclose(s1, s2)}")
+```
+
+**Broadcasting.** Element-wise operations between arrays of different shapes
+follow one rule [@harris2020]: compare the shapes from the **last** dimension
+backwards; two dimensions are compatible if they are **equal or one of them is
+1**; missing leading dimensions count as 1; a dimension of size 1 is
+(virtually) repeated to match the other.
+
+```{python}
+col = np.array([[0], [10], [20]])        # shape (3, 1)
+row = np.array([1, 2, 3, 4])             # shape (4,)  -> treated as (1, 4)
+print((col + row).shape)                 # (3, 4)
+print(col + row)
+```
+
+**Linear algebra.** The two products you will meet in every model:
+
+- **dot product** of $u, v\in\mathbb{R}^n$: $u\cdot v = \sum_{i=1}^n u_i v_i$
+  (`u @ v`), costing $n$ multiplications;
+- **matrix product** of $A \in \mathbb{R}^{m\times n}$ and
+  $B\in \mathbb{R}^{n\times p}$:
+  $$
+  (AB)_{ij} = \sum_{k=1}^{n} A_{ik}B_{kj}, \qquad 1\le i\le m,\ 1\le j\le p,
+  $$ {#eq-matmul}
+  i.e. entry $(i,j)$ is the dot product of row $i$ of $A$ with column $j$ of
+  $B$. It costs $mnp$ multiplications ($n^3$ for square matrices) with the
+  definition — the reason GPUs, which do thousands of multiplications in
+  parallel, power deep learning.
+
+::: {#thm-matmul-assoc}
+## The matrix product is associative but not commutative
+For conformable matrices, $(AB)C = A(BC)$; in general $AB \ne BA$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-matmul-assoc
+By @eq-matmul twice,
+$$
+\big((AB)C\big)_{ij} = \sum_{l} (AB)_{il}C_{lj} = \sum_l\sum_k A_{ik}B_{kl}C_{lj}
+= \sum_k A_{ik}\sum_l B_{kl}C_{lj} = \sum_k A_{ik}(BC)_{kj} = \big(A(BC)\big)_{ij},
+$$
+exchanging two finite sums. For non-commutativity one counterexample suffices:
+with $A = \bigl(\begin{smallmatrix}0&1\\0&0\end{smallmatrix}\bigr)$ and
+$B = \bigl(\begin{smallmatrix}0&0\\1&0\end{smallmatrix}\bigr)$,
+$AB = \bigl(\begin{smallmatrix}1&0\\0&0\end{smallmatrix}\bigr)$ but
+$BA = \bigl(\begin{smallmatrix}0&0\\0&1\end{smallmatrix}\bigr)$. $\blacksquare$
+:::
+
+Associativity has a practical side: $(AB)C$ and $A(BC)$ give the same result
+but can cost very differently. With $A$ of shape $1000\times2$, $B$ of
+$2\times1000$, $C$ of $1000\times 1$: $(AB)C$ costs
+$1000\cdot2\cdot1000 + 1000\cdot1000\cdot1 = 3\times10^6$ multiplications,
+$A(BC)$ only $2\cdot1000\cdot1 + 1000\cdot2\cdot1 = 4000$.
+
+```{python}
+A = np.array([[0, 1], [0, 0]]); B = np.array([[0, 0], [1, 0]])
+print(A @ B, B @ A, sep="\n")
+rng = np.random.default_rng(1)
+A, B, C = rng.random((1000, 2)), rng.random((2, 1000)), rng.random((1000, 1))
+print(np.allclose((A @ B) @ C, A @ (B @ C)))
+S = np.array([[3.0, 1.0], [1.0, 2.0]]); y = np.array([9.0, 8.0])
+print(np.linalg.solve(S, y))              # solve the linear system S x = y
+```
+
+### pandas: tables of data {#sec-pandas}
+
+**pandas** [@mckinney2010] provides the **`DataFrame`**: a table with labelled
+columns of possibly different types (each column is a NumPy-backed
+**`Series`**), plus tools to read, clean, filter, group and aggregate data. It
+is the in-memory equivalent of a spreadsheet or SQL table, and it reads the
+CSV/JSON files of @sec-ch-files directly.
+
+```{python}
+import pandas as pd
+from io import StringIO
+
+csv_text = """name,city,age,spend
+Ada,London,36,120.5
+Alan,Manchester,41,80.0
+Grace,New York,85,200.0
+Linus,Helsinki,28,
+Anna,London,30,60.0
+"""
+df = pd.read_csv(StringIO(csv_text))          # pd.read_csv("file.csv") for a real file
+print(df.shape, list(df.columns), df.dtypes.to_dict())
+print(df.head(3))
+print(df[df["age"] < 40][["name", "spend"]])  # filter rows, select columns
+print(df["spend"].isna().sum(), "missing value(s); mean spend:", round(df["spend"].mean(), 2))
+print(df.groupby("city")["spend"].agg(["count", "mean"]))
+print(df.describe().loc[["mean", "std"]])
+```
+
+`describe()` reports, among others, the **mean**
+$\bar x = \frac1n\sum_i x_i$ and the **sample standard deviation**
+$s = \sqrt{\frac{1}{n-1}\sum_i (x_i - \bar x)^2}$ (with $n-1$, *Bessel's
+correction*, which makes $s^2$ an unbiased estimator of the variance; we will
+prove it in the statistics part of the book). Two identities used constantly
+are worth proving now:
+
+::: {#prp-variance-identity}
+## Two identities for the mean and the variance
+For numbers $x_1,\dots,x_n$ with mean $\bar x$: (a)
+$\sum_i (x_i - \bar x) = 0$; (b)
+$\frac1n\sum_i (x_i-\bar x)^2 = \frac1n\sum_i x_i^2 - \bar x^{\,2}$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-variance-identity
+(a) $\sum_i(x_i - \bar x) = \sum_i x_i - n\bar x = n\bar x - n\bar x = 0$.
+(b) Expanding the square,
+$\frac1n\sum_i (x_i^2 - 2x_i\bar x + \bar x^2) = \frac1n\sum_i x_i^2 - 2\bar x\cdot\frac1n\sum_i x_i + \bar x^2 = \frac1n\sum_i x_i^2 - 2\bar x^2 + \bar x^2$.
+$\blacksquare$ (Numerically, formula (b) suffers from cancellation when the
+variance is small compared with the mean, cf. @thm-sum-error; libraries use
+the two-pass formula or Welford's algorithm [@welford1962].)
+:::
+
+### Matplotlib: plotting {#sec-matplotlib}
+
+**Matplotlib** [@hunter2007] is the standard plotting library. Its
+object-oriented interface: a **Figure** contains one or more **Axes**
+(plots); you call plotting methods on the axes.
+
+```{python}
+#| label: fig-crash-matplotlib
+#| fig-cap: "A first Matplotlib figure: a line plot of three growth functions (left) and a histogram of 10,000 normal samples (right)."
+import matplotlib.pyplot as plt
+
+n = np.arange(1, 21)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.2))
+ax1.plot(n, n, label="n")
+ax1.plot(n, n * np.log2(n), label="n log n")
+ax1.plot(n, n ** 2, label="n²")
+ax1.set_xlabel("n"); ax1.set_ylabel("operations"); ax1.set_title("Growth rates")
+ax1.legend()
+samples = np.random.default_rng(42).normal(loc=0, scale=1, size=10_000)
+ax2.hist(samples, bins=40, color="tab:green", alpha=0.8)
+ax2.set_title("Normal samples"); ax2.set_xlabel("value")
+fig.tight_layout()
+plt.show()
+```
+
+Use `fig.savefig("plot.png", dpi=150)` to save a figure to a file. In the
+data-analysis part of the book we will study which chart fits which question.
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Forgetting to activate** (or to select the kernel) and installing into the
+  wrong environment: check `sys.executable` / `which python`.
+- **Committing `.venv/`** to Git.
+- **Moving the project folder**: recreate the environment.
+- **Mixing conda and pip** carelessly in the same environment: install with
+  conda first, then pip, and record both.
+- **A notebook kernel that is not the environment** you installed packages
+  into: `%pip install` in the notebook avoids it.
+- **NumPy integer overflow** (@sec-twos-complement) and **shape mismatches**:
+  print `.dtype` and `.shape` when in doubt.
+:::
+
+## Summary
+
+- A virtual environment is a folder with its own `site-packages`;
+  `pyvenv.cfg` makes the interpreter set `sys.prefix` to it; activation just
+  edits `PATH`.
+- Create with `python -m venv .venv`, activate, install, `deactivate`, delete
+  the folder to remove; one environment per project, never committed.
+- Register environments as Jupyter kernels with `ipykernel`; on Colab use
+  `%pip`.
+- The Python version is fixed at creation; choose it with `python3.X` / `py
+  -3.X` / pyenv / uv.
+- Share with `requirements.txt` or lock files plus a README; conda and
+  containers pin more of the stack.
+- NumPy (arrays, broadcasting, linear algebra), pandas (DataFrames) and
+  Matplotlib (figures and axes) are the tools of the next courses.
+
+## Exercises
+
+::: {#exr-ch13-check}
+Write a script that prints whether it runs inside a virtual environment, the
+path of the interpreter, and the list of installed distributions with their
+versions (use `importlib.metadata.distributions()`).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+import sys
+from importlib.metadata import distributions
+print("venv:", sys.prefix != sys.base_prefix, "| interpreter:", sys.executable)
+for d in sorted(distributions(), key=lambda d: d.metadata["Name"].lower()):
+    print(d.metadata["Name"], d.version)
+```
+:::
+
+::: {#exr-ch13-broadcast}
+Predict the shapes (or the error) of `A + B` for: `(5, 3)` and `(3,)`;
+`(5, 3)` and `(5,)`; `(4, 1, 3)` and `(2, 1)`; `(2, 3)` and `(3, 2)`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`(5, 3)`; error (last dimensions 3 vs 5); `(4, 2, 3)`; error (3 vs 2).
+:::
+
+::: {#exr-ch13-chain}
+Matrices $A_1$ ($10\times100$), $A_2$ ($100\times5$), $A_3$ ($5\times50$). Which
+parenthesisation of $A_1A_2A_3$ needs fewer multiplications? (This is the
+*matrix-chain* problem, solved in general by dynamic programming.)
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$(A_1A_2)A_3$: $10\cdot100\cdot5 + 10\cdot5\cdot50 = 5000 + 2500 = 7500$.
+$A_1(A_2A_3)$: $100\cdot5\cdot50 + 10\cdot100\cdot50 = 25000 + 50000 = 75000$.
+The first is ten times cheaper [@cormen2022, §14.2].
+:::
+
+## Further reading {.unnumbered}
+
+- @pep405 — the design of `venv`; @pythontutorial, §12 *Virtual Environments
+  and Packages*; @ppug, *Installing packages using pip and virtual
+  environments*.
+- The IPython kernel documentation on *Installing the IPython kernel* (kernels
+  for environments).
+- @harris2020 (NumPy), @mckinney2010 and @mckinney2022 (pandas),
+  @hunter2007 (Matplotlib) — the papers that describe each library, and
+  McKinney's book *Python for Data Analysis* (free online, 3rd edition).
+- @strang2016 — a gentle, intuition-first introduction to linear algebra for
+  the chapters ahead.

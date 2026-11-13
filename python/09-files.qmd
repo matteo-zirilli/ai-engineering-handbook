@@ -1,0 +1,642 @@
+# Working with files {#sec-ch-files}
+
+> *"Data dominates. If you've chosen the right data structures and organized
+> things well, the algorithms will almost always be self-evident."* — Rob Pike,
+> *Notes on Programming in C* (1989).
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what a file is (a named sequence of **bytes**), how paths work, and
+  manipulate them with `pathlib`;
+- distinguish **text** and **binary** files, and handle **encodings** and
+  **newlines** correctly;
+- open, read, write and append to files safely with `open` and `with`;
+- read and write **binary** data with `bytes` and `struct`, and explain how a
+  **checksum** (CRC-32) detects corruption;
+- read and write **CSV** and **TSV** files following RFC 4180, and explain why
+  `line.split(",")` is wrong;
+- read and write **JSON** following RFC 8259, map JSON types to Python types,
+  and serialise your own objects;
+- save files **atomically**, so that a crash never leaves a corrupted file;
+- choose a file format suited to the structure of the data.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 9.1 *File types*. Practice: 9.2 *Reading a text file* · 9.3 *Writing to
+a text file* · 9.4 *Reading a file in binary format* · 9.5 *Reading from CSV
+files* · 9.6 *Writing to CSV files* · 9.7 *Working with TSV files* ·
+9.8 *Working with JSON files*.
+:::
+
+## Intuition: memory forgets, files remember
+
+Everything a program holds in variables lives in **RAM**, which is wiped when
+the program ends or the computer is switched off. To remember anything — a
+phone book, a trained model, a dataset — a program must write it to
+**persistent storage** (SSD, hard disk, cloud) as a **file**, and read it back
+later. Reading and writing files is therefore the bridge between one run of a
+program and the next, and between your program and every other program.
+
+At the lowest level **every file is just a sequence of bytes**. What those
+bytes *mean* is a convention — a **format** — shared by the writer and the
+reader. Text, CSV, JSON, PNG, MP3 are all formats. Most bugs with files come
+from the writer and the reader disagreeing on the format, the encoding, or the
+line endings.
+
+## Files, directories and paths {#sec-paths}
+
+A **file system** organises files in a tree of **directories** (folders). A
+**path** names a file: an **absolute** path starts from the root
+(`/home/ada/book.json`, `C:\Users\Ada\book.json`); a **relative** path is
+interpreted from the **current working directory** (`data/book.json`).
+Windows uses `\` as separator, Unix-like systems `/`.
+
+`pathlib` (PEP 428 [@pep428]) represents paths as objects that handle these
+differences for you:
+
+```{python}
+from pathlib import Path
+import tempfile
+
+workdir = Path(tempfile.mkdtemp())              # a fresh temporary directory for our examples
+data = workdir / "data" / "contacts.json"       # '/' joins path components on every OS
+print(data.name, data.stem, data.suffix, data.parent.name)
+print(data.is_absolute(), data.exists())
+data.parent.mkdir(parents=True, exist_ok=True)  # create the 'data' folder (and parents)
+print(sorted(p.name for p in workdir.iterdir()))
+print(Path.cwd().is_dir(), Path.home().is_dir())
+```
+
+Prefer `pathlib.Path` to string manipulation; most functions that accept a path
+accept a `Path`.
+
+## Text and binary files {#sec-text-vs-binary}
+
+- A **binary file** is read and written as raw `bytes`. Its format is defined
+  by a specification (PNG, ZIP, a NumPy `.npy` file, a database).
+- A **text file** is a binary file whose bytes encode **characters** with an
+  **encoding** (@sec-utf8), organised in **lines**. Opening it in text mode
+  makes Python **decode** bytes into `str` when reading and **encode** when
+  writing.
+
+Two conventions differ between systems:
+
+| | Unix, Linux, macOS | Windows |
+|---|---|---|
+| line ending | `\n` (LF, byte `0A`) | `\r\n` (CR LF, bytes `0D 0A`) |
+| historical default encoding | UTF-8 | a legacy code page (e.g. cp1252) |
+
+In text mode Python performs **universal newlines** translation: when reading,
+any of `\n`, `\r\n`, `\r` becomes `\n`; when writing, `\n` becomes the
+platform's line ending (unless you pass `newline=`) [@pep3116]. The default
+encoding depends on the platform's *locale* unless Python runs in **UTF-8
+mode**; since this varies between machines, **always pass
+`encoding="utf-8"`** explicitly (PEP 686 makes UTF-8 the default from Python
+3.15 [@pep686]).
+
+## Opening files {#sec-open}
+
+`open(file, mode="r", encoding=None, newline=None)` returns a **file
+object**. The **mode** is a combination of letters:
+
+| Mode | Meaning | If the file exists | If it does not |
+|---|---|---|---|
+| `"r"` | read (default) | read from the start | `FileNotFoundError` |
+| `"w"` | write | **truncate it to empty** | create |
+| `"a"` | append | write at the end | create |
+| `"x"` | exclusive creation | `FileExistsError` | create |
+| `"+"` added | read **and** write | | |
+| `"b"` added | binary: read/write `bytes` | | |
+| `"t"` added | text (default): read/write `str` | | |
+
+: Modes of `open` {#tbl-open-modes}
+
+Always open files with a `with` statement (@sec-context-managers): the file is
+**closed** automatically — and its buffers flushed — even if an exception
+occurs.
+
+## Reading and writing text {#sec-text-files}
+
+```{python}
+poem_path = workdir / "lines.txt"
+
+# Writing: "w" creates or TRUNCATES the file
+with open(poem_path, "w", encoding="utf-8") as f:
+    f.write("First line\n")                    # write() does not add a newline
+    f.writelines(["Second line\n", "Third line — with an em dash\n"])
+    print("Fourth line, written with print", file=f)
+
+# Appending: "a" adds at the end
+with open(poem_path, "a", encoding="utf-8") as f:
+    f.write("Appended line\n")
+
+# Reading everything at once
+with open(poem_path, encoding="utf-8") as f:
+    text = f.read()
+print(repr(text[:40]), "...", len(text), "characters")
+
+# Reading line by line: the file object is an ITERATOR over lines (memory: one line at a time)
+with open(poem_path, encoding="utf-8") as f:
+    for number, line in enumerate(f, start=1):
+        print(number, line.rstrip("\n"))      # each line keeps its '\n': strip it
+
+print(poem_path.read_text(encoding="utf-8").count("\n"), "lines")   # pathlib shortcuts
+print(len(poem_path.read_bytes()), "bytes")    # more bytes than characters: '—' takes 3 bytes in UTF-8
+```
+
+Other useful methods: `f.readline()` (one line, `""` at end of file),
+`f.readlines()` (list of all lines), `f.tell()` and `f.seek(offset)` (current
+position and moving it). Iterating over the file object is the idiomatic way to
+process large files: memory use is independent of the file size.
+
+::: {.callout-warning}
+## Encoding errors
+Reading a file with the wrong encoding raises `UnicodeDecodeError` or, worse,
+silently produces wrong characters ("mojibake": `Ã¨` instead of `è`, which is
+exactly the UTF-8 bytes `C3 A8` misread as Latin-1). The `errors=` argument of
+`open` chooses the policy (`"strict"`, `"replace"`, `"ignore"`).
+:::
+
+```{python}
+s = "caffè"
+print(s.encode("utf-8"), s.encode("utf-8").decode("latin-1"))   # mojibake demonstration
+```
+
+## Binary files {#sec-binary-files}
+
+In binary mode, reading returns `bytes` (immutable) and writing requires
+`bytes` or `bytearray`. The `struct` module converts between Python values and
+fixed-size binary fields, specifying **byte order** (`>` big-endian, `<`
+little-endian) and field types (`I` = unsigned 32-bit int, `H` = 16-bit, `B` =
+byte, `d` = float64…).
+
+### A real binary format: PNG
+
+To see how a binary format is designed, we build a tiny PNG image **by hand**
+following the specification [@png2003], then read it back. A PNG file is:
+
+1. an 8-byte **signature** `89 50 4E 47 0D 0A 1A 0A`;
+2. a sequence of **chunks**, each = 4-byte length + 4-byte type + data +
+   4-byte **CRC-32** checksum of type and data. `IHDR` gives the size, `IDAT`
+   the compressed pixels, `IEND` ends the file.
+
+The signature is a small masterpiece of defensive design: the first byte
+`0x89` has the high bit set (detecting transmission channels that strip the 8th
+bit); `PNG` identifies the format to humans; `0D 0A` (CR LF) and `0A` (LF)
+detect line-ending conversions applied by mistake when a binary file is treated
+as text (the very translation of @sec-text-vs-binary); `1A` stops the `type`
+command on DOS.
+
+```{python}
+import struct, zlib
+
+def chunk(kind: bytes, data: bytes) -> bytes:
+    """length (big-endian uint32) + type + data + CRC-32 of (type + data)."""
+    return (struct.pack(">I", len(data)) + kind + data
+            + struct.pack(">I", zlib.crc32(kind + data)))
+
+def make_png(width: int, height: int, pixel_rgb) -> bytes:
+    signature = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB, no interlace
+    rows = b"".join(b"\x00" + bytes(c for x in range(width) for c in pixel_rgb(x, y))
+                    for y in range(height))                        # each row: filter byte 0 + pixels
+    return signature + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+png = make_png(4, 3, lambda x, y: (60 * x, 80 * y, 200))
+img_path = workdir / "tiny.png"
+img_path.write_bytes(png)
+
+with open(img_path, "rb") as f:               # read it back in BINARY mode
+    head = f.read(24)
+print(head[:8].hex(" "))                       # the signature
+length, kind = struct.unpack(">I4s", head[8:16])
+width, height = struct.unpack(">II", head[16:24])
+print(kind, length, "-> image size", width, "x", height)
+
+from PIL import Image                          # an independent decoder agrees
+with Image.open(img_path) as im:
+    print(im.format, im.size, im.mode, im.getpixel((3, 2)))
+```
+
+### How a checksum detects corruption
+
+The CRC-32 in each chunk lets a reader detect corrupted data. A **cyclic
+redundancy check** (CRC), introduced by Peterson and Brown [@peterson1961],
+treats the message bits as the coefficients of a polynomial $M(x)$ over
+$\mathrm{GF}(2)$ (arithmetic modulo 2: $1 + 1 = 0$, so addition is XOR). A fixed
+**generator** polynomial $G(x)$ of degree $r$ ($r = 32$ for CRC-32, with
+$G(0) = 1$) is agreed upon; the sender appends the $r$-bit remainder of
+$M(x)\,x^r$ divided by $G(x)$, so that the transmitted polynomial $T(x)$ is a
+**multiple** of $G(x)$. A corruption flips some bits: the receiver gets
+$T(x) + E(x)$, where the **error polynomial** $E(x)$ has a 1 for each flipped
+bit, and detects the error iff $G(x) \nmid E(x)$.
+
+::: {#thm-crc-burst}
+## CRCs catch every short burst
+A CRC with a generator $G$ of degree $r$ and $G(0) = 1$ detects every **burst
+error** of length at most $r$ (all flipped bits lie within $r$ consecutive
+positions). CRC-32 detects every burst of length $\le 32$.
+:::
+
+*In one line:* such an error is $x^i B(x)$ with $\deg B < r$; $G$ shares no
+factor with $x^i$, so it would have to divide $B$, which is too small.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-crc-burst
+A burst of length $\ell \le r$ starting at bit position $i$ has error
+polynomial $E(x) = x^i B(x)$ with $B(0) = 1$ and $\deg B = \ell - 1 < r$.
+Suppose $G \mid E$. Polynomials over a field admit Euclidean division
+(the analogue of @lem-division with degrees instead of sizes), hence greatest
+common divisors and the analogue of Euclid's lemma: *if $G \mid UV$ and
+$\gcd(G, U) = 1$, then $G\mid V$.* Here $\gcd(G, x^i) = 1$: the only
+irreducible factor of $x^i$ is $x$, and $x \nmid G$ because $G(0) = 1$. So
+$G \mid B$. But $B \ne 0$ and $\deg B < \deg G$, so $G$ cannot divide $B$ — a
+contradiction. Hence $G \nmid E$ and the error is detected. $\blacksquare$
+:::
+
+```{python}
+corrupted = bytearray(png)
+corrupted[45] ^= 0b00000100                          # flip one bit inside the IDAT data
+idat_start = 8 + 25                                   # signature (8) + whole IHDR chunk (12 + 13)
+n = struct.unpack(">I", corrupted[idat_start:idat_start + 4])[0]
+kind_and_data = bytes(corrupted[idat_start + 4: idat_start + 8 + n])
+stored_crc = struct.unpack(">I", corrupted[idat_start + 8 + n: idat_start + 12 + n])[0]
+print("CRC matches?", zlib.crc32(kind_and_data) == stored_crc)   # False: corruption detected
+```
+
+CRCs detect accidental errors, not malicious ones (an attacker can recompute
+the CRC); against tampering one uses cryptographic hashes and signatures.
+
+## CSV files {#sec-csv}
+
+### The format
+
+**CSV** (*comma-separated values*) stores a **table** as text: one **record**
+per line, **fields** separated by commas, usually with a **header** line.
+It is the lingua franca of spreadsheets and datasets. The format is
+standardised (loosely) by RFC 4180 [@rfc4180]:
+
+1. each record is on its own line, ending with CRLF;
+2. fields are separated by commas;
+3. a field **containing a comma, a double quote or a line break must be
+   enclosed in double quotes**;
+4. a double quote inside a quoted field is written as **two** double quotes.
+
+```text
+name,surname,phone,notes
+Ada,Lovelace,+44 20 0000,"Analyst, mathematician"
+Grace,Hopper,+1 202 0000,"Said ""It's easier to ask forgiveness"""
+```
+
+This is why `line.split(",")` is **wrong**: it breaks the second record into
+five fields. Quoting makes the encoding reversible:
+
+::: {#prp-csv-roundtrip}
+## CSV quoting is unambiguous
+Let $\mathrm{enc}(s) = $ `'"' + s.replace('"', '""') + '"'`. Then a parser that
+reads a quoted field character by character, treating `""` as one quote and a
+single `"` followed by a comma, line break or end of input as the end of the
+field, recovers exactly $s$; hence any list of fields can be encoded and
+decoded without loss.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-csv-roundtrip
+In $\mathrm{enc}(s)$, between the opening and the closing quote, every quote
+character of $s$ appears **doubled**, so the content consists of non-quote
+characters and *pairs* of quotes. Scanning from the left, the parser meets
+either a non-quote character (copy it) or a quote. If that quote is followed by
+another quote, the pair cannot be the end of the field: it is an escaped quote
+(output one `"`). If it is followed by anything else, it must be the closing
+quote, because inside the content quotes only occur in pairs. Thus the parser
+outputs exactly the characters of $s$ and stops exactly at the closing quote;
+the separator that follows (comma or line break) starts the next field. By
+induction on the number of fields, the whole record is recovered.
+$\blacksquare$
+:::
+
+### Reading and writing CSV with the `csv` module
+
+```{python}
+import csv
+
+contacts = [
+    {"name": "Ada", "surname": "Lovelace", "phone": "+44 20 0000", "notes": "Analyst, mathematician"},
+    {"name": "Grace", "surname": "Hopper", "phone": "+1 202 0000", "notes": 'Said "ask forgiveness"'},
+    {"name": "Alan", "surname": "Turing", "phone": "+44 161 0000", "notes": ""},
+]
+csv_path = workdir / "contacts.csv"
+
+# newline="" is REQUIRED: the csv module handles line endings itself
+with open(csv_path, "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=["name", "surname", "phone", "notes"])
+    writer.writeheader()
+    writer.writerows(contacts)
+
+print(csv_path.read_text(encoding="utf-8"))
+
+with open(csv_path, newline="", encoding="utf-8") as f:
+    for row in csv.DictReader(f):              # each row is a dict keyed by the header
+        print(row["surname"], "|", row["notes"])
+
+with open(csv_path, newline="", encoding="utf-8") as f:
+    rows = list(csv.reader(f))                 # plain reader: lists of strings
+print(rows[0], len(rows), "rows including header")
+```
+
+Remember: **CSV has no types** — every field is read back as a string. Convert
+explicitly (`int(row["age"])`), and decide how to represent missing values.
+
+In many European locales (including Italian), Excel uses the **semicolon** as
+separator, because the comma is the decimal separator. Use
+`csv.reader(f, delimiter=";")`, or let `csv.Sniffer().sniff(sample)` guess the
+dialect.
+
+### TSV files
+
+**TSV** (*tab-separated values*, IANA media type `text/tab-separated-values`
+[@ianatsv]) uses the TAB character as separator. Since tabs rarely occur in
+data, TSV usually needs no quoting; it is common in bioinformatics and for
+copy-paste from spreadsheets. With the `csv` module just change the delimiter:
+
+```{python}
+tsv_path = workdir / "contacts.tsv"
+with open(tsv_path, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f, delimiter="\t")
+    w.writerow(["name", "surname", "phone"])
+    for c in contacts:
+        w.writerow([c["name"], c["surname"], c["phone"]])
+
+with open(tsv_path, newline="", encoding="utf-8") as f:
+    for row in csv.reader(f, delimiter="\t"):
+        print(row)
+print(repr(tsv_path.read_text(encoding="utf-8").splitlines()[1]))   # the TABs are visible with repr
+```
+
+## JSON files {#sec-json}
+
+### The format
+
+**JSON** (*JavaScript Object Notation*), popularised by Douglas Crockford in
+the early 2000s and standardised as ECMA-404 and RFC 8259 [@rfc8259], is the
+standard format for **nested, structured data**: configuration files, web APIs,
+and — in our project — a list of contacts. Its grammar is tiny:
+
+```text
+value  := object | array | string | number | "true" | "false" | "null"
+object := "{" [ string ":" value { "," string ":" value } ] "}"
+array  := "[" [ value { "," value } ] "]"
+string := '"' characters with \-escapes '"'
+number := ["-"] digits ["." digits] [("e"|"E") ["+"|"-"] digits]
+```
+
+The grammar is **recursive** (a value can contain objects and arrays, which
+contain values): JSON can represent trees of any depth.
+
+| JSON | Python (`json.load`) | Python → JSON (`json.dump`) |
+|---|---|---|
+| object `{}` | `dict` | `dict` (keys converted to `str`!) |
+| array `[]` | `list` | `list`, `tuple` |
+| string | `str` | `str` |
+| number (integer) | `int` | `int` |
+| number (with `.` or `e`) | `float` | `float` |
+| `true` / `false` | `True` / `False` | `True` / `False` |
+| `null` | `None` | `None` |
+
+: JSON ↔ Python conversion {#tbl-json-python}
+
+```{python}
+import json
+
+book = [
+    {"name": "Ada", "surname": "Lovelace", "phone": "+44 20 0000", "tags": ["math"], "favourite": True},
+    {"name": "Niccolò", "surname": "Tartaglia", "phone": "+39 030 0000", "tags": [], "favourite": False},
+]
+json_path = workdir / "book.json"
+with open(json_path, "w", encoding="utf-8") as f:
+    json.dump(book, f, indent=2, ensure_ascii=False)   # pretty-printed, keeps 'ò' readable
+
+print(json_path.read_text(encoding="utf-8")[:170], "...")
+
+with open(json_path, encoding="utf-8") as f:
+    loaded = json.load(f)
+print(loaded == book, type(loaded), type(loaded[0]))
+
+print(json.dumps({1: "one", (2): "two"}))              # int keys become strings!
+print(json.loads(json.dumps({1: "one"})))              # ... and do not come back as ints
+print(json.dumps([1.5, None, True, "ok"]))             # dumps/loads: to and from a str
+```
+
+`dump`/`load` work with files; `dumps`/`loads` ("dump string") with strings.
+JSON has no NaN or infinity (Python writes `NaN` by default, which is **not
+valid JSON**; pass `allow_nan=False` to forbid it), no dates, no sets, no
+tuples.
+
+### Serialising your own objects
+
+`json.dump` does not know your classes. The clean solution is to give each
+class a `to_dict` method and a `from_dict` class method (@sec-dataclasses), so
+that saving and loading are symmetric:
+
+```{python}
+from dataclasses import dataclass, asdict
+
+@dataclass
+class Contact:
+    name: str
+    surname: str
+    phone: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Contact":
+        return cls(name=d["name"], surname=d["surname"], phone=d["phone"])
+
+contacts_objs = [Contact("Ada", "Lovelace", "+44 20 0000"), Contact("Alan", "Turing", "+44 161 0000")]
+text = json.dumps([c.to_dict() for c in contacts_objs], indent=2)
+restored = [Contact.from_dict(d) for d in json.loads(text)]
+print(restored == contacts_objs)                 # round trip: save -> load gives equal objects
+try:
+    json.dumps(contacts_objs)                    # without to_dict:
+except TypeError as err:
+    print("TypeError:", err)
+```
+
+::: {.callout-warning}
+## Never unpickle untrusted data
+Python's `pickle` module can serialise almost any object, but loading a pickle
+**executes code** chosen by whoever wrote the file [@pythonlibrary,
+*pickle*]. Use it only for your own files; for data exchange use JSON or CSV.
+:::
+
+## Saving safely: atomic writes {#sec-atomic-writes}
+
+What happens if the program crashes — or the battery dies — **while** writing
+`book.json` with mode `"w"`? Mode `"w"` first **truncates** the file, then
+writes the new content: a crash in between leaves a **half-written or empty
+file**, and the user loses the whole phone book.
+
+The standard remedy: write to a **temporary file in the same directory**, flush
+it to disk, then **rename** it over the original. On POSIX systems `rename` is
+specified to be **atomic** — other processes see either the old file or the new
+one, never a mix [@posixrename]; Python exposes this as `os.replace`, which is
+also atomic on Windows when source and destination are on the same volume.
+
+```{python}
+import os, tempfile
+
+def atomic_write_json(path: Path, obj) -> None:
+    """Write obj as JSON to path so that path is never left half-written."""
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            json.dump(obj, tmp, indent=2, ensure_ascii=False)
+            tmp.flush()
+            os.fsync(tmp.fileno())      # ask the OS to push the data to the disk
+        os.replace(tmp_name, path)      # atomic: old file or new file, never a mix
+    except BaseException:
+        os.unlink(tmp_name)             # clean up the temporary file on any failure
+        raise
+
+atomic_write_json(json_path, book)
+print(json.loads(json_path.read_text(encoding="utf-8"))[1]["name"])
+```
+
+## Choosing a format {#sec-choosing-format}
+
+| Data shape | Good choice | Notes |
+|---|---|---|
+| free text, logs | `.txt` | line-oriented, UTF-8 |
+| one flat table, for humans and spreadsheets | CSV / TSV | no types, no nesting |
+| nested records, configuration, web APIs | JSON | human-readable, typed scalars |
+| large numeric arrays | `.npy` / `.npz`, HDF5 | binary, typed, fast (@sec-crash-courses) |
+| large analytic tables | Parquet | columnar, compressed (used with pandas) |
+| many records with queries and concurrent updates | SQLite (`sqlite3`) | a full SQL database in one file |
+| images, audio | PNG/JPEG, WAV/MP3 | use a library (Pillow, …) |
+
+::: {.project-link}
+**In the project.** Persistence is a hard requirement: *"contacts must be saved
+and reloaded automatically at start-up, so the user finds their phone book"*,
+with JSON suggested. The implementation in `ai-projects` loads with
+`json.load` into a list of dicts and rebuilds `Contatto` objects, and saves with
+`json.dump(..., indent=4)`, converting objects to dicts dynamically through
+`inspect.signature(Contatto.__init__)`. With this chapter you can also see the
+improvements: open files with `encoding="utf-8"` (names like *Niccolò*), give
+`Contatto` symmetric `to_dict`/`from_dict` methods instead of introspection,
+treat an empty file as an empty phone book, and save with an **atomic write** so
+that a crash during saving never destroys the data.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Forgetting `encoding="utf-8"`** → different behaviour on different
+  computers, `UnicodeDecodeError` or mojibake.
+- **Opening with `"w"` by mistake** → the file is truncated immediately.
+- **Not closing files** (no `with`) → data may stay in buffers and never reach
+  the disk.
+- **Splitting CSV lines by hand** → broken by quoted commas; use `csv`.
+- **Forgetting `newline=""` with the `csv` module** → blank lines between rows
+  on Windows.
+- **Expecting JSON to preserve types** it does not have (tuples, sets, int
+  keys, dates).
+- **Relative paths** depend on the current working directory, which in
+  Jupyter/Colab is often not where you think: print `Path.cwd()`.
+:::
+
+## Summary
+
+- Files are sequences of bytes; formats give them meaning. Use `pathlib` for
+  paths and `with open(...)` for access.
+- Text files = bytes + encoding + newline convention; always specify
+  `encoding="utf-8"`.
+- Binary files are read as `bytes`; `struct` decodes fixed-size fields; CRCs
+  detect accidental corruption (every burst up to the CRC length).
+- CSV/TSV store flat tables; quoting (RFC 4180) makes them unambiguous; use the
+  `csv` module.
+- JSON (RFC 8259) stores nested data; map your objects with `to_dict` /
+  `from_dict`.
+- Save important files atomically (temporary file + `os.replace`).
+
+## Exercises
+
+::: {#exr-ch9-wc}
+Write `word_count(path)` returning the number of lines, words and characters of
+a UTF-8 text file (like the Unix `wc` command), reading the file line by line.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def word_count(path):
+    lines = words = chars = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            lines += 1
+            words += len(line.split())
+            chars += len(line)
+    return lines, words, chars
+```
+:::
+
+::: {#exr-ch9-csv-to-json}
+Convert `contacts.csv` into a JSON list of objects, converting an `age` column
+to `int` and empty strings to `null`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+with open("contacts.csv", newline="", encoding="utf-8") as f:
+    rows = [{k: (v if v != "" else None) for k, v in row.items()} for row in csv.DictReader(f)]
+for r in rows:
+    if r.get("age") is not None:
+        r["age"] = int(r["age"])
+with open("contacts.json", "w", encoding="utf-8") as f:
+    json.dump(rows, f, indent=2, ensure_ascii=False)
+```
+:::
+
+::: {#exr-ch9-crc}
+Using @thm-crc-burst, explain why CRC-32 detects **every single-bit error**
+and every error flipping two **adjacent** bits.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Both are bursts of length 1 and 2, which are $\le 32$. (Directly: a single-bit
+error is $E = x^i$, and $G \nmid x^i$ because $G(0) = 1$ means $G$ is not a
+power of $x$.)
+:::
+
+::: {#exr-ch9-mojibake}
+The string `"PerchÃ©"` was produced by decoding UTF-8 bytes as Latin-1. Repair
+it in one line.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`"PerchÃ©".encode("latin-1").decode("utf-8")` → `"Perché"`: re-encode with the
+wrong codec to get the original bytes back, then decode correctly.
+:::
+
+## Further reading {.unnumbered}
+
+- @pythontutorial, §7.2 (reading and writing files) and §7.2.2 (JSON);
+  @pythonlibrary: `open`, `io`, `pathlib`, `csv`, `json`, `struct`,
+  `tempfile`, `os.replace`.
+- @rfc4180 (CSV), @rfc8259 (JSON), @png2003 (PNG) — short, readable
+  specifications; reading a spec is a skill worth practising.
+- @peterson1961 — the original CRC paper; @koopman2004 for how CRC
+  polynomials are chosen in practice.
+- @pep3116 (the new I/O system), @pep428 (`pathlib`), @pep686 (UTF-8 mode by
+  default).
+- @kleppmann2017, Chapter 4 — encoding and evolution of data formats (JSON,
+  binary encodings, schemas), a modern classic for data engineers.

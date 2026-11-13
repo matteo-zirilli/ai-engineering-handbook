@@ -1,20 +1,92 @@
 # Preface {.unnumbered}
 
-Welcome to the **AI Engineering Handbook** — a from-scratch, hands-on path
-that takes you from *"I can write a little Python"* to *"I can build, train,
-and ship intelligent systems."*
+Welcome to the **AI Engineering Handbook**: a from-scratch, proof-driven,
+hands-on path that takes you from *"I have never written a program"* to
+*"I can design, build, train, evaluate and ship intelligent systems"*.
 
-**Who this book is for.** It assumes no prior knowledge of machine learning.
-Every concept is built up from first principles, with the mathematics
-explained (and, where it helps, proved), concrete worked examples, and
-runnable, heavily commented code.
+The handbook follows, module by module, the twelve courses of the Master in
+AI Engineering that I attended. For each course I wrote a
+part of this book that is **far more detailed than the lectures**: every idea
+is traced back to the book, paper or standard where it was born, every formula
+is derived or proved, and every concept is illustrated with worked examples
+and runnable code. Each part ends with the **final project** of the course,
+which you can find, fully implemented, in the companion repository
+[`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-projects).
 
-**How each chapter is organized.** We follow the same rhythm throughout:
-learning objectives → intuition → formalism and proofs → worked examples →
-annotated code → exercises → references to the primary literature.
+## Who this book is for {.unnumbered}
 
-**How to read it.** Read the intuition first, then the formalism; do the
-worked examples by hand; run and modify the code. The exercises are where the
-understanding actually forms.
+The book assumes **no prior knowledge** of programming, machine learning or
+advanced mathematics. What you need is curiosity and a computer. Whenever a
+concept depends on another one, the dependency is either explained on the spot
+or linked explicitly. If you already know some of the material, the
+**learning objectives** at the top of each chapter tell you quickly whether you
+can skip it.
 
-> This is a living draft. Chapters are released and refined incrementally.
+## What makes this book different {.unnumbered}
+
+1. **Nothing is taken for granted.** We do not say "a list append costs $O(1)$";
+   we define what $O(\cdot)$ means, show how a list is laid out in memory, and
+   *prove* that appending costs $O(1)$ on average.
+2. **Every formula has a story.** For each result you will find *who* proposed
+   it, *why* (what problem they were trying to solve), and *where* (the exact
+   publication, with a reference you can look up).
+3. **Proofs are complete, but never in the way.** Each proof is placed in a
+   collapsible box titled *"For the interested reader"*, immediately preceded
+   by a one-line statement of what it proves. You may take the statement on
+   faith and continue; nothing used later is hidden inside a proof except its
+   justification.
+4. **Many examples.** Each idea is shown at least three ways: an intuition
+   (an everyday analogy), a worked example by hand, and running code.
+5. **Interactive widgets.** Some chapters contain small simulations that run
+   in your browser (for instance, to see the exact bits of a floating-point
+   number or how a hash table fills up). Move the sliders and watch the theory
+   change in front of you.
+6. **Verifiable references.** Every chapter ends with an annotated reading
+   list, and @sec-finding-sources explains, step by step, how to find
+   and read each kind of source (books, papers, standards, PEPs,
+   documentation).
+
+## Structure of the book {.unnumbered}
+
+Each course of the master becomes a **part** of the book. The structure of
+each part is always the same:
+
+- an **overview page** with the course's objectives, the map of the chapters,
+  and the final project;
+- one **chapter per module** of the course. The lectures are split into
+  *Theory* and *Practice*; in the book these two strands are merged inside each
+  chapter, theory first, then the practice;
+- a **project chapter** that restates the project brief, maps each requirement
+  to the chapters that teach the necessary skills, and walks through the design
+  and implementation.
+
+| Part | Course | Status |
+|---|---|---|
+| I | [Programming with Python](python/index.qmd) | ✅ available |
+| II–XII | the remaining courses of the master | 🛠 in preparation |
+
+## Conventions {.unnumbered}
+
+The conventions used throughout the book (notation, colours of the boxes,
+how code and outputs are shown, how to read a reference) are collected in
+[How to study with this book](how-to-study.qmd). Read it once before starting.
+
+## Software versions {.unnumbered}
+
+All code was executed with **Python 3.13**. The outputs you see under each code
+cell were produced by actually running that cell when the book was built: they
+are not typed by hand.
+
+## Acknowledgements and licence {.unnumbered}
+
+The structure of the content follows the syllabus of the Master in AI
+Engineering. The text, the examples, the proofs and the code are original work
+written for this handbook; the primary sources each section draws on are cited
+in place. All rights reserved.
+
+::: {.callout-note}
+## A living book
+The handbook is released incrementally, one course at a time. Chapters may be
+refined after publication; the date at the top of each page is the date of the
+last build.
+:::

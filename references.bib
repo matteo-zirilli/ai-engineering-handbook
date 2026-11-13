@@ -1,33 +1,1620 @@
-@book{sutton2018,
-  title     = {Reinforcement Learning: An Introduction},
-  author    = {Sutton, Richard S. and Barto, Andrew G.},
-  edition   = {2nd},
+% =============================================================================
+% AI Engineering Handbook — bibliography
+% -----------------------------------------------------------------------------
+% Conventions
+%  * One entry per source, BibTeX format, keys = firstauthorYEAR[suffix].
+%  * Every entry has, when it exists: DOI (resolve at https://doi.org/<DOI>),
+%    arXiv id (https://arxiv.org/abs/<id>), ISBN for books, URL for web
+%    standards/documentation (with the date we accessed it).
+%  * The `note` field says HOW TO OBTAIN the source (free legal copy, library,
+%    publisher) and, for long works, WHICH PARTS are used in the handbook.
+%  * Sections below follow the parts of the book.
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+% Front matter: how to study
+% -----------------------------------------------------------------------------
+
+@article{dunlosky2013,
+  author  = {Dunlosky, John and Rawson, Katherine A. and Marsh, Elizabeth J. and Nathan, Mitchell J. and Willingham, Daniel T.},
+  title   = {Improving Students' Learning With Effective Learning Techniques: Promising Directions From Cognitive and Educational Psychology},
+  journal = {Psychological Science in the Public Interest},
+  volume  = {14},
+  number  = {1},
+  pages   = {4--58},
+  year    = {2013},
+  doi     = {10.1177/1529100612453266},
+  note    = {Open access on the publisher's site (SAGE). Review of ten study techniques; practice testing and distributed practice are rated "high utility"}
+}
+
+@article{roediger2006,
+  author  = {Roediger, Henry L. and Karpicke, Jeffrey D.},
+  title   = {Test-Enhanced Learning: Taking Memory Tests Improves Long-Term Retention},
+  journal = {Psychological Science},
+  volume  = {17},
+  number  = {3},
+  pages   = {249--255},
+  year    = {2006},
+  doi     = {10.1111/j.1467-9280.2006.01693.x},
+  note    = {Free author copy on the Washington University Memory Lab website}
+}
+
+% -----------------------------------------------------------------------------
+% Part I — Programming with Python
+% -----------------------------------------------------------------------------
+
+% ---- Foundations of computing (Chapter 1) ----------------------------------
+
+@book{abelson1996,
+  author    = {Abelson, Harold and Sussman, Gerald Jay and Sussman, Julie},
+  title     = {Structure and Interpretation of Computer Programs},
+  edition   = {2},
   publisher = {MIT Press},
   address   = {Cambridge, MA},
-  year      = {2018}
+  year      = {1996},
+  isbn      = {978-0-262-51087-5},
+  url       = {https://mitpress.mit.edu/sites/default/files/sicp/index.html},
+  note      = {Full text freely available from MIT Press at the URL. Chapter 1 (procedures, orders of growth, Euclid's algorithm)}
 }
 
-@book{bellman1957,
-  title     = {Dynamic Programming},
-  author    = {Bellman, Richard},
-  publisher = {Princeton University Press},
-  year      = {1957}
+@book{knuth1997,
+  author    = {Knuth, Donald E.},
+  title     = {The Art of Computer Programming, Volume 1: Fundamental Algorithms},
+  edition   = {3},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1997},
+  isbn      = {978-0-201-89683-1},
+  note      = {University libraries. Used: §1.1 (definition of algorithm, Euclid), §1.2.1 (induction), §1.2.11 (asymptotic notation), §2.2 (linear lists)}
 }
 
-@article{watkins1992,
-  title   = {Q-learning},
-  author  = {Watkins, Christopher J. C. H. and Dayan, Peter},
-  journal = {Machine Learning},
+@book{knuth1997b,
+  author    = {Knuth, Donald E.},
+  title     = {The Art of Computer Programming, Volume 2: Seminumerical Algorithms},
+  edition   = {3},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1997},
+  isbn      = {978-0-201-89684-8},
+  note      = {University libraries. Used: §4.1 (positional number systems), §4.2 (floating-point arithmetic), §4.5.3 (analysis of Euclid's algorithm)}
+}
+
+@book{knuth1998,
+  author    = {Knuth, Donald E.},
+  title     = {The Art of Computer Programming, Volume 3: Sorting and Searching},
+  edition   = {2},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1998},
+  isbn      = {978-0-201-89685-5},
+  note      = {University libraries. Used: §5.3.1 (minimum-comparison sorting), §6.2.1 (binary search), §6.4 (hashing, including the analysis of linear probing)}
+}
+
+@misc{vonneumann1945,
+  author       = {{von Neumann}, John},
+  title        = {First Draft of a Report on the {EDVAC}},
+  howpublished = {Contract No. W-670-ORD-4926, Moore School of Electrical Engineering, University of Pennsylvania},
+  year         = {1945},
+  note         = {Reprinted with corrections by M. D. Godfrey in IEEE Annals of the History of Computing 15(4):27--75, 1993, doi:10.1109/85.238389. Scans of the original circulate freely online (search the exact title)}
+}
+
+@article{turing1936,
+  author  = {Turing, Alan M.},
+  title   = {On Computable Numbers, with an Application to the {E}ntscheidungsproblem},
+  journal = {Proceedings of the London Mathematical Society},
+  series  = {2},
+  volume  = {42},
+  number  = {1},
+  pages   = {230--265},
+  year    = {1936},
+  doi     = {10.1112/plms/s2-42.1.230},
+  note    = {Read to the Society on 12 November 1936; the issue is dated 1936--37. Section 8 contains the diagonal argument. Many free copies online}
+}
+
+@article{church1936,
+  author  = {Church, Alonzo},
+  title   = {An Unsolvable Problem of Elementary Number Theory},
+  journal = {American Journal of Mathematics},
+  volume  = {58},
+  number  = {2},
+  pages   = {345--363},
+  year    = {1936},
+  doi     = {10.2307/2371045},
+  note    = {Available through JSTOR}
+}
+
+@article{rice1953,
+  author  = {Rice, Henry Gordon},
+  title   = {Classes of Recursively Enumerable Sets and Their Decision Problems},
+  journal = {Transactions of the American Mathematical Society},
+  volume  = {74},
+  number  = {2},
+  pages   = {358--366},
+  year    = {1953},
+  doi     = {10.1090/S0002-9947-1953-0053041-6},
+  note    = {Free on the AMS website (older Transactions articles are open access)}
+}
+
+@article{shannon1938,
+  author  = {Shannon, Claude E.},
+  title   = {A Symbolic Analysis of Relay and Switching Circuits},
+  journal = {Transactions of the American Institute of Electrical Engineers},
+  volume  = {57},
+  number  = {12},
+  pages   = {713--723},
+  year    = {1938},
+  doi     = {10.1109/T-AIEE.1938.5057767},
+  note    = {Based on Shannon's 1937 MIT master's thesis, which is free on MIT DSpace (hdl.handle.net/1721.1/11173)}
+}
+
+@article{shannon1948,
+  author  = {Shannon, Claude E.},
+  title   = {A Mathematical Theory of Communication},
+  journal = {Bell System Technical Journal},
+  volume  = {27},
+  number  = {3},
+  pages   = {379--423},
+  year    = {1948},
+  doi     = {10.1002/j.1538-7305.1948.tb01338.x},
+  note    = {Part II in vol. 27(4):623--656. The word "bit" appears in Section 1, credited to J. W. Tukey. Free PDF on many university sites}
+}
+
+@article{horner1819,
+  author  = {Horner, William George},
+  title   = {A New Method of Solving Numerical Equations of All Orders, by Continuous Approximation},
+  journal = {Philosophical Transactions of the Royal Society of London},
+  volume  = {109},
+  pages   = {308--335},
+  year    = {1819},
+  doi     = {10.1098/rstl.1819.0023},
+  note    = {Free on the Royal Society website and JSTOR (early content)}
+}
+
+@article{lame1844,
+  author  = {Lam{\'e}, Gabriel},
+  title   = {Note sur la limite du nombre des divisions dans la recherche du plus grand commun diviseur entre deux nombres entiers},
+  journal = {Comptes Rendus Hebdomadaires des S{\'e}ances de l'Acad{\'e}mie des Sciences},
+  volume  = {19},
+  pages   = {867--870},
+  year    = {1844},
+  note    = {In French. Free scan on Gallica (gallica.bnf.fr), Comptes Rendus volume 19}
+}
+
+@article{knuth1976,
+  author  = {Knuth, Donald E.},
+  title   = {Big {O}micron and Big {O}mega and Big {T}heta},
+  journal = {ACM SIGACT News},
   volume  = {8},
-  number  = {3--4},
-  pages   = {279--292},
-  year    = {1992}
+  number  = {2},
+  pages   = {18--24},
+  year    = {1976},
+  doi     = {10.1145/1008328.1008329},
+  note    = {Proposes the modern use of O, Omega, Theta in algorithm analysis. ACM Digital Library}
 }
 
-@techreport{rummery1994,
-  title       = {On-line {Q}-learning using connectionist systems},
-  author      = {Rummery, Gavin A. and Niranjan, Mahesan},
-  institution = {Cambridge University Engineering Department},
-  number      = {CUED/F-INFENG/TR 166},
-  year        = {1994}
+@book{cormen2022,
+  author    = {Cormen, Thomas H. and Leiserson, Charles E. and Rivest, Ronald L. and Stein, Clifford},
+  title     = {Introduction to Algorithms},
+  edition   = {4},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2022},
+  isbn      = {978-0-262-04630-5},
+  note      = {Known as "CLRS". Used: Ch. 2--3 (insertion sort, loop invariants, asymptotic notation), Ch. 8 (sorting lower bound), Ch. 11 (hash tables), Ch. 16 (amortized analysis), §31.2 (Euclid, Lamé), Ch. 34 (NP-completeness)}
+}
+
+@book{sipser2012,
+  author    = {Sipser, Michael},
+  title     = {Introduction to the Theory of Computation},
+  edition   = {3},
+  publisher = {Cengage Learning},
+  address   = {Boston, MA},
+  year      = {2012},
+  isbn      = {978-1-133-18779-0},
+  note      = {Ch. 4 (decidability, the halting problem), Ch. 7 (NP-completeness, Cook--Levin)}
+}
+
+% ---- Python: language, documentation, PEPs ----------------------------------
+
+@misc{vanrossum2009,
+  author       = {{van Rossum}, Guido},
+  title        = {A Brief Timeline of {P}ython},
+  howpublished = {The History of Python (blog)},
+  year         = {2009},
+  url          = {https://python-history.blogspot.com/2009/01/brief-timeline-of-python.html},
+  note         = {By Python's creator. Version 0.9.0 was posted to the alt.sources newsgroup in February 1991}
+}
+
+@misc{pythontutorial,
+  author       = {{Python Software Foundation}},
+  title        = {The {P}ython Tutorial (Python 3.13)},
+  year         = {2025},
+  url          = {https://docs.python.org/3.13/tutorial/},
+  note         = {Official, free. Always select the documentation version matching your interpreter (drop-down at the top of the page)}
+}
+
+@misc{pythonreference,
+  author       = {{Python Software Foundation}},
+  title        = {The {P}ython Language Reference (Python 3.13)},
+  year         = {2025},
+  url          = {https://docs.python.org/3.13/reference/},
+  note         = {The normative description of syntax and semantics. Used: §3 (data model), §4 (execution model, exceptions), §5 (import system), §6 (expressions), §8 (compound statements)}
+}
+
+@misc{pythonlibrary,
+  author       = {{Python Software Foundation}},
+  title        = {The {P}ython Standard Library (Python 3.13)},
+  year         = {2025},
+  url          = {https://docs.python.org/3.13/library/},
+  note         = {Reference for every built-in function, type and standard module (sys, os, time, datetime, math, json, csv, pathlib, ...)}
+}
+
+@misc{pep8,
+  author       = {{van Rossum}, Guido and Warsaw, Barry and Coghlan, Alyssa},
+  title        = {{PEP} 8 -- Style Guide for {P}ython Code},
+  year         = {2001},
+  url          = {https://peps.python.org/pep-0008/},
+  note         = {Python Enhancement Proposal. Living document, updated over the years}
+}
+
+@misc{pep20,
+  author       = {Peters, Tim},
+  title        = {{PEP} 20 -- The {Z}en of {P}ython},
+  year         = {2004},
+  url          = {https://peps.python.org/pep-0020/},
+  note         = {Also printed by \texttt{import this}}
+}
+
+@article{perez2007,
+  author  = {P{\'e}rez, Fernando and Granger, Brian E.},
+  title   = {{IP}ython: A System for Interactive Scientific Computing},
+  journal = {Computing in Science \& Engineering},
+  volume  = {9},
+  number  = {3},
+  pages   = {21--29},
+  year    = {2007},
+  doi     = {10.1109/MCSE.2007.53}
+}
+
+@inproceedings{kluyver2016,
+  author    = {Kluyver, Thomas and Ragan-Kelley, Benjamin and P{\'e}rez, Fernando and Granger, Brian and Bussonnier, Matthias and Frederic, Jonathan and Kelley, Kyle and Hamrick, Jessica and Grout, Jason and Corlay, Sylvain and Ivanov, Paul and Avila, Dami{\'a}n and Abdalla, Safia and Willing, Carol},
+  title     = {Jupyter Notebooks -- a Publishing Format for Reproducible Computational Workflows},
+  booktitle = {Positioning and Power in Academic Publishing: Players, Agents and Agendas},
+  editor    = {Loizides, Fernando and Schmidt, Birgit},
+  publisher = {IOS Press},
+  pages     = {87--90},
+  year      = {2016},
+  doi       = {10.3233/978-1-61499-649-1-87},
+  note      = {Open access}
+}
+
+@misc{pep484,
+  author = {{van Rossum}, Guido and Lehtosalo, Jukka and Langa, {\L}ukasz},
+  title  = {{PEP} 484 -- Type Hints},
+  year   = {2014},
+  url    = {https://peps.python.org/pep-0484/}
+}
+
+@misc{pep591,
+  author = {Sullivan, Michael J. and Levkivskyi, Ivan},
+  title  = {{PEP} 591 -- Adding a final qualifier to typing},
+  year   = {2019},
+  url    = {https://peps.python.org/pep-0591/}
+}
+
+@misc{pep285,
+  author = {{van Rossum}, Guido},
+  title  = {{PEP} 285 -- Adding a bool type},
+  year   = {2002},
+  url    = {https://peps.python.org/pep-0285/},
+  note   = {Explains why bool is a subclass of int}
+}
+
+@misc{pep485,
+  author = {Barker, Christopher},
+  title  = {{PEP} 485 -- A Function for testing approximate equality},
+  year   = {2015},
+  url    = {https://peps.python.org/pep-0485/},
+  note   = {Rationale and exact definition of math.isclose}
+}
+
+@misc{pep498,
+  author = {Smith, Eric V.},
+  title  = {{PEP} 498 -- Literal String Interpolation},
+  year   = {2015},
+  url    = {https://peps.python.org/pep-0498/},
+  note   = {Introduces f-strings (Python 3.6)}
+}
+
+@misc{pep3101,
+  author = {Talin},
+  title  = {{PEP} 3101 -- Advanced String Formatting},
+  year   = {2006},
+  url    = {https://peps.python.org/pep-3101/},
+  note   = {Introduces str.format and the format-specification mini-language}
+}
+
+@techreport{ieee754,
+  author      = {{IEEE Computer Society}},
+  title       = {{IEEE} Standard for Floating-Point Arithmetic ({IEEE} Std 754-2019)},
+  institution = {Institute of Electrical and Electronics Engineers},
+  year        = {2019},
+  doi         = {10.1109/IEEESTD.2019.8766229},
+  note        = {Paywalled (IEEE Xplore, often available through university libraries). First edition 1985, revised 2008 and 2019}
+}
+
+@article{goldberg1991,
+  author  = {Goldberg, David},
+  title   = {What Every Computer Scientist Should Know About Floating-Point Arithmetic},
+  journal = {ACM Computing Surveys},
+  volume  = {23},
+  number  = {1},
+  pages   = {5--48},
+  year    = {1991},
+  doi     = {10.1145/103162.103163},
+  note    = {An edited reprint is freely available in Oracle's Numerical Computation Guide (search the title)}
+}
+
+@book{higham2002,
+  author    = {Higham, Nicholas J.},
+  title     = {Accuracy and Stability of Numerical Algorithms},
+  edition   = {2},
+  publisher = {SIAM},
+  address   = {Philadelphia, PA},
+  year      = {2002},
+  doi       = {10.1137/1.9780898718027},
+  isbn      = {978-0-89871-521-7},
+  note      = {Ch. 2 (floating-point arithmetic, the standard model §2.2), Ch. 4 (summation, compensated summation §4.3)}
+}
+
+@book{unicode,
+  author    = {{The Unicode Consortium}},
+  title     = {The {U}nicode Standard, Version 16.0.0},
+  publisher = {The Unicode Consortium},
+  address   = {South San Francisco, CA},
+  year      = {2024},
+  isbn      = {978-1-936213-34-4},
+  url       = {https://www.unicode.org/versions/Unicode16.0.0/},
+  note      = {Free online. Chapter 2 (general structure, encoding forms) and Chapter 3 (conformance, the definition of UTF-8 in §3.9)}
+}
+
+@misc{rfc3629,
+  author       = {Yergeau, Fran{\c{c}}ois},
+  title        = {{UTF-8}, a transformation format of {ISO} 10646},
+  howpublished = {RFC 3629 (Internet Standard STD 63)},
+  publisher    = {IETF},
+  year         = {2003},
+  doi          = {10.17487/RFC3629},
+  url          = {https://www.rfc-editor.org/rfc/rfc3629}
+}
+
+@misc{spolsky2003,
+  author       = {Spolsky, Joel},
+  title        = {The Absolute Minimum Every Software Developer Absolutely, Positively Must Know About {U}nicode and Character Sets (No Excuses!)},
+  howpublished = {Joel on Software (blog)},
+  year         = {2003},
+  url          = {https://www.joelonsoftware.com/2003/10/08/the-absolute-minimum-every-software-developer-absolutely-positively-must-know-about-unicode-and-character-sets-no-excuses/},
+  note         = {Informal but excellent introduction}
+}
+
+% ---- Collections, data structures (Chapter 3) --------------------------------
+
+@misc{dijkstra1982,
+  author       = {Dijkstra, Edsger W.},
+  title        = {Why numbering should start at zero ({EWD} 831)},
+  howpublished = {Manuscript, E. W. Dijkstra Archive, University of Texas at Austin},
+  year         = {1982},
+  url          = {https://www.cs.utexas.edu/~EWD/transcriptions/EWD08xx/EWD831.html},
+  note         = {Two pages, free (scan and transcription)}
+}
+
+@misc{pythonwikicomplexity,
+  author       = {{Python Wiki contributors}},
+  title        = {{TimeComplexity}},
+  howpublished = {Python Wiki},
+  url          = {https://wiki.python.org/moin/TimeComplexity},
+  note         = {Average and amortised costs of list, deque, set and dict operations in CPython}
+}
+
+@article{dumey1956,
+  author  = {Dumey, Arnold I.},
+  title   = {Indexing for Rapid Random Access Memory Systems},
+  journal = {Computers and Automation},
+  volume  = {5},
+  number  = {12},
+  pages   = {6--9},
+  year    = {1956},
+  note    = {First published description of hashing. Scans of the magazine are on the Internet Archive (search "Computers and Automation 1956")}
+}
+
+@inproceedings{crosby2003,
+  author    = {Crosby, Scott A. and Wallach, Dan S.},
+  title     = {Denial of Service via Algorithmic Complexity Attacks},
+  booktitle = {Proceedings of the 12th USENIX Security Symposium},
+  pages     = {29--44},
+  year      = {2003},
+  url       = {https://www.usenix.org/conference/12th-usenix-security-symposium/denial-service-algorithmic-complexity-attacks},
+  note      = {Free on the USENIX website. Motivated hash randomisation in Python and other languages}
+}
+
+@misc{hettinger2012,
+  author       = {Hettinger, Raymond},
+  title        = {More compact dictionaries with faster iteration},
+  howpublished = {Message to the python-dev mailing list, 10 December 2012},
+  year         = {2012},
+  url          = {https://mail.python.org/pipermail/python-dev/2012-December/123028.html},
+  note         = {The design adopted in CPython 3.6; insertion order became a language guarantee in 3.7}
+}
+
+@misc{peters2002,
+  author       = {Peters, Tim},
+  title        = {listsort.txt: Description of {T}imsort},
+  howpublished = {CPython source tree, Objects/listsort.txt},
+  year         = {2002},
+  url          = {https://github.com/python/cpython/blob/main/Objects/listsort.txt},
+  note         = {The original design notes of Timsort, updated for powersort in Python 3.11}
+}
+
+@inproceedings{munro2018,
+  author    = {Munro, J. Ian and Wild, Sebastian},
+  title     = {Nearly-Optimal Mergesorts: Fast, Practical Sorting Methods That Optimally Adapt to Existing Runs},
+  booktitle = {26th Annual European Symposium on Algorithms (ESA 2018)},
+  series    = {LIPIcs},
+  volume    = {112},
+  pages     = {63:1--63:16},
+  year      = {2018},
+  doi       = {10.4230/LIPIcs.ESA.2018.63},
+  note      = {Open access; also arXiv:1805.04154}
+}
+
+@article{tarjan1985,
+  author  = {Tarjan, Robert Endre},
+  title   = {Amortized Computational Complexity},
+  journal = {SIAM Journal on Algebraic and Discrete Methods},
+  volume  = {6},
+  number  = {2},
+  pages   = {306--318},
+  year    = {1985},
+  doi     = {10.1137/0606031}
+}
+
+% ---- Logic and control flow (Chapters 4--5) ----------------------------------
+
+@book{boole1854,
+  author    = {Boole, George},
+  title     = {An Investigation of the Laws of Thought, on Which Are Founded the Mathematical Theories of Logic and Probabilities},
+  publisher = {Walton and Maberly},
+  address   = {London},
+  year      = {1854},
+  url       = {https://www.gutenberg.org/ebooks/15114},
+  note      = {Public domain; free on Project Gutenberg (ebook \#15114)}
+}
+
+@book{demorgan1847,
+  author    = {De Morgan, Augustus},
+  title     = {Formal Logic: or, The Calculus of Inference, Necessary and Probable},
+  publisher = {Taylor and Walton},
+  address   = {London},
+  year      = {1847},
+  note      = {Public domain; scans on the Internet Archive}
+}
+
+@article{sheffer1913,
+  author  = {Sheffer, Henry Maurice},
+  title   = {A Set of Five Independent Postulates for {B}oolean Algebras, with Application to Logical Constants},
+  journal = {Transactions of the American Mathematical Society},
+  volume  = {14},
+  number  = {4},
+  pages   = {481--488},
+  year    = {1913},
+  doi     = {10.1090/S0002-9947-1913-1500960-1},
+  note    = {Free on the AMS website}
+}
+
+@article{landin1966,
+  author  = {Landin, Peter J.},
+  title   = {The Next 700 Programming Languages},
+  journal = {Communications of the ACM},
+  volume  = {9},
+  number  = {3},
+  pages   = {157--166},
+  year    = {1966},
+  doi     = {10.1145/365230.365257},
+  note    = {Introduces the "off-side rule" for indentation-based syntax}
+}
+
+@misc{pep308,
+  author = {{van Rossum}, Guido and Hettinger, Raymond},
+  title  = {{PEP} 308 -- Conditional Expressions},
+  year   = {2003},
+  url    = {https://peps.python.org/pep-0308/}
+}
+
+@misc{pep634,
+  author = {Bucher, Brandt and {van Rossum}, Guido},
+  title  = {{PEP} 634 -- Structural Pattern Matching: Specification},
+  year   = {2020},
+  url    = {https://peps.python.org/pep-0634/},
+  note   = {Companion PEPs: 635 (motivation and rationale) and 636 (tutorial)}
+}
+
+@article{bohm1966,
+  author  = {B{\"o}hm, Corrado and Jacopini, Giuseppe},
+  title   = {Flow Diagrams, {T}uring Machines and Languages with Only Two Formation Rules},
+  journal = {Communications of the ACM},
+  volume  = {9},
+  number  = {5},
+  pages   = {366--371},
+  year    = {1966},
+  doi     = {10.1145/355592.365646}
+}
+
+@article{dijkstra1968,
+  author  = {Dijkstra, Edsger W.},
+  title   = {Go To Statement Considered Harmful},
+  journal = {Communications of the ACM},
+  volume  = {11},
+  number  = {3},
+  pages   = {147--148},
+  year    = {1968},
+  doi     = {10.1145/362929.362947},
+  note    = {A one-page letter to the editor; free transcription as EWD 215 in the Dijkstra archive}
+}
+
+@article{harel1980,
+  author  = {Harel, David},
+  title   = {On Folk Theorems},
+  journal = {Communications of the ACM},
+  volume  = {23},
+  number  = {7},
+  pages   = {379--389},
+  year    = {1980},
+  doi     = {10.1145/358886.358892}
+}
+
+@book{rosen2019,
+  author    = {Rosen, Kenneth H.},
+  title     = {Discrete Mathematics and Its Applications},
+  edition   = {8},
+  publisher = {McGraw-Hill},
+  address   = {New York},
+  year      = {2019},
+  isbn      = {978-1-259-67651-2},
+  note      = {Ch. 1 (logic and proofs), Ch. 5 (induction and recursion), Ch. 9 (relations, orders)}
+}
+
+@article{hoare1969,
+  author  = {Hoare, C. A. R.},
+  title   = {An Axiomatic Basis for Computer Programming},
+  journal = {Communications of the ACM},
+  volume  = {12},
+  number  = {10},
+  pages   = {576--580},
+  year    = {1969},
+  doi     = {10.1145/363235.363259},
+  note    = {Introduces Hoare triples {P} S {Q} and the rule for while loops based on invariants}
+}
+
+@incollection{floyd1967,
+  author    = {Floyd, Robert W.},
+  title     = {Assigning Meanings to Programs},
+  booktitle = {Mathematical Aspects of Computer Science},
+  series    = {Proceedings of Symposia in Applied Mathematics},
+  volume    = {19},
+  editor    = {Schwartz, J. T.},
+  publisher = {American Mathematical Society},
+  pages     = {19--32},
+  year      = {1967},
+  doi       = {10.1090/psapm/019/0235771},
+  note      = {Invariants attached to flowchart arrows, and termination via well-founded sets}
+}
+
+@book{bentley1999,
+  author    = {Bentley, Jon},
+  title     = {Programming Pearls},
+  edition   = {2},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1999},
+  isbn      = {978-0-201-65788-3},
+  note      = {Column 4 ("Writing correct programs") proves binary search correct with an invariant}
+}
+
+@misc{bloch2006,
+  author       = {Bloch, Joshua},
+  title        = {Extra, Extra -- Read All About It: Nearly All Binary Searches and Mergesorts are Broken},
+  howpublished = {Google Research Blog},
+  year         = {2006},
+  url          = {https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/},
+  note         = {The (lo + hi) / 2 overflow bug in fixed-width integer languages}
+}
+
+@book{hardy2008,
+  author    = {Hardy, G. H. and Wright, E. M.},
+  title     = {An Introduction to the Theory of Numbers},
+  edition   = {6},
+  editor    = {Heath-Brown, D. R. and Silverman, J. H.},
+  publisher = {Oxford University Press},
+  address   = {Oxford},
+  year      = {2008},
+  isbn      = {978-0-19-921986-5},
+  note      = {Mertens' theorems on sums over primes: §22.7 (Theorem 427)}
+}
+
+@misc{lagarias2010,
+  author       = {Lagarias, Jeffrey C.},
+  title        = {The 3x+1 Problem: An Overview},
+  howpublished = {In J. C. Lagarias (ed.), The Ultimate Challenge: The 3x+1 Problem, American Mathematical Society, pp. 3--29},
+  year         = {2010},
+  note         = {Free preprint: arXiv:2111.02635},
+  eprint       = {2111.02635},
+  archiveprefix= {arXiv}
+}
+
+@misc{pep202,
+  author = {Warsaw, Barry},
+  title  = {{PEP} 202 -- List Comprehensions},
+  year   = {2000},
+  url    = {https://peps.python.org/pep-0202/}
+}
+
+@misc{pep289,
+  author = {Hettinger, Raymond},
+  title  = {{PEP} 289 -- Generator Expressions},
+  year   = {2002},
+  url    = {https://peps.python.org/pep-0289/}
+}
+
+@misc{pep234,
+  author = {Yee, Ka-Ping and {van Rossum}, Guido},
+  title  = {{PEP} 234 -- Iterators},
+  year   = {2001},
+  url    = {https://peps.python.org/pep-0234/},
+  note   = {Defines the iteration protocol: __iter__, __next__, StopIteration}
+}
+
+@book{dijkstra1976,
+  author    = {Dijkstra, Edsger W.},
+  title     = {A Discipline of Programming},
+  publisher = {Prentice-Hall},
+  address   = {Englewood Cliffs, NJ},
+  year      = {1976},
+  isbn      = {978-0-13-215871-8}
+}
+
+@misc{dijkstra1970,
+  author       = {Dijkstra, Edsger W.},
+  title        = {Notes on Structured Programming ({EWD} 249)},
+  howpublished = {Technological University Eindhoven, T.H.-Report 70-WSK-03},
+  year         = {1970},
+  url          = {https://www.cs.utexas.edu/~EWD/ewd02xx/EWD249.PDF},
+  note         = {Free scan in the E. W. Dijkstra Archive. Reprinted in Dahl, Dijkstra, Hoare, Structured Programming, Academic Press, 1972}
+}
+
+% ---- Functions (Chapter 6) ---------------------------------------------------
+
+@article{dijkstra1972,
+  author  = {Dijkstra, Edsger W.},
+  title   = {The Humble Programmer},
+  journal = {Communications of the ACM},
+  volume  = {15},
+  number  = {10},
+  pages   = {859--866},
+  year    = {1972},
+  doi     = {10.1145/355604.361591},
+  note    = {1972 ACM Turing Award lecture; free transcription as EWD 340}
+}
+
+@article{liskov1977,
+  author  = {Liskov, Barbara and Snyder, Alan and Atkinson, Russell and Schaffert, Craig},
+  title   = {Abstraction Mechanisms in {CLU}},
+  journal = {Communications of the ACM},
+  volume  = {20},
+  number  = {8},
+  pages   = {564--576},
+  year    = {1977},
+  doi     = {10.1145/359763.359789},
+  note    = {Describes argument passing "by sharing", the model used by Python}
+}
+
+@book{church1941,
+  author    = {Church, Alonzo},
+  title     = {The Calculi of Lambda-Conversion},
+  series    = {Annals of Mathematics Studies},
+  number    = {6},
+  publisher = {Princeton University Press},
+  address   = {Princeton, NJ},
+  year      = {1941}
+}
+
+@article{landin1964,
+  author  = {Landin, Peter J.},
+  title   = {The Mechanical Evaluation of Expressions},
+  journal = {The Computer Journal},
+  volume  = {6},
+  number  = {4},
+  pages   = {308--320},
+  year    = {1964},
+  doi     = {10.1093/comjnl/6.4.308},
+  note    = {Introduces the term "closure"}
+}
+
+@article{michie1968,
+  author  = {Michie, Donald},
+  title   = {``Memo'' Functions and Machine Learning},
+  journal = {Nature},
+  volume  = {218},
+  pages   = {19--22},
+  year    = {1968},
+  doi     = {10.1038/218019a0}
+}
+
+@misc{vanrossum2009tail,
+  author       = {{van Rossum}, Guido},
+  title        = {Tail Recursion Elimination},
+  howpublished = {Neopythonic (blog), 22 April 2009},
+  year         = {2009},
+  url          = {https://neopythonic.blogspot.com/2009/04/tail-recursion-elimination.html}
+}
+
+@book{graham1994,
+  author    = {Graham, Ronald L. and Knuth, Donald E. and Patashnik, Oren},
+  title     = {Concrete Mathematics: A Foundation for Computer Science},
+  edition   = {2},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1994},
+  isbn      = {978-0-201-55802-9},
+  note      = {Ch. 1 (recurrences, Tower of Hanoi), Ch. 2 (sums), Ch. 3 (floors and ceilings), Ch. 9 (asymptotics)}
+}
+
+@misc{pep570,
+  author = {Hastings, Larry and Galindo, Pablo and Corchero, Mario and Vander Weele, Eric N.},
+  title  = {{PEP} 570 -- {P}ython Positional-Only Parameters},
+  year   = {2018},
+  url    = {https://peps.python.org/pep-0570/}
+}
+
+@misc{pep3102,
+  author = {Talin},
+  title  = {{PEP} 3102 -- Keyword-Only Arguments},
+  year   = {2006},
+  url    = {https://peps.python.org/pep-3102/}
+}
+
+@misc{pep318,
+  author = {Smith, Kevin D. and Jewett, Jim J. and Montanaro, Skip and Baxter, Anthony},
+  title  = {{PEP} 318 -- Decorators for Functions and Methods},
+  year   = {2003},
+  url    = {https://peps.python.org/pep-0318/}
+}
+
+@misc{pep255,
+  author = {Schemenauer, Neil and Peters, Tim and Hetland, Magnus Lie},
+  title  = {{PEP} 255 -- Simple Generators},
+  year   = {2001},
+  url    = {https://peps.python.org/pep-0255/}
+}
+
+@misc{pep257,
+  author = {Goodger, David and {van Rossum}, Guido},
+  title  = {{PEP} 257 -- Docstring Conventions},
+  year   = {2001},
+  url    = {https://peps.python.org/pep-0257/}
+}
+
+% ---- Object-oriented programming (Chapter 7) --------------------------------
+
+@misc{kay2003,
+  author       = {Kay, Alan},
+  title        = {Dr. {A}lan {K}ay on the Meaning of ``Object-Oriented Programming''},
+  howpublished = {E-mail to Stefan Ram, 23 July 2003},
+  year         = {2003},
+  url          = {https://userpage.fu-berlin.de/~ram/pub/pub_jf47ht81Ht/doc_kay_oop_en},
+  note         = {Published with permission on Stefan Ram's page}
+}
+
+@article{kay1993,
+  author  = {Kay, Alan C.},
+  title   = {The Early History of {S}malltalk},
+  journal = {ACM SIGPLAN Notices},
+  volume  = {28},
+  number  = {3},
+  pages   = {69--95},
+  year    = {1993},
+  doi     = {10.1145/155360.155364},
+  note    = {History of Programming Languages conference (HOPL-II)}
+}
+
+@article{dahl1966,
+  author  = {Dahl, Ole-Johan and Nygaard, Kristen},
+  title   = {{SIMULA}---an {ALGOL}-Based Simulation Language},
+  journal = {Communications of the ACM},
+  volume  = {9},
+  number  = {9},
+  pages   = {671--678},
+  year    = {1966},
+  doi     = {10.1145/365813.365819}
+}
+
+@techreport{dahl1968,
+  author      = {Dahl, Ole-Johan and Myhrhaug, Bj{\o}rn and Nygaard, Kristen},
+  title       = {Common Base Language},
+  institution = {Norwegian Computing Center},
+  address     = {Oslo},
+  number      = {Publication S-22},
+  year        = {1968},
+  note        = {The definition of SIMULA 67 (revised 1970)}
+}
+
+@article{liskov1974,
+  author  = {Liskov, Barbara and Zilles, Stephen},
+  title   = {Programming with Abstract Data Types},
+  journal = {ACM SIGPLAN Notices},
+  volume  = {9},
+  number  = {4},
+  pages   = {50--59},
+  year    = {1974},
+  doi     = {10.1145/942572.807045}
+}
+
+@article{parnas1972,
+  author  = {Parnas, David L.},
+  title   = {On the Criteria to Be Used in Decomposing Systems into Modules},
+  journal = {Communications of the ACM},
+  volume  = {15},
+  number  = {12},
+  pages   = {1053--1058},
+  year    = {1972},
+  doi     = {10.1145/361598.361623},
+  note    = {Six pages that introduced information hiding. Widely available}
+}
+
+@book{gamma1994,
+  author    = {Gamma, Erich and Helm, Richard and Johnson, Ralph and Vlissides, John},
+  title     = {Design Patterns: Elements of Reusable Object-Oriented Software},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1994},
+  isbn      = {978-0-201-63361-0},
+  note      = {The "Gang of Four" book. Chapter 1, §1.6 discusses inheritance versus composition}
+}
+
+@book{meyer1997,
+  author    = {Meyer, Bertrand},
+  title     = {Object-Oriented Software Construction},
+  edition   = {2},
+  publisher = {Prentice Hall},
+  address   = {Upper Saddle River, NJ},
+  year      = {1997},
+  isbn      = {978-0-13-629155-8},
+  note      = {Ch. 3 (the open-closed principle), Ch. 11 (Design by Contract, class invariants)}
+}
+
+@article{liskov1994,
+  author  = {Liskov, Barbara H. and Wing, Jeannette M.},
+  title   = {A Behavioral Notion of Subtyping},
+  journal = {ACM Transactions on Programming Languages and Systems},
+  volume  = {16},
+  number  = {6},
+  pages   = {1811--1841},
+  year    = {1994},
+  doi     = {10.1145/197320.197383}
+}
+
+@misc{pep3119,
+  author = {{van Rossum}, Guido and Talin},
+  title  = {{PEP} 3119 -- Introducing Abstract Base Classes},
+  year   = {2007},
+  url    = {https://peps.python.org/pep-3119/}
+}
+
+@inproceedings{barrett1996,
+  author    = {Barrett, Kim and Cassels, Bob and Haahr, Paul and Moon, David A. and Playford, Keith and Withington, P. Tucker},
+  title     = {A Monotonic Superclass Linearization for {D}ylan},
+  booktitle = {Proceedings of the 11th ACM SIGPLAN Conference on Object-Oriented Programming, Systems, Languages, and Applications (OOPSLA '96)},
+  pages     = {69--82},
+  year      = {1996},
+  doi       = {10.1145/236337.236343},
+  note      = {Defines the C3 linearisation}
+}
+
+@misc{simionato2003,
+  author       = {Simionato, Michele},
+  title        = {The {P}ython 2.3 Method Resolution Order},
+  howpublished = {Python documentation, HOWTO},
+  year         = {2003},
+  url          = {https://docs.python.org/3/howto/mro.html},
+  note         = {Explains C3 with many worked examples; free}
+}
+
+@misc{pep557,
+  author = {Smith, Eric V.},
+  title  = {{PEP} 557 -- Data Classes},
+  year   = {2017},
+  url    = {https://peps.python.org/pep-0557/}
+}
+
+@techreport{itue164,
+  author      = {{ITU-T}},
+  title       = {Recommendation {E}.164: The International Public Telecommunication Numbering Plan},
+  institution = {International Telecommunication Union},
+  address     = {Geneva},
+  year        = {2010},
+  url         = {https://www.itu.int/rec/T-REC-E.164},
+  note        = {Free download. International numbers have at most 15 digits (country code included)}
+}
+
+@book{martin2003,
+  author    = {Martin, Robert C.},
+  title     = {Agile Software Development: Principles, Patterns, and Practices},
+  publisher = {Prentice Hall},
+  address   = {Upper Saddle River, NJ},
+  year      = {2003},
+  isbn      = {978-0-13-597444-5},
+  note      = {Part II presents the SOLID principles (SRP, OCP, LSP, ISP, DIP)}
+}
+
+@book{ramalho2022,
+  author    = {Ramalho, Luciano},
+  title     = {Fluent {P}ython},
+  edition   = {2},
+  publisher = {O'Reilly Media},
+  address   = {Sebastopol, CA},
+  year      = {2022},
+  isbn      = {978-1-492-05635-5}
+}
+
+% ---- Exceptions (Chapter 8) --------------------------------------------------
+
+@article{goodenough1975,
+  author  = {Goodenough, John B.},
+  title   = {Exception Handling: Issues and a Proposed Notation},
+  journal = {Communications of the ACM},
+  volume  = {18},
+  number  = {12},
+  pages   = {683--696},
+  year    = {1975},
+  doi     = {10.1145/361227.361230}
+}
+
+@article{liskov1979,
+  author  = {Liskov, Barbara H. and Snyder, Alan},
+  title   = {Exception Handling in {CLU}},
+  journal = {IEEE Transactions on Software Engineering},
+  volume  = {SE-5},
+  number  = {6},
+  pages   = {546--558},
+  year    = {1979},
+  doi     = {10.1109/TSE.1979.230191}
+}
+
+@article{bishop1996,
+  author  = {Bishop, Matt and Dilger, Michael},
+  title   = {Checking for Race Conditions in File Accesses},
+  journal = {Computing Systems},
+  volume  = {9},
+  number  = {2},
+  pages   = {131--152},
+  year    = {1996},
+  note    = {Free PDF on the USENIX website (Computing Systems archive)}
+}
+
+@misc{pep343,
+  author = {{van Rossum}, Guido and Coghlan, Alyssa},
+  title  = {{PEP} 343 -- The ``with'' Statement},
+  year   = {2005},
+  url    = {https://peps.python.org/pep-0343/}
+}
+
+@misc{pep3134,
+  author = {Yee, Ka-Ping},
+  title  = {{PEP} 3134 -- Exception Chaining and Embedded Tracebacks},
+  year   = {2005},
+  url    = {https://peps.python.org/pep-3134/}
+}
+
+@misc{pep654,
+  author = {Katriel, Irit and Selivanov, Yury and {van Rossum}, Guido},
+  title  = {{PEP} 654 -- Exception Groups and except*},
+  year   = {2021},
+  url    = {https://peps.python.org/pep-0654/}
+}
+
+% ---- Files and formats (Chapter 9) -------------------------------------------
+
+@misc{pep428,
+  author = {Pitrou, Antoine},
+  title  = {{PEP} 428 -- The pathlib module -- object-oriented filesystem paths},
+  year   = {2012},
+  url    = {https://peps.python.org/pep-0428/}
+}
+
+@misc{pep3116,
+  author = {Stutzbach, Daniel and Verdone, Mike and {van Rossum}, Guido},
+  title  = {{PEP} 3116 -- New {I/O}},
+  year   = {2007},
+  url    = {https://peps.python.org/pep-3116/},
+  note   = {Describes text vs binary layers and universal newlines}
+}
+
+@misc{pep686,
+  author = {Inada, Naoki},
+  title  = {{PEP} 686 -- Make {UTF}-8 mode default},
+  year   = {2022},
+  url    = {https://peps.python.org/pep-0686/},
+  note   = {Accepted for Python 3.15}
+}
+
+@misc{png2003,
+  author       = {{W3C} and {ISO/IEC}},
+  title        = {Portable Network Graphics ({PNG}) Specification (Second Edition)},
+  howpublished = {W3C Recommendation 10 November 2003; also ISO/IEC 15948:2003},
+  year         = {2003},
+  url          = {https://www.w3.org/TR/2003/REC-PNG-20031110/},
+  note         = {Free. §5.2 (signature), §5.3 (chunk layout), §5.5 and Annex D (CRC), §12.12 (rationale of the signature bytes)}
+}
+
+@article{peterson1961,
+  author  = {Peterson, W. Wesley and Brown, Daniel T.},
+  title   = {Cyclic Codes for Error Detection},
+  journal = {Proceedings of the IRE},
+  volume  = {49},
+  number  = {1},
+  pages   = {228--235},
+  year    = {1961},
+  doi     = {10.1109/JRPROC.1961.287814}
+}
+
+@inproceedings{koopman2004,
+  author    = {Koopman, Philip and Chakravarty, Tridib},
+  title     = {Cyclic Redundancy Code ({CRC}) Polynomial Selection for Embedded Networks},
+  booktitle = {International Conference on Dependable Systems and Networks (DSN 2004)},
+  pages     = {145--154},
+  year      = {2004},
+  doi       = {10.1109/DSN.2004.1311885},
+  note      = {Free author copy on Koopman's CMU web page}
+}
+
+@misc{rfc4180,
+  author       = {Shafranovich, Yakov},
+  title        = {Common Format and {MIME} Type for Comma-Separated Values ({CSV}) Files},
+  howpublished = {RFC 4180},
+  publisher    = {IETF},
+  year         = {2005},
+  doi          = {10.17487/RFC4180},
+  url          = {https://www.rfc-editor.org/rfc/rfc4180}
+}
+
+@misc{rfc8259,
+  author       = {Bray, Tim},
+  title        = {The {JavaScript} Object Notation ({JSON}) Data Interchange Format},
+  howpublished = {RFC 8259 (Internet Standard STD 90)},
+  publisher    = {IETF},
+  year         = {2017},
+  doi          = {10.17487/RFC8259},
+  url          = {https://www.rfc-editor.org/rfc/rfc8259},
+  note         = {Equivalent grammar in ECMA-404, 2nd edition (2017)}
+}
+
+@misc{ianatsv,
+  author       = {{IANA}},
+  title        = {Media Type text/tab-separated-values},
+  howpublished = {IANA Media Types registry},
+  url          = {https://www.iana.org/assignments/media-types/text/tab-separated-values}
+}
+
+@misc{posixrename,
+  author       = {{The Open Group} and {IEEE}},
+  title        = {rename -- rename file (The Open Group Base Specifications Issue 7, IEEE Std 1003.1-2017)},
+  howpublished = {POSIX.1-2017},
+  year         = {2018},
+  url          = {https://pubs.opengroup.org/onlinepubs/9699919799/functions/rename.html},
+  note         = {Specifies that rename() replaces the target atomically}
+}
+
+@book{kleppmann2017,
+  author    = {Kleppmann, Martin},
+  title     = {Designing Data-Intensive Applications},
+  publisher = {O'Reilly Media},
+  address   = {Sebastopol, CA},
+  year      = {2017},
+  isbn      = {978-1-449-37332-0},
+  note      = {Ch. 4: encoding and evolution of data formats}
+}
+
+% ---- Modules and packages (Chapter 10) ---------------------------------------
+
+@article{stevens1974,
+  author  = {Stevens, Wayne P. and Myers, Glenford J. and Constantine, Larry L.},
+  title   = {Structured Design},
+  journal = {IBM Systems Journal},
+  volume  = {13},
+  number  = {2},
+  pages   = {115--139},
+  year    = {1974},
+  doi     = {10.1147/sj.132.0115},
+  note    = {Introduces coupling and cohesion as design criteria}
+}
+
+@article{kahn1962,
+  author  = {Kahn, Arthur B.},
+  title   = {Topological Sorting of Large Networks},
+  journal = {Communications of the ACM},
+  volume  = {5},
+  number  = {11},
+  pages   = {558--562},
+  year    = {1962},
+  doi     = {10.1145/368996.369025}
+}
+
+@misc{pep451,
+  author = {Snow, Eric},
+  title  = {{PEP} 451 -- A ModuleSpec Type for the Import System},
+  year   = {2013},
+  url    = {https://peps.python.org/pep-0451/},
+  note   = {Builds on PEP 302 (new import hooks, 2002), which introduced finders and loaders}
+}
+
+@misc{pep3147,
+  author = {Warsaw, Barry},
+  title  = {{PEP} 3147 -- {PYC} Repository Directories},
+  year   = {2009},
+  url    = {https://peps.python.org/pep-3147/}
+}
+
+@misc{pep328,
+  author = {Aahz},
+  title  = {{PEP} 328 -- Imports: Multi-Line and Absolute/Relative},
+  year   = {2003},
+  url    = {https://peps.python.org/pep-0328/}
+}
+
+@misc{pep420,
+  author = {Smith, Eric V.},
+  title  = {{PEP} 420 -- Implicit Namespace Packages},
+  year   = {2012},
+  url    = {https://peps.python.org/pep-0420/}
+}
+
+@misc{pep517,
+  author = {Smith, Nathaniel J. and Kluyver, Thomas},
+  title  = {{PEP} 517 -- A build-system independent format for source trees},
+  year   = {2015},
+  url    = {https://peps.python.org/pep-0517/}
+}
+
+@misc{pep518,
+  author = {Cannon, Brett and Smith, Nathaniel and Stufft, Donald},
+  title  = {{PEP} 518 -- Specifying Minimum Build System Requirements for {P}ython Projects},
+  year   = {2016},
+  url    = {https://peps.python.org/pep-0518/},
+  note   = {Introduces pyproject.toml}
+}
+
+@misc{pep621,
+  author = {Cannon, Brett and Ingram, Dustin and Ganssle, Paul and Gedam, Pradyun and Eustace, S{\'e}bastien and Kluyver, Thomas and Chung, Tzu-ping},
+  title  = {{PEP} 621 -- Storing project metadata in pyproject.toml},
+  year   = {2020},
+  url    = {https://peps.python.org/pep-0621/}
+}
+
+@misc{pep427,
+  author = {Holth, Daniel},
+  title  = {{PEP} 427 -- The Wheel Binary Package Format 1.0},
+  year   = {2012},
+  url    = {https://peps.python.org/pep-0427/}
+}
+
+@misc{pep660,
+  author = {Holth, Daniel and Bidoul, St{\'e}phane},
+  title  = {{PEP} 660 -- Editable installs for pyproject.toml based builds (wheel based)},
+  year   = {2021},
+  url    = {https://peps.python.org/pep-0660/}
+}
+
+@misc{ppug,
+  author       = {{Python Packaging Authority}},
+  title        = {Python Packaging User Guide},
+  howpublished = {packaging.python.org},
+  url          = {https://packaging.python.org/},
+  note         = {The authoritative, free guide to packaging, pyproject.toml, wheels, and pip}
+}
+
+% ---- Standard library (Chapter 11) -------------------------------------------
+
+@misc{pep206,
+  author = {Kuchling, A. M.},
+  title  = {{PEP} 206 -- {P}ython Advanced Library},
+  year   = {2000},
+  url    = {https://peps.python.org/pep-0206/},
+  note   = {States the "batteries included" philosophy}
+}
+
+@misc{pep418,
+  author = {Stinner, Victor},
+  title  = {{PEP} 418 -- Add monotonic time, performance counter, and process time functions},
+  year   = {2012},
+  url    = {https://peps.python.org/pep-0418/}
+}
+
+@misc{pep615,
+  author = {Ganssle, Paul},
+  title  = {{PEP} 615 -- Support for the {IANA} Time Zone Database in the Standard Library},
+  year   = {2020},
+  url    = {https://peps.python.org/pep-0615/}
+}
+
+@misc{posixtime,
+  author       = {{The Open Group} and {IEEE}},
+  title        = {Base Definitions, Section 4.16: Seconds Since the Epoch (IEEE Std 1003.1-2017)},
+  howpublished = {POSIX.1-2017},
+  year         = {2018},
+  url          = {https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html},
+  note         = {The exact formula converting a UTC date to POSIX seconds, with every day counted as 86400 s}
+}
+
+@techreport{iso8601,
+  author      = {{ISO}},
+  title       = {{ISO} 8601-1:2019 Date and time -- Representations for information interchange -- Part 1: Basic rules},
+  institution = {International Organization for Standardization},
+  address     = {Geneva},
+  year        = {2019},
+  note        = {Paywalled; RFC 3339 (free) defines the profile used on the Internet}
+}
+
+@article{kahan1965,
+  author  = {Kahan, William},
+  title   = {Further Remarks on Reducing Truncation Errors},
+  journal = {Communications of the ACM},
+  volume  = {8},
+  number  = {1},
+  pages   = {40},
+  year    = {1965},
+  doi     = {10.1145/363707.363723},
+  note    = {One page: the compensated summation algorithm}
+}
+
+@article{shewchuk1997,
+  author  = {Shewchuk, Jonathan Richard},
+  title   = {Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates},
+  journal = {Discrete \& Computational Geometry},
+  volume  = {18},
+  number  = {3},
+  pages   = {305--363},
+  year    = {1997},
+  doi     = {10.1007/PL00009321},
+  note    = {Free author copy on Shewchuk's Berkeley page. The basis of math.fsum}
+}
+
+@article{matsumoto1998,
+  author  = {Matsumoto, Makoto and Nishimura, Takuji},
+  title   = {Mersenne Twister: A 623-Dimensionally Equidistributed Uniform Pseudo-Random Number Generator},
+  journal = {ACM Transactions on Modeling and Computer Simulation},
+  volume  = {8},
+  number  = {1},
+  pages   = {3--30},
+  year    = {1998},
+  doi     = {10.1145/272991.272995}
+}
+
+@book{reingold2018,
+  author    = {Reingold, Edward M. and Dershowitz, Nachum},
+  title     = {Calendrical Calculations: The Ultimate Edition},
+  edition   = {4},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2018},
+  isbn      = {978-1-107-05762-3},
+  doi       = {10.1017/9781107415058}
+}
+
+@article{neumaier1974,
+  author  = {Neumaier, Arnold},
+  title   = {Rundungsfehleranalyse einiger Verfahren zur Summation endlicher Summen},
+  journal = {ZAMM -- Zeitschrift f{\"u}r Angewandte Mathematik und Mechanik},
+  volume  = {54},
+  number  = {1},
+  pages   = {39--51},
+  year    = {1974},
+  doi     = {10.1002/zamm.19740540106},
+  note    = {In German. The variant of compensated summation used by Python's built-in sum() for floats since version 3.12}
+}
+
+% ---- PyPI, pip, versions, complexity (Chapter 12) ----------------------------
+
+@misc{pep301,
+  author = {Jones, Richard},
+  title  = {{PEP} 301 -- Package Index and Metadata for Distutils},
+  year   = {2002},
+  url    = {https://peps.python.org/pep-0301/}
+}
+
+@misc{pep453,
+  author = {Stufft, Donald and Coghlan, Alyssa},
+  title  = {{PEP} 453 -- Explicit bootstrapping of pip in {P}ython installations},
+  year   = {2013},
+  url    = {https://peps.python.org/pep-0453/}
+}
+
+@misc{pep440,
+  author = {Coghlan, Alyssa and Stufft, Donald},
+  title  = {{PEP} 440 -- Version Identification and Dependency Specification},
+  year   = {2013},
+  url    = {https://peps.python.org/pep-0440/},
+  note   = {Now maintained as the "Version specifiers" specification in the Python Packaging User Guide}
+}
+
+@misc{pep751,
+  author = {Cannon, Brett},
+  title  = {{PEP} 751 -- A file format to record {P}ython dependencies for installation reproducibility},
+  year   = {2024},
+  url    = {https://peps.python.org/pep-0751/},
+  note   = {Accepted in 2025; defines pylock.toml}
+}
+
+@misc{semver,
+  author       = {Preston-Werner, Tom},
+  title        = {Semantic Versioning 2.0.0},
+  year         = {2013},
+  url          = {https://semver.org/spec/v2.0.0.html}
+}
+
+@inproceedings{dicosmo2006,
+  author    = {Mancinelli, Fabio and Boender, Jaap and Di Cosmo, Roberto and Vouillon, J{\'e}r{\^o}me and Durak, Berke and Leroy, Xavier and Treinen, Ralf},
+  title     = {Managing the Complexity of Large Free and Open Source Package-Based Software Distributions},
+  booktitle = {21st IEEE/ACM International Conference on Automated Software Engineering (ASE 2006)},
+  pages     = {199--208},
+  year      = {2006},
+  doi       = {10.1109/ASE.2006.49},
+  note      = {Proves that installability is NP-complete (EDOS project). Free preprint on HAL}
+}
+
+@misc{cox2016,
+  author       = {Cox, Russ},
+  title        = {Version {SAT}},
+  howpublished = {research!rsc (blog), 13 December 2016},
+  year         = {2016},
+  url          = {https://research.swtch.com/version-sat}
+}
+
+@inproceedings{cook1971,
+  author    = {Cook, Stephen A.},
+  title     = {The Complexity of Theorem-Proving Procedures},
+  booktitle = {Proceedings of the Third Annual ACM Symposium on Theory of Computing (STOC '71)},
+  pages     = {151--158},
+  year      = {1971},
+  doi       = {10.1145/800157.805047}
+}
+
+@incollection{karp1972,
+  author    = {Karp, Richard M.},
+  title     = {Reducibility among Combinatorial Problems},
+  booktitle = {Complexity of Computer Computations},
+  editor    = {Miller, Raymond E. and Thatcher, James W.},
+  publisher = {Plenum Press},
+  address   = {New York},
+  pages     = {85--103},
+  year      = {1972},
+  doi       = {10.1007/978-1-4684-2001-2_9}
+}
+
+% ---- Virtual environments and scientific Python (Chapter 13) -----------------
+
+@misc{pep405,
+  author = {Meyer, Carl},
+  title  = {{PEP} 405 -- {P}ython Virtual Environments},
+  year   = {2011},
+  url    = {https://peps.python.org/pep-0405/},
+  note   = {Specifies pyvenv.cfg and how sys.prefix is set (section "Specification")}
+}
+
+@misc{pythonversions,
+  author       = {{Python Software Foundation}},
+  title        = {Status of {P}ython versions},
+  howpublished = {Python Developer's Guide},
+  url          = {https://devguide.python.org/versions/},
+  note         = {Release dates and end-of-life of each Python version (release cadence defined in PEP 602)}
+}
+
+@article{harris2020,
+  author  = {Harris, Charles R. and Millman, K. Jarrod and van der Walt, St{\'e}fan J. and Gommers, Ralf and Virtanen, Pauli and Cournapeau, David and Wieser, Eric and Taylor, Julian and Berg, Sebastian and Smith, Nathaniel J. and Kern, Robert and Picus, Matti and Hoyer, Stephan and van Kerkwijk, Marten H. and Brett, Matthew and Haldane, Allan and Fern{\'a}ndez del R{\'i}o, Jaime and Wiebe, Mark and Peterson, Pearu and G{\'e}rard-Marchant, Pierre and Sheppard, Kevin and Reddy, Tyler and Weckesser, Warren and Abbasi, Hameer and Gohlke, Christoph and Oliphant, Travis E.},
+  title   = {Array Programming with {NumPy}},
+  journal = {Nature},
+  volume  = {585},
+  pages   = {357--362},
+  year    = {2020},
+  doi     = {10.1038/s41586-020-2649-2},
+  note    = {Open access}
+}
+
+@inproceedings{mckinney2010,
+  author    = {McKinney, Wes},
+  title     = {Data Structures for Statistical Computing in {P}ython},
+  booktitle = {Proceedings of the 9th Python in Science Conference (SciPy 2010)},
+  pages     = {56--61},
+  year      = {2010},
+  doi       = {10.25080/Majora-92bf1922-00a},
+  note      = {The paper introducing pandas. Open access}
+}
+
+@book{mckinney2022,
+  author    = {McKinney, Wes},
+  title     = {Python for Data Analysis: Data Wrangling with pandas, {NumPy}, and {J}upyter},
+  edition   = {3},
+  publisher = {O'Reilly Media},
+  address   = {Sebastopol, CA},
+  year      = {2022},
+  isbn      = {978-1-098-10403-0},
+  url       = {https://wesmckinney.com/book/},
+  note      = {Free "Open Access" HTML edition at the URL}
+}
+
+@article{hunter2007,
+  author  = {Hunter, John D.},
+  title   = {Matplotlib: A {2D} Graphics Environment},
+  journal = {Computing in Science \& Engineering},
+  volume  = {9},
+  number  = {3},
+  pages   = {90--95},
+  year    = {2007},
+  doi     = {10.1109/MCSE.2007.55}
+}
+
+@article{welford1962,
+  author  = {Welford, B. P.},
+  title   = {Note on a Method for Calculating Corrected Sums of Squares and Products},
+  journal = {Technometrics},
+  volume  = {4},
+  number  = {3},
+  pages   = {419--420},
+  year    = {1962},
+  doi     = {10.1080/00401706.1962.10490022}
+}
+
+@book{strang2016,
+  author    = {Strang, Gilbert},
+  title     = {Introduction to Linear Algebra},
+  edition   = {5},
+  publisher = {Wellesley-Cambridge Press},
+  address   = {Wellesley, MA},
+  year      = {2016},
+  isbn      = {978-0-9802327-7-6},
+  note      = {Companion video lectures (MIT 18.06) are free on MIT OpenCourseWare}
+}
+
+% ---- AI tools for coding (Chapter 14) ----------------------------------------
+
+@inproceedings{vaswani2017,
+  author    = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N. and Kaiser, {\L}ukasz and Polosukhin, Illia},
+  title     = {Attention Is All You Need},
+  booktitle = {Advances in Neural Information Processing Systems 30 (NeurIPS 2017)},
+  pages     = {5998--6008},
+  year      = {2017},
+  eprint    = {1706.03762},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/1706.03762},
+  note      = {Free on arXiv and in the NeurIPS proceedings}
+}
+
+@inproceedings{brown2020,
+  author    = {Brown, Tom B. and Mann, Benjamin and Ryder, Nick and Subbiah, Melanie and Kaplan, Jared and Dhariwal, Prafulla and Neelakantan, Arvind and Shyam, Pranav and Sastry, Girish and Askell, Amanda and others},
+  title     = {Language Models are Few-Shot Learners},
+  booktitle = {Advances in Neural Information Processing Systems 33 (NeurIPS 2020)},
+  pages     = {1877--1901},
+  year      = {2020},
+  eprint    = {2005.14165},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2005.14165},
+  note      = {The GPT-3 paper; introduces in-context (few-shot) learning}
+}
+
+@misc{chen2021,
+  author        = {Chen, Mark and Tworek, Jerry and Jun, Heewoo and Yuan, Qiming and Pinto, Henrique Ponde de Oliveira and Kaplan, Jared and Edwards, Harri and Burda, Yuri and Joseph, Nicholas and Brockman, Greg and others},
+  title         = {Evaluating Large Language Models Trained on Code},
+  year          = {2021},
+  eprint        = {2107.03374},
+  archiveprefix = {arXiv},
+  url           = {https://arxiv.org/abs/2107.03374},
+  note          = {The Codex paper: HumanEval benchmark and the unbiased pass@k estimator (Section 2.1, Figure 3)}
+}
+
+@inproceedings{sennrich2016,
+  author    = {Sennrich, Rico and Haddow, Barry and Birch, Alexandra},
+  title     = {Neural Machine Translation of Rare Words with Subword Units},
+  booktitle = {Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL 2016)},
+  pages     = {1715--1725},
+  year      = {2016},
+  doi       = {10.18653/v1/P16-1162},
+  note      = {Introduces byte-pair encoding for subword tokenisation. Open access (ACL Anthology)}
+}
+
+@inproceedings{holtzman2020,
+  author    = {Holtzman, Ari and Buys, Jan and Du, Li and Forbes, Maxwell and Choi, Yejin},
+  title     = {The Curious Case of Neural Text Degeneration},
+  booktitle = {International Conference on Learning Representations (ICLR 2020)},
+  year      = {2020},
+  eprint    = {1904.09751},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/1904.09751},
+  note      = {Introduces nucleus (top-p) sampling}
+}
+
+@inproceedings{wei2022,
+  author    = {Wei, Jason and Wang, Xuezhi and Schuurmans, Dale and Bosma, Maarten and Ichter, Brian and Xia, Fei and Chi, Ed and Le, Quoc and Zhou, Denny},
+  title     = {Chain-of-Thought Prompting Elicits Reasoning in Large Language Models},
+  booktitle = {Advances in Neural Information Processing Systems 35 (NeurIPS 2022)},
+  year      = {2022},
+  eprint    = {2201.11903},
+  archiveprefix = {arXiv},
+  url       = {https://arxiv.org/abs/2201.11903}
+}
+
+@misc{peng2023,
+  author        = {Peng, Sida and Kalliamvakou, Eirini and Cihon, Peter and Demirer, Mert},
+  title         = {The Impact of {AI} on Developer Productivity: Evidence from {GitHub} {Copilot}},
+  year          = {2023},
+  eprint        = {2302.06590},
+  archiveprefix = {arXiv},
+  doi           = {10.48550/arXiv.2302.06590},
+  note          = {Randomised controlled trial: the Copilot group implemented an HTTP server 55.8\% faster}
+}
+
+@misc{becker2025,
+  author        = {Becker, Joel and Rush, Nate and Barnes, Elizabeth and Rein, David},
+  title         = {Measuring the Impact of Early-2025 {AI} on Experienced Open-Source Developer Productivity},
+  year          = {2025},
+  eprint        = {2507.09089},
+  archiveprefix = {arXiv},
+  doi           = {10.48550/arXiv.2507.09089},
+  note          = {METR randomised controlled trial: 16 developers, 246 real tasks; allowing AI increased completion time by 19\%}
+}
+
+@inproceedings{pearce2022,
+  author    = {Pearce, Hammond and Ahmad, Baleegh and Tan, Benjamin and Dolan-Gavitt, Brendan and Karri, Ramesh},
+  title     = {Asleep at the Keyboard? Assessing the Security of {GitHub} {Copilot}'s Code Contributions},
+  booktitle = {2022 IEEE Symposium on Security and Privacy (SP)},
+  pages     = {754--768},
+  year      = {2022},
+  doi       = {10.1109/SP46214.2022.9833571},
+  note      = {Free preprint: arXiv:2108.09293. Reprinted in Communications of the ACM 68(2), 2025}
+}
+
+@inproceedings{spracklen2025,
+  author    = {Spracklen, Joseph and Wijewickrama, Raveen and Sakib, A H M Nazmus and Maiti, Anindya and Viswanath, Bimal and Jadliwala, Murtuza},
+  title     = {We Have a Package for You! A Comprehensive Analysis of Package Hallucinations by Code Generating {LLMs}},
+  booktitle = {34th USENIX Security Symposium (USENIX Security 25)},
+  pages     = {3687--3706},
+  year      = {2025},
+  url       = {https://www.usenix.org/conference/usenixsecurity25/presentation/spracklen},
+  note      = {Open access; also arXiv:2406.10279}
+}
+
+@misc{karpathy2025,
+  author       = {Karpathy, Andrej},
+  title        = {``There's a new kind of coding I call `vibe coding'\,''},
+  howpublished = {Post on X (formerly Twitter), 2 February 2025},
+  year         = {2025},
+  url          = {https://x.com/karpathy/status/1886192184808149383}
+}
+
+% ---- Appendix: finding sources -------------------------------------------------
+
+@misc{pep1,
+  author = {Warsaw, Barry and Hylton, Jeremy and Goodger, David and Coghlan, Alyssa},
+  title  = {{PEP} 1 -- {PEP} Purpose and Guidelines},
+  year   = {2000},
+  url    = {https://peps.python.org/pep-0001/}
+}
+
+@article{keshav2007,
+  author  = {Keshav, Srinivasan},
+  title   = {How to Read a Paper},
+  journal = {ACM SIGCOMM Computer Communication Review},
+  volume  = {37},
+  number  = {3},
+  pages   = {83--84},
+  year    = {2007},
+  doi     = {10.1145/1273445.1273458},
+  note    = {Two pages; free author copy widely available}
 }

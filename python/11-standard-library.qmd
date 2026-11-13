@@ -1,0 +1,602 @@
+# The standard library {#sec-ch-stdlib}
+
+> *"Python comes with 'batteries included'."* — the Python documentation's
+> traditional description of its standard library (PEP 206 [@pep206]).
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- find your way in the **standard library** and its documentation;
+- use **`sys`** to inspect the interpreter and to read **command-line
+  arguments**, and build a proper command-line interface with `argparse`;
+- use **`os`** (and `pathlib`) to interact with the operating system: working
+  directory, files and folders, environment variables;
+- measure and represent time with **`time`**: the Unix epoch, wall-clock vs
+  monotonic clocks, the year-2038 problem;
+- compute with dates and times using **`datetime`** and `zoneinfo`, and
+  **prove** the formulas for counting leap years and for the day of the week;
+- use **`math`** correctly, and **prove** how rounding errors accumulate in a
+  sum — and why `math.fsum` fixes it;
+- know the other "batteries" you will use constantly: `collections`,
+  `itertools`, `random`, `statistics`, `logging`, `re`.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 11.1 *Introduction to the standard library*. Practice: 11.2 *The `sys`
+module* · 11.3 *Command-line arguments with `sys`* · 11.4 *The `os` module* ·
+11.5 *The `time` module* · 11.6 *The `datetime` module* · 11.7 *The `math`
+module*.
+:::
+
+## Intuition: a toolbox that comes with the house
+
+When you install Python you also get more than 200 modules written, tested and
+maintained by the core developers: the **standard library**. Before writing a
+function to parse dates, compute a mean, or walk a directory tree, check
+whether the standard library already does it — it usually does, and its
+version handles the corner cases you have not thought of. The reference is the
+*Python Standard Library* documentation [@pythonlibrary]; its table of contents
+is worth skimming once, just to know what exists.
+
+## `sys`: the interpreter itself {#sec-sys}
+
+`sys` gives access to the running interpreter:
+
+```{python}
+import sys
+print(sys.version_info[:3], sys.platform)       # which Python, which OS
+print(sys.executable.endswith(("python", "python3", "python.exe")) or sys.executable)
+print(sys.getrecursionlimit(), sys.maxsize == 2**63 - 1)   # recursion limit; largest list index on 64-bit
+print(sys.getsizeof(0), sys.getsizeof(2**100), sys.getsizeof([]))   # bytes of object headers
+print(type(sys.stdout).__name__, sys.float_info.dig)        # standard streams; float precision in digits
+```
+
+Other frequently used members: `sys.path` (module search path,
+@sec-modules), `sys.modules` (import cache), `sys.stdin`, `sys.stdout`,
+`sys.stderr` (standard streams; error messages belong on `stderr`), and
+`sys.exit(code)`, which ends the program by raising `SystemExit` — exit code
+`0` means success, any other value failure, a convention scripts and CI systems
+rely on.
+
+### Command-line arguments {#sec-argv}
+
+When a script is started as `python greet.py Ada --times 3`, the words after
+the interpreter are in **`sys.argv`**, a list of strings whose first element is
+the script name:
+
+```{python}
+import subprocess, tempfile, textwrap
+from pathlib import Path
+
+tmp = Path(tempfile.mkdtemp())
+(tmp / "show_args.py").write_text(textwrap.dedent('''
+    import sys
+    print("argv =", sys.argv)
+    if len(sys.argv) < 2:
+        print("usage: show_args.py NAME [TIMES]", file=sys.stderr)
+        sys.exit(2)                                   # non-zero = error
+    name = sys.argv[1]
+    times = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    for _ in range(times):
+        print("Hello,", name)
+'''), encoding="utf-8")
+
+for args in [["Ada", "2"], []]:
+    r = subprocess.run([sys.executable, "show_args.py", *args], cwd=tmp,
+                       capture_output=True, text=True)
+    print(r.stdout.strip(), "| stderr:", r.stderr.strip(), "| exit code:", r.returncode)
+```
+
+Parsing `sys.argv` by hand quickly becomes messy (optional flags, defaults,
+types, help messages). The standard `argparse` module does it declaratively
+and generates `--help` automatically:
+
+```{python}
+import argparse
+
+parser = argparse.ArgumentParser(prog="phonebook", description="Terminal phone book")
+parser.add_argument("file", help="path of the JSON phone-book file")
+parser.add_argument("--search", metavar="TEXT", help="print matching contacts and exit")
+parser.add_argument("-v", "--verbose", action="store_true", help="more output")
+parser.add_argument("--limit", type=int, default=10, help="max results (default: 10)")
+
+args = parser.parse_args(["book.json", "--search", "ada", "-v"])   # in a real script: parse_args()
+print(args)
+print(args.file, args.search, args.verbose, args.limit)
+parser.print_help()
+```
+
+## `os`: the operating system {#sec-os}
+
+`os` is a portable interface to operating-system services [@pythonlibrary]:
+
+```{python}
+import os
+print(os.name, os.sep, repr(os.linesep))          # 'posix' or 'nt'; path separator; line ending
+print(os.path.isdir(os.getcwd()))                 # current working directory
+os.makedirs(tmp / "a" / "b", exist_ok=True)       # create nested directories
+(tmp / "a" / "b" / "note.txt").write_text("hi", encoding="utf-8")
+for root, dirs, files in os.walk(tmp):            # walk the directory tree
+    level = len(Path(root).relative_to(tmp).parts)
+    print("  " * level + (Path(root).name or "."), files)
+print(os.path.getsize(tmp / "a" / "b" / "note.txt"), "bytes")
+os.remove(tmp / "a" / "b" / "note.txt")
+```
+
+### Environment variables
+
+Every process inherits a set of **environment variables** (key–value strings):
+`PATH`, `HOME`, `LANG`, … Read them with `os.environ` or `os.getenv`. This is
+the standard place for **configuration and secrets** — for example the API keys
+you will need for language-model APIs later in the course: **never write a
+secret in the source code** (it ends up on GitHub), read it from the
+environment.
+
+```{python}
+os.environ["PHONEBOOK_FILE"] = "book.json"        # set (for this process and its children)
+print(os.getenv("PHONEBOOK_FILE"), os.getenv("SURELY_UNDEFINED", "default value"))
+```
+
+`os.path` and `pathlib` overlap; for new code prefer `pathlib`
+(@sec-paths), and use `os` for processes, environment and low-level file
+operations (`os.replace`, `os.fsync`, @sec-atomic-writes).
+
+## `time`: measuring time {#sec-time}
+
+### The Unix epoch
+
+Computers usually represent an instant as the number of seconds elapsed since a
+reference instant, the **epoch**. On all platforms Python uses the **Unix
+epoch**, 1 January 1970, 00:00:00 UTC. `time.time()` returns the current
+**POSIX timestamp** as a float. POSIX time pretends that every day has exactly
+86,400 seconds, i.e. it **ignores leap seconds** [@posixtime]; this makes date
+arithmetic simple at the cost of being off by the (currently 27) leap seconds
+inserted since 1972.
+
+```{python}
+import time
+now = time.time()
+print(f"{now:.3f} seconds since the epoch ≈ {now / (365.2425 * 86400):.2f} years")
+print(time.gmtime(0))                              # the epoch itself, broken down in UTC
+print(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(1_000_000_000)))
+```
+
+::: {#exm-y2038}
+## The year-2038 problem
+Many older systems store timestamps in a **signed 32-bit integer**
+(@sec-twos-complement), whose maximum is $2^{31} - 1 = 2{,}147{,}483{,}647$.
+Adding that many seconds to the epoch:
+$$
+\frac{2^{31}-1}{86400} = 24855.13\ldots \text{ days} \approx 68.05 \text{ years},
+$$
+which lands on **19 January 2038, 03:14:07 UTC**. One second later the counter
+**overflows** to $-2^{31}$, i.e. 13 December 1901. Python's own integers do not
+overflow, but files, databases and embedded devices using 32-bit `time_t` do.
+:::
+
+```{python}
+import datetime as dt
+print(dt.datetime.fromtimestamp(2**31 - 1, dt.timezone.utc))
+print(dt.datetime.fromtimestamp(-2**31, dt.timezone.utc))
+```
+
+### Which clock to use
+
+| Function | What it measures | Use it for |
+|---|---|---|
+| `time.time()` | wall-clock time since the epoch | timestamps ("when did it happen?") |
+| `time.monotonic()` | a clock that **never goes backwards** | timeouts, durations |
+| `time.perf_counter()` | monotonic, highest resolution | benchmarking code |
+| `time.process_time()` | CPU time of this process | CPU cost, excluding sleep |
+| `time.sleep(s)` | — | pause the program |
+
+The wall clock can **jump**: the operating system adjusts it via NTP, the user
+changes it, daylight-saving rules apply in local time. A duration computed as
+the difference of two `time.time()` values can therefore be wrong, even
+negative. Monotonic clocks were introduced in Python 3.3 precisely for this
+(PEP 418 [@pep418]).
+
+```{python}
+start = time.perf_counter()
+total = sum(i * i for i in range(300_000))
+elapsed = time.perf_counter() - start
+print(f"computed in {elapsed * 1000:.1f} ms")
+```
+
+## `datetime`: dates, times and time zones {#sec-datetime}
+
+### The types
+
+| Type | Represents | Example |
+|---|---|---|
+| `date` | a calendar date | `date(2026, 11, 13)` |
+| `time` | a time of day | `time(18, 30)` |
+| `datetime` | date + time (+ optional time zone) | `datetime(2026, 11, 13, 18, 30)` |
+| `timedelta` | a duration | `timedelta(days=3, hours=2)` |
+| `timezone` / `zoneinfo.ZoneInfo` | a UTC offset / an IANA time zone | `ZoneInfo("Europe/Rome")` |
+
+```{python}
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+d = date(2026, 11, 13)
+print(d, d.weekday(), d.isoweekday(), d.strftime("%A %d %B %Y"))   # Monday = 0 / 1
+print(d + timedelta(days=100), date(2027, 1, 1) - d)               # date arithmetic
+deadline = datetime(2026, 12, 24, 18, 0, tzinfo=ZoneInfo("Europe/Rome"))
+print(deadline.isoformat(), "=", deadline.astimezone(timezone.utc).isoformat())
+print(datetime.strptime("13/11/2026 18:29", "%d/%m/%Y %H:%M"))      # parse text with a format
+print(datetime.fromisoformat("2026-11-13T18:29:00+01:00").utcoffset())
+```
+
+### Naive and aware datetimes
+
+A `datetime` **without** `tzinfo` is **naive**: it does not say which time zone
+it refers to, so it cannot be compared reliably with times elsewhere. One
+**with** `tzinfo` is **aware**. Rules of thumb:
+
+- store and compute in **UTC** (aware), convert to local time only for display;
+- use `zoneinfo.ZoneInfo` with IANA names such as `"Europe/Rome"` (PEP 615
+  [@pep615]), which know the historical daylight-saving rules;
+- exchange dates as **ISO 8601** strings (`2026-11-13T18:29:00+01:00`)
+  [@iso8601], which sort correctly as text.
+
+```{python}
+rome = ZoneInfo("Europe/Rome")
+before = datetime(2026, 3, 29, 1, 30, tzinfo=rome)        # DST starts at 02:00 that night
+after = before + timedelta(hours=1)                       # naive wall-clock arithmetic in the zone
+print(before.utcoffset(), after, after.utcoffset())
+real = (before.astimezone(timezone.utc) + timedelta(hours=1)).astimezone(rome)
+print(real)                                               # one REAL hour later: 03:30 local time
+```
+
+Adding a `timedelta` to an aware `datetime` moves the **wall clock** (it gave
+02:30, a time that does not exist that night); converting to UTC first gives
+the **elapsed-time** answer. This is the kind of subtlety that makes "store in
+UTC" a rule.
+
+### Counting leap years and finding the weekday
+
+The `datetime` module uses the **proleptic Gregorian calendar**: the
+Gregorian rules (@sec-leap-years) extended backwards to year 1. Two formulas
+underpin all its date arithmetic.
+
+::: {#thm-leap-count}
+## Number of leap years
+The number of leap years among $1, 2, \dots, y$ is
+$$
+L(y) = \Big\lfloor \frac y4 \Big\rfloor - \Big\lfloor \frac y{100}\Big\rfloor + \Big\lfloor\frac{y}{400}\Big\rfloor .
+$$
+:::
+
+*In one line:* count the multiples of 4, remove the multiples of 100, put back
+the multiples of 400 (**inclusion–exclusion**).
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-leap-count
+For a positive integer $d$, the multiples of $d$ in $\{1,\dots,y\}$ are
+$d, 2d, \dots, qd$ with $qd \le y < (q+1)d$, i.e. $q = \lfloor y/d\rfloor$ of
+them. Let $A_d$ be that set. The leap years are
+$A_4 \setminus (A_{100}\setminus A_{400})$ (divisible by 4, but not "divisible
+by 100 and not by 400"). Since $A_{400}\subseteq A_{100} \subseteq A_4$,
+$$
+|A_4 \setminus (A_{100}\setminus A_{400})| = |A_4| - |A_{100}\setminus A_{400}| = |A_4| - (|A_{100}| - |A_{400}|),
+$$
+using $|X \setminus Y| = |X| - |Y|$ when $Y \subseteq X$. $\blacksquare$
+:::
+
+::: {#thm-weekday}
+## Weekday of 1 January
+Numbering weekdays $0 = $ Monday, …, $6 = $ Sunday, and given that 1 January of
+year 1 (proleptic Gregorian) was a Monday, 1 January of year $y$ falls on
+weekday
+$$
+w(y) = \big(y - 1 + L(y-1)\big) \bmod 7 .
+$$
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-weekday
+Between 1 January of year 1 and 1 January of year $y$ lie the complete years
+$1, \dots, y-1$: $y - 1$ years of 365 days plus one extra day for each leap
+year, $D = 365(y-1) + L(y-1)$ days. The weekday advances by $D \bmod 7$. Since
+$365 = 52\cdot7 + 1 \equiv 1 \pmod 7$, $D \equiv (y-1) + L(y-1) \pmod 7$, and
+starting from Monday ($0$) we get $w(y)$. $\blacksquare$
+
+A **400-year Gregorian cycle** has $400\cdot365 + L(400) = 146097$ days,
+which is exactly $20871$ weeks: the calendar repeats every 400 years, weekdays
+included.
+:::
+
+```{python}
+L = lambda y: y // 4 - y // 100 + y // 400
+w = lambda y: (y - 1 + L(y - 1)) % 7
+print(L(2026), w(2026), date(2026, 1, 1).weekday())
+print(all(w(y) == date(y, 1, 1).weekday() for y in range(1, 10_000)))   # check against datetime
+print((400 * 365 + L(400)) / 7)                                       # 400 years = whole weeks
+```
+
+## `math`: mathematical functions {#sec-math-module}
+
+`math` provides functions on floats (and integers) implemented in C
+[@pythonlibrary]:
+
+```{python}
+import math
+print(math.pi, math.e, math.tau, math.inf, math.nan)
+print(math.sqrt(2), math.isqrt(10**20 + 1), math.hypot(3, 4))      # isqrt: exact integer sqrt
+print(math.floor(-2.5), math.ceil(-2.5), math.trunc(-2.5))
+print(math.log(math.e), math.log2(1024), math.log10(1e-3), math.log(8, 2))
+print(math.factorial(20), math.comb(52, 5), math.perm(10, 3))
+print(math.gcd(252, 105), math.lcm(4, 6), math.prod([1, 2, 3, 4]))
+print(math.sin(math.pi / 6), math.degrees(math.pi), math.radians(180))
+print(math.isclose(0.1 + 0.2, 0.3), math.isfinite(1e308 * 10))
+```
+
+Two of these are combinatorial counts that will be everywhere in probability
+and machine learning:
+
+::: {#thm-comb}
+## Permutations and combinations
+The number of ordered selections of $k$ distinct items out of $n$ is
+$P(n,k) = \frac{n!}{(n-k)!}$; the number of unordered ones (subsets of size
+$k$) is $\binom nk = \frac{n!}{k!\,(n-k)!}$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-comb
+Ordered: $n$ choices for the first item, $n-1$ for the second, …, $n-k+1$ for
+the $k$-th: $n(n-1)\cdots(n-k+1) = n!/(n-k)!$ (product rule). Unordered: each
+subset of size $k$ can be ordered in $k!$ ways (that is $P(k,k)$), and every
+ordered selection arises from exactly one subset, so
+$P(n,k) = k!\binom nk$. $\blacksquare$ For a poker hand,
+$\binom{52}{5} = 2{,}598{,}960$, as printed above.
+:::
+
+### Why `math.fsum` exists: error in floating-point sums
+
+Recall the model of @thm-rounding-error: each floating-point addition returns
+$\mathrm{fl}(a+b) = (a+b)(1+\delta)$ with $|\delta| \le u = 2^{-53}$. What
+happens when we add $n$ numbers?
+
+::: {#lem-gamma}
+## Accumulated rounding factors
+If $|\delta_k| \le u$ for $k = 1,\dots,m$ and $mu < 1$, then
+$\prod_{k=1}^m (1+\delta_k) = 1 + \theta_m$ with
+$|\theta_m| \le \gamma_m := \dfrac{mu}{1 - mu}$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @lem-gamma
+Upper bound: $\prod(1+\delta_k) \le (1+u)^m$. Since $(1+u)(1-u) = 1-u^2 \le 1$,
+$(1+u)^m \le (1-u)^{-m}$, and by **Bernoulli's inequality**
+$(1-u)^m \ge 1 - mu$ (induction: $(1-u)^{m+1} \ge (1-mu)(1-u) \ge 1-(m+1)u$),
+so $(1+u)^m \le \frac{1}{1-mu} = 1 + \gamma_m$. Lower bound:
+$\prod(1+\delta_k) \ge (1-u)^m \ge 1 - mu \ge 1 - \gamma_m$. Hence
+$|\theta_m| \le \gamma_m$. $\blacksquare$ (This is Lemma 3.1 of @higham2002.)
+:::
+
+::: {#thm-sum-error}
+## Error of recursive summation
+Computing $s = x_1 + \dots + x_n$ left to right in floating point gives
+$\hat s$ with
+$$
+|\hat s - s| \le \gamma_{n-1}\sum_{i=1}^{n} |x_i| \approx (n-1)\,u\sum_{i=1}^n|x_i| .
+$$
+:::
+
+*In one line:* each of the $n-1$ additions can lose a relative $u$ of the
+partial sum, so the worst-case error grows linearly with $n$ — and is measured
+against $\sum|x_i|$, which can be much larger than $|s|$ when terms cancel.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-sum-error
+Let $\hat s_1 = x_1$ and $\hat s_k = (\hat s_{k-1} + x_k)(1+\delta_k)$ for
+$k = 2..n$, $|\delta_k|\le u$. Unrolling,
+$$
+\hat s_n = x_1\prod_{k=2}^n(1+\delta_k) + x_2\prod_{k=2}^{n}(1+\delta_k) + x_3\prod_{k=3}^{n}(1+\delta_k) + \dots + x_n(1+\delta_n).
+$$
+Each $x_i$ is multiplied by a product of at most $n-1$ factors, which by
+@lem-gamma equals $1 + \theta^{(i)}$ with $|\theta^{(i)}| \le \gamma_{n-1}$
+(since $\gamma_m$ increases with $m$). So
+$\hat s_n - s = \sum_i x_i\theta^{(i)}$ and
+$|\hat s_n - s| \le \gamma_{n-1}\sum_i|x_i|$. $\blacksquare$
+:::
+
+Two remedies exist. **Kahan's compensated summation** [@kahan1965] keeps a
+running correction term that captures the low-order bits lost at each
+addition; its error bound is $2u\sum|x_i| + O(nu^2)\sum|x_i|$, essentially
+independent of $n$ [@higham2002, §4.3]. `math.fsum` goes further: using
+Shewchuk's algorithm [@shewchuk1997] it keeps the partial sums **exactly** (as
+a list of non-overlapping floats) and rounds only once at the end, so the
+result is the correctly rounded exact sum. Since **Python 3.12** even the
+built-in `sum()` uses a compensated algorithm (Neumaier's improvement of Kahan's
+[@neumaier1974]) when adding floats; the error analysis above applies to the
+plain loop `s += x`, which is what most other languages — and Python before
+3.12 — do.
+
+```{python}
+def kahan_sum(xs):
+    s = 0.0
+    c = 0.0                       # compensation: the low-order bits lost so far
+    for x in xs:
+        y = x - c                 # add back what was lost last time
+        t = s + y                 # big + small: low-order bits of y are lost here...
+        c = (t - s) - y           # ...and recovered algebraically here
+        s = t
+    return s
+
+def naive_sum(xs):
+    s = 0.0
+    for x in xs:                  # recursive summation, exactly as analysed in the theorem
+        s += x
+    return s
+
+xs = [0.1] * 10_000_000
+print(f"naive loop: {naive_sum(xs)!r}")
+print(f"kahan:      {kahan_sum(xs)!r}")
+print(f"fsum:       {math.fsum(xs)!r}")
+print(f"built-in:   {sum(xs)!r}")    # Python >= 3.12: sum() of floats is compensated too
+big = [1e16, 1.0, -1e16]
+print(naive_sum(big), kahan_sum(big), math.fsum(big), sum(big))   # the 1.0 is lost only by the naive loop
+```
+
+## Other batteries you will use {#sec-other-batteries}
+
+| Module | What for | Example |
+|---|---|---|
+| `collections` | `Counter`, `defaultdict`, `deque`, `namedtuple` | word counts, queues |
+| `itertools` | combinatorial iterators: `product`, `permutations`, `combinations`, `chain`, `groupby` | grid search over hyper-parameters |
+| `functools` | `lru_cache`, `partial`, `reduce`, `total_ordering` | memoisation (@sec-recursion) |
+| `random` | pseudo-random numbers, `shuffle`, `sample`, `choice` | train/test splits |
+| `statistics` | `mean`, `median`, `stdev`, `correlation` | quick descriptive statistics |
+| `logging` | configurable diagnostic messages | instead of `print` in real programs |
+| `re` | regular expressions | validating phone numbers and e-mails |
+| `json`, `csv`, `pathlib` | files (@sec-ch-files) | |
+| `unittest`, `doctest` | testing | @sec-docstrings-functions |
+| `sqlite3` | an embedded SQL database | a more scalable phone book |
+
+```{python}
+from collections import Counter, deque
+import itertools, random, statistics, re
+
+print(Counter("mississippi").most_common(2))
+q = deque([1, 2, 3]); q.appendleft(0); q.pop(); print(q)           # O(1) at both ends
+print(list(itertools.combinations("ABC", 2)), len(list(itertools.product(range(3), repeat=4))))
+
+random.seed(42)                                   # reproducibility: same seed, same sequence
+print([random.randint(1, 6) for _ in range(5)], random.sample(range(100), 3))
+print(statistics.mean([2, 4, 4, 4, 5, 5, 7, 9]), statistics.pstdev([2, 4, 4, 4, 5, 5, 7, 9]))
+phone = re.compile(r"^\+?\d[\d ]{5,17}\d$")       # optional +, digits and spaces
+print([bool(phone.match(s)) for s in ["+39 333 1234567", "12ab", "0612345678"]])
+```
+
+`random` uses the **Mersenne Twister** generator [@matsumoto1998]: fast,
+with period $2^{19937} - 1$ and excellent statistical properties — but
+**predictable** from its outputs, so never use it for passwords or tokens; use
+the `secrets` module instead. Seeding (`random.seed(42)`) makes experiments
+**reproducible**, a theme that returns in every machine-learning chapter.
+
+::: {.project-link}
+**In the project.** The phone book imports `json` (persistence), `os`
+(`os.path.exists` to check whether the file exists before loading) and
+`inspect` (to read the parameters of `Contatto.__init__` for serialisation).
+Natural extensions, all from the standard library: a command-line interface
+with `argparse` (`phonebook book.json --search Rossi`), the file path taken from
+an environment variable, `datetime` for a "last modified" field, `re` for
+validating phone numbers, `logging` instead of `print` for diagnostics, and
+`sqlite3` if the phone book outgrows a JSON file.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Measuring durations with `time.time()`**: use `time.perf_counter()` or
+  `time.monotonic()`.
+- **Naive datetimes** mixed with aware ones (`TypeError: can't compare
+  offset-naive and offset-aware datetimes`), or naive local times stored in
+  databases. Store UTC.
+- **`datetime.utcnow()`** returns a *naive* datetime (and is deprecated since
+  3.12): use `datetime.now(timezone.utc)`.
+- **`sys.argv` elements are strings**: convert and validate them.
+- **Secrets in source code**: read them from environment variables.
+- **`random` for security**: use `secrets`.
+- **Summing many floats with a plain loop** when accuracy matters: use
+  `math.fsum` (and remember that before Python 3.12 the built-in `sum` was a
+  plain loop too).
+:::
+
+## Summary
+
+- The standard library is large and reliable: look there first.
+- `sys` exposes the interpreter (`argv`, `path`, `exit`, streams); `argparse`
+  builds real command-line interfaces.
+- `os` (with `pathlib`) handles directories, files and environment variables.
+- `time` counts seconds since the Unix epoch (ignoring leap seconds); use
+  monotonic clocks for durations; 32-bit timestamps overflow in 2038.
+- `datetime` + `zoneinfo` handle calendars and time zones; store in UTC; leap
+  years are counted by inclusion–exclusion, $L(y) = \lfloor y/4\rfloor -
+  \lfloor y/100\rfloor + \lfloor y/400\rfloor$.
+- `math` provides functions and exact integer tools; naive summation error
+  grows like $(n-1)u\sum|x_i|$, `math.fsum` is exact up to the final rounding.
+
+## Exercises
+
+::: {#exr-ch11-age}
+Write `age(birth: date, today: date) -> int` returning the age in completed
+years. Test it on a birthday, the day before, and a birth on 29 February.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def age(birth, today):
+    return today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+```
+The tuple comparison (@thm-lex-order) subtracts 1 if this year's birthday has
+not arrived yet; a person born on 29 February turns one year older on 1 March
+in non-leap years under this rule.
+:::
+
+::: {#exr-ch11-days}
+Using @thm-leap-count, compute the number of days between 1 January 1900 and
+1 January 2000 by hand, then check with `date(2000,1,1) - date(1900,1,1)`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Years 1900…1999: $100 \cdot 365 + (L(1999) - L(1899))$. $L(1999) = 499 - 19 + 4 = 484$,
+$L(1899) = 474 - 18 + 4 = 460$, difference $24$ (1900 is not leap; 1904…1996 are
+24 leap years). Total $36500 + 24 = 36524$ days.
+:::
+
+::: {#exr-ch11-cli}
+Turn the `ask_int` menu of @sec-try into a script that accepts `--file PATH`
+and `--verbose` via `argparse`, and exits with code 1 if the file does not
+exist.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+import argparse, sys
+from pathlib import Path
+p = argparse.ArgumentParser()
+p.add_argument("--file", type=Path, required=True)
+p.add_argument("--verbose", action="store_true")
+a = p.parse_args()
+if not a.file.exists():
+    print(f"error: {a.file} not found", file=sys.stderr)
+    sys.exit(1)
+```
+:::
+
+::: {#exr-ch11-sum}
+Explain, using @thm-sum-error, why the plain loop `naive_sum([1e16, 1.0, -1e16])`
+returns `0.0`. Which ordering of the three terms gives the right answer with
+naive summation?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$10^{16} + 1$ is not representable (spacing of doubles near $10^{16}$ is 2,
+@thm-rounding-error), so it rounds to $10^{16}$ (tie to even) and the 1 is
+lost; then $10^{16} - 10^{16} = 0$. The bound $\gamma_2 \cdot (2\cdot10^{16}+1)$
+is about 4.4, consistent with an error of 1. Order `[1e16, -1e16, 1.0]` cancels
+the large terms first and gives 1.0.
+:::
+
+## Further reading {.unnumbered}
+
+- @pythonlibrary — the modules `sys`, `os`, `time`, `datetime`, `zoneinfo`,
+  `math`, `argparse`, `collections`, `itertools`, `random`, `statistics`. The
+  *Brief Tour of the Standard Library* in @pythontutorial (§10–11) is a good
+  first read.
+- @higham2002, Chapter 4 — summation, with the proofs for recursive and
+  compensated summation.
+- @reingold2018, *Calendrical Calculations* — everything about calendars,
+  with algorithms.
+- @iso8601 (dates and times), PEP 418 (clocks), PEP 615 (`zoneinfo`).
+- @matsumoto1998 — the Mersenne Twister.

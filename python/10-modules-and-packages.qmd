@@ -1,0 +1,517 @@
+# Modularising code: modules and packages {#sec-ch-modules}
+
+> *"We propose instead that one begins with a list of difficult design
+> decisions or design decisions which are likely to change. Each module is then
+> designed to hide such a decision from the others."* — David L. Parnas
+> [@parnas1972].
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain why programs are split into **modules**, using the principles of
+  **information hiding**, **high cohesion** and **low coupling**;
+- create a module, import it in all the standard ways, and explain what
+  `import` actually does (`sys.path`, `sys.modules`, bytecode caching);
+- use the `if __name__ == "__main__":` idiom;
+- organise modules into **packages** with `__init__.py`, absolute and relative
+  imports, and a public interface (`__all__`);
+- model module dependencies as a **graph**, prove that an import order exists
+  iff there are no cycles, and avoid circular imports;
+- turn code into a **real, installable package** with `pyproject.toml`, build
+  a **wheel**, and install it in editable mode.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 10.1 *Introduction to modules*. Practice: 10.2 *Let's create a module* ·
+10.3 *Let's create a package* · 10.4 *Let's create a (real) package*.
+:::
+
+## Intuition: chapters of a book, bricks of a building
+
+A 10,000-line program in one file is like a novel with no chapters: nobody can
+find anything, and every change risks breaking something far away. Splitting it
+into **modules** — files with a clear purpose — is like dividing the novel into
+chapters, or a building into prefabricated bricks: each piece can be
+understood, tested and replaced on its own, as long as its **interface** (what
+it offers to the others) stays the same.
+
+## Why modularise: three principles {#sec-modularity}
+
+- **Information hiding** (Parnas, 1972). Parnas compared two decompositions of
+  the same program: one following the *steps of processing* (a flowchart), the
+  other hiding each *design decision likely to change* — the format of the
+  data, an algorithm — inside one module. Only the second let changes stay local
+  [@parnas1972]. In the phone book, "contacts are stored as JSON" is such a
+  decision: if only one module knows it, switching to CSV or SQLite touches only
+  that module.
+- **High cohesion**: everything inside a module belongs together (one
+  responsibility, @sec-solid).
+- **Low coupling**: modules depend on each other as little as possible, and
+  only through their public interfaces [@stevens1974].
+
+## Modules {#sec-modules}
+
+A **module** is simply a `.py` file; its name is the file name without `.py`.
+Everything defined at its top level — functions, classes, variables — becomes
+an **attribute** of the module object. Let us create one (in a temporary folder,
+writing the file from Python so that the example is reproducible):
+
+```{python}
+import sys, tempfile, textwrap
+from pathlib import Path
+
+project = Path(tempfile.mkdtemp())          # pretend this is the project folder
+(project / "geometry.py").write_text(textwrap.dedent('''
+    """Tiny geometry module: areas of simple shapes."""
+    import math
+
+    PI = math.pi                      # a module-level constant
+
+    def circle_area(r):
+        """Area of a circle of radius r."""
+        return PI * r ** 2
+
+    def square_area(side):
+        return side * side
+
+    print(f"  [geometry module executed, __name__ = {__name__!r}]")
+
+    if __name__ == "__main__":        # only when run as a script
+        print("  self-test:", circle_area(1), square_area(3))
+'''), encoding="utf-8")
+
+sys.path.insert(0, str(project))      # make the folder importable (see sys.path below)
+import geometry                        # executes geometry.py ONCE and creates the module object
+print(geometry.circle_area(2), geometry.PI)
+import geometry                        # second import: nothing printed - cached in sys.modules
+print("geometry" in sys.modules, geometry.__name__, Path(geometry.__file__).name)
+```
+
+### The forms of `import`
+
+```python
+import geometry                     # access as geometry.circle_area
+import geometry as geo              # alias: geo.circle_area
+from geometry import circle_area    # bind the name directly
+from geometry import circle_area as area
+from geometry import *              # imports all public names - AVOID in real code
+```
+
+`from module import *` pollutes your namespace and hides where names come from;
+PEP 8 discourages it [@pep8]. A module can restrict what `*` imports by
+defining `__all__ = ["circle_area", "square_area"]`, which also documents its
+**public interface**. Names starting with `_` are considered private and are
+not imported by `*`.
+
+### What `import` does
+
+When Python executes `import geometry` [@pythonreference, §5]:
+
+1. It checks the cache **`sys.modules`**; if the module is there, it simply
+   binds the name — the module code does **not** run again.
+2. Otherwise **finders** look for it, in order, in the directories of
+   **`sys.path`**: the directory of the running script (or the current
+   directory in the REPL/Jupyter), the directories in the `PYTHONPATH`
+   environment variable, the standard library, and **`site-packages`**, where
+   `pip` installs third-party packages (@sec-ch-pip).
+3. A **loader** creates a new module object, registers it in `sys.modules`,
+   and **executes the module's code** in the module's namespace.
+4. The name `geometry` is bound in the importer's namespace.
+
+Steps 2–3 were formalised by PEP 302 and PEP 451 [@pep451]. To save time,
+CPython caches the compiled **bytecode** (@sec-python-language) in a
+`__pycache__` folder (`geometry.cpython-313.pyc`, PEP 3147 [@pep3147]); it is
+recompiled automatically when the source changes. Never commit `__pycache__`
+to version control.
+
+```{python}
+print(sys.path[0] == str(project))
+print(any("site-packages" in p for p in sys.path))      # third-party packages live there
+print(sorted(p.name for p in project.iterdir()))       # __pycache__ appeared after the import
+```
+
+### `__name__` and `if __name__ == "__main__":` {#sec-main-guard}
+
+Every module has a `__name__` attribute. When imported, it is the module's
+name (`"geometry"`); when the file is **run as a script** (`python
+geometry.py` or `python -m geometry`), it is `"__main__"`. The idiom
+
+```python
+if __name__ == "__main__":
+    main()
+```
+
+therefore runs `main()` only when the file is executed directly, not when it
+is imported — so the same file can be both a reusable module and a program.
+
+```{python}
+import subprocess
+out = subprocess.run([sys.executable, "-m", "geometry"], cwd=project,
+                     capture_output=True, text=True)
+print(out.stdout)
+```
+
+## Packages {#sec-packages}
+
+A **package** is a directory of modules (and sub-packages), giving a
+hierarchical namespace: `phonebook.storage.json_store`. A directory becomes a
+regular package by containing an `__init__.py` file, which runs when the
+package is first imported and typically defines the package's public
+interface.
+
+```text
+phonebook/                  ← package
+├── __init__.py             ← runs on "import phonebook"; re-exports the public API
+├── models.py               ← Contact (domain)
+├── book.py                 ← PhoneBook (domain)
+├── storage.py              ← JSON load/save (persistence: hides the file format)
+└── cli.py                  ← the interactive menu (user interface)
+```
+
+```{python}
+pkg = project / "phonebook"
+pkg.mkdir()
+(pkg / "__init__.py").write_text(textwrap.dedent('''
+    """phonebook: a tiny contact manager."""
+    from .models import Contact          # relative import: '.' = this package
+    from .book import PhoneBook
+    __all__ = ["Contact", "PhoneBook"]
+    __version__ = "0.1.0"
+'''), encoding="utf-8")
+(pkg / "models.py").write_text(textwrap.dedent('''
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True, order=True)
+    class Contact:
+        surname: str
+        name: str
+        phone: str
+'''), encoding="utf-8")
+(pkg / "book.py").write_text(textwrap.dedent('''
+    from .models import Contact
+
+    class PhoneBook:
+        def __init__(self):
+            self._contacts: set[Contact] = set()
+        def add(self, c: Contact) -> bool:
+            if c in self._contacts:
+                return False
+            self._contacts.add(c)
+            return True
+        def __iter__(self):
+            return iter(sorted(self._contacts))
+'''), encoding="utf-8")
+
+import phonebook
+from phonebook import Contact, PhoneBook
+book = PhoneBook()
+print(book.add(Contact("Lovelace", "Ada", "1")), book.add(Contact("Lovelace", "Ada", "1")))
+print(list(book), phonebook.__version__, phonebook.__all__)
+print(sorted(m for m in sys.modules if m.startswith("phonebook")))
+```
+
+**Absolute vs relative imports.** Inside a package, `from .models import
+Contact` (relative: `.` is the current package, `..` the parent) and `from
+phonebook.models import Contact` (absolute) are equivalent. PEP 8 recommends
+absolute imports in general; relative imports are convenient inside a package
+because they survive renaming it [@pep328].
+
+**Namespace packages.** Since Python 3.3 a directory *without* `__init__.py`
+can still be imported as a *namespace package* (PEP 420 [@pep420]), mainly to
+split one package across several distributions. For your own code, include
+`__init__.py`.
+
+## Module dependencies form a graph {#sec-import-graph}
+
+If module `A` imports `B`, draw an arrow $A \to B$. The modules of a program
+and their imports form a **directed graph**. For the package above:
+`__init__ → models`, `__init__ → book`, `book → models`. To import `A`, its
+dependencies must be importable first: we need an order in which each module
+comes **after** everything it depends on. Such an order is a **topological
+order** (of the reversed arrows).
+
+::: {#thm-toposort}
+## Topological orders exist exactly for acyclic graphs
+A finite directed graph admits a topological order (a listing of the vertices
+in which every edge goes from an earlier to a later vertex) **if and only if**
+it has no directed cycle.
+:::
+
+*In one line:* a cycle can never be laid out left-to-right; without cycles,
+there is always some vertex with no incoming edges to put first.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-toposort
+($\Rightarrow$) If $v_1 \to v_2 \to \dots \to v_k \to v_1$ were a cycle, a
+topological order would need $v_1$ before $v_2$, …, $v_k$ before $v_1$, so
+$v_1$ before itself: impossible.
+
+($\Leftarrow$) **Lemma**: a finite acyclic graph with at least one vertex has a
+vertex with no incoming edges (a *source*). Indeed, start anywhere and walk
+*backwards* along incoming edges. If every vertex had an incoming edge we could
+walk forever; with $n$ vertices, after $n$ steps some vertex repeats, and the
+walk between the two visits is a cycle — contradiction.
+Now induct on the number of vertices $n$. For $n = 0$ the empty list works.
+For $n\ge1$, pick a source $s$, put it first, remove it with its edges. The
+remaining graph is still acyclic, so by induction it has a topological order;
+$s$ followed by that order is a topological order of the whole graph, because
+no edge enters $s$. $\blacksquare$
+
+The proof *is* an algorithm — **Kahn's algorithm** [@kahn1962]: repeatedly
+output a vertex with no remaining incoming edges. Each vertex and edge is
+handled once: $O(V + E)$.
+:::
+
+The standard library implements it in `graphlib`:
+
+```{python}
+from graphlib import TopologicalSorter, CycleError
+
+deps = {                      # module -> modules it imports
+    "phonebook.__init__": {"phonebook.models", "phonebook.book"},
+    "phonebook.book": {"phonebook.models"},
+    "phonebook.cli": {"phonebook.book", "phonebook.storage"},
+    "phonebook.storage": {"phonebook.models", "json"},
+}
+print(list(TopologicalSorter(deps).static_order()))     # dependencies first
+
+deps["phonebook.models"] = {"phonebook.cli"}            # introduce a cycle: models -> cli -> ... -> models
+try:
+    list(TopologicalSorter(deps).static_order())
+except CycleError as err:
+    print("CycleError:", err.args[1])
+```
+
+**Circular imports.** Python can sometimes survive a cycle (the second module
+receives the *partially initialised* first module from `sys.modules`), but it
+easily fails with `ImportError: cannot import name … (most likely due to a
+circular import)`. By @thm-toposort, the fix is to **break the cycle**: move
+the shared code into a third module that both import, or invert a dependency
+(e.g. the domain must never import the user interface).
+
+## A real package {#sec-real-package}
+
+So far `phonebook` is importable only because we added its folder to
+`sys.path`. A **real** package can be **installed** with `pip`, declares its
+metadata (name, version, dependencies) and can be shared on PyPI
+(@sec-ch-pip). The modern standard layout is:
+
+```text
+phonebook-project/
+├── pyproject.toml          ← metadata and build configuration (PEP 518, 621)
+├── README.md
+├── src/
+│   └── phonebook/          ← the import package
+│       ├── __init__.py
+│       ├── models.py
+│       ├── book.py
+│       ├── storage.py
+│       └── cli.py
+└── tests/
+    └── test_book.py
+```
+
+The `src/` layout prevents a classic mistake: tests accidentally importing the
+local folder instead of the installed package.
+
+### `pyproject.toml`
+
+**TOML** is a simple configuration format. `pyproject.toml` has two key
+tables: `[build-system]` says which **build backend** turns the source into an
+installable artifact (PEP 517/518 [@pep517; @pep518]), and `[project]` holds the
+metadata (PEP 621 [@pep621]):
+
+```{python}
+real = project / "phonebook-project"
+src = real / "src" / "phonebook"
+src.mkdir(parents=True)
+for name in ["__init__.py", "models.py", "book.py"]:
+    (src / name).write_text((pkg / name).read_text(encoding="utf-8"), encoding="utf-8")
+(src / "cli.py").write_text(textwrap.dedent('''
+    from phonebook import Contact, PhoneBook
+
+    def main() -> None:
+        book = PhoneBook()
+        book.add(Contact("Lovelace", "Ada", "+44 20 0000"))
+        for c in book:
+            print(f"{c.surname}, {c.name}: {c.phone}")
+'''), encoding="utf-8")
+(real / "pyproject.toml").write_text(textwrap.dedent('''
+    [build-system]
+    requires = ["setuptools>=69"]
+    build-backend = "setuptools.build_meta"
+
+    [project]
+    name = "phonebook-demo"
+    version = "0.1.0"
+    description = "A tiny terminal phone book"
+    readme = "README.md"
+    requires-python = ">=3.10"
+    dependencies = []                      # e.g. ["rich>=13"]
+    authors = [{ name = "Matteo Zirilli" }]
+
+    [project.scripts]
+    phonebook = "phonebook.cli:main"       # installs a 'phonebook' command
+'''), encoding="utf-8")
+(real / "README.md").write_text("# phonebook-demo\n", encoding="utf-8")
+print((real / "pyproject.toml").read_text(encoding="utf-8"))
+```
+
+### Building and installing
+
+The standard commands (run in a terminal inside `phonebook-project/`):
+
+```bash
+python -m pip install build          # once
+python -m build                      # creates dist/*.whl and dist/*.tar.gz
+python -m pip install dist/phonebook_demo-0.1.0-py3-none-any.whl
+python -m pip install -e .           # "editable" install for development (PEP 660)
+phonebook                            # the console script declared in [project.scripts]
+```
+
+- An **sdist** (`.tar.gz`) is the source archive.
+- A **wheel** (`.whl`, PEP 427 [@pep427]) is a ready-to-install ZIP archive.
+  Its file name encodes compatibility:
+  `{name}-{version}-{python tag}-{abi tag}-{platform tag}.whl`; `py3-none-any`
+  means "any Python 3, no compiled extension, any platform".
+- An **editable** install links the installed package to your source folder,
+  so code changes are visible without reinstalling.
+
+Here we build the wheel with `pip` (offline, using the installed setuptools)
+and inspect it — a wheel is just a ZIP file:
+
+```{python}
+import zipfile
+res = subprocess.run([sys.executable, "-m", "pip", "wheel", ".", "--no-deps",
+                      "--no-build-isolation", "-w", "dist", "-q"],
+                     cwd=real, capture_output=True, text=True)
+wheel = next((real / "dist").glob("*.whl"))
+print(wheel.name)
+with zipfile.ZipFile(wheel) as z:
+    for name in sorted(z.namelist()):
+        print("  ", name)
+```
+
+The `.dist-info` folder contains the metadata (`METADATA`), the list of files
+with their hashes (`RECORD`) and the declared console scripts
+(`entry_points.txt`); `pip` uses them to install, list and uninstall the
+package.
+
+::: {.project-link}
+**In the project.** The project is delivered as a single Colab notebook, as the
+brief requires; but the brief's *"classes with well-separated
+responsibilities"* and *"keep the interaction logic out of the domain classes"*
+are the seeds of a modular design. @sec-ch-project-phonebook shows how the same
+code maps onto the package layout above — `models` (Contact), `book`
+(PhoneBook), `storage` (JSON, the hidden design decision), `cli` (menu) — with
+the dependency graph `cli → book → models`, `cli → storage → models`, which is
+acyclic by construction.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Naming a file like a standard module** (`random.py`, `json.py`,
+  `math.py`): your file shadows the real module for every import in that
+  folder (this is also why the environment notes of this book warn against
+  running scripts next to untrusted files).
+- **Code with side effects at import time** (prints, network calls, long
+  computations): put it under `if __name__ == "__main__":` or in functions.
+- **Circular imports**: restructure; do not hide them with imports inside
+  functions unless you understand the consequences.
+- **`from module import *`**: unclear origins, name clashes.
+- **Editing a module in Jupyter and re-importing**: the cached version in
+  `sys.modules` is used. Restart the kernel or use `importlib.reload`.
+- **Relative imports in a script run directly** (`python book.py`) fail with
+  "attempted relative import with no known parent package": run it as
+  `python -m phonebook.book` from the project root.
+:::
+
+## Summary
+
+- A module is a `.py` file; a package is a directory of modules with
+  `__init__.py`. Modularity follows information hiding, high cohesion and low
+  coupling.
+- `import` looks in `sys.modules`, then searches `sys.path`, executes the module
+  once and caches it; bytecode is cached in `__pycache__`.
+- `if __name__ == "__main__":` separates "run as script" from "import".
+- Import dependencies form a graph; an import order exists iff the graph is
+  acyclic (topological sort, Kahn's algorithm).
+- Real packages use the `src/` layout and `pyproject.toml`; `python -m build`
+  produces wheels and sdists; `pip install -e .` installs in editable mode.
+
+## Exercises
+
+::: {#exr-ch10-split}
+Take the `BankAccount` class of @sec-encapsulation and a small menu that uses
+it, and split them into a package `bank` with modules `account.py` and
+`cli.py`. Which module may import which? Draw the dependency graph.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`cli → account` only. `account` must not import `cli` (the domain must not
+depend on the user interface), otherwise the graph would have a cycle and the
+domain could not be reused with a different interface (e.g. a web app).
+:::
+
+::: {#exr-ch10-kahn}
+Implement Kahn's algorithm yourself for a dict `deps` mapping each module to the
+set of modules it depends on. Return the order, or raise `ValueError` if there
+is a cycle. What is its cost?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+from collections import deque
+def kahn(deps):
+    nodes = set(deps) | {d for ds in deps.values() for d in ds}
+    remaining = {n: len(deps.get(n, ())) for n in nodes}      # unresolved dependencies
+    users = {n: [] for n in nodes}
+    for n, ds in deps.items():
+        for d in ds:
+            users[d].append(n)
+    ready = deque(n for n in nodes if remaining[n] == 0)
+    order = []
+    while ready:
+        n = ready.popleft(); order.append(n)
+        for u in users[n]:
+            remaining[u] -= 1
+            if remaining[u] == 0:
+                ready.append(u)
+    if len(order) != len(nodes):
+        raise ValueError("cycle detected")
+    return order
+```
+Each node enters `ready` once and each edge is relaxed once: $O(V+E)$. If a
+cycle exists, its nodes never reach zero remaining dependencies, so fewer than
+$V$ nodes are output — the "only if" part of @thm-toposort.
+:::
+
+::: {#exr-ch10-wheel}
+Decode the wheel name `numpy-2.1.0-cp313-cp313-manylinux_2_17_x86_64.whl`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Distribution `numpy`, version `2.1.0`, built for CPython 3.13 (`cp313`), with
+the CPython 3.13 ABI (it contains compiled C extensions), for Linux
+`x86_64` systems with glibc ≥ 2.17 (`manylinux_2_17`, PEP 600).
+:::
+
+## Further reading {.unnumbered}
+
+- @pythontutorial, §6 *Modules*; @pythonreference, §5 *The import system*.
+- @parnas1972 — the founding paper on modular decomposition; read it
+  entirely, it is short and still relevant.
+- @stevens1974 — coupling and cohesion.
+- The *Python Packaging User Guide* [@ppug], especially the tutorial
+  *Packaging Python Projects* and the `pyproject.toml` specification.
+- PEPs: @pep328 (relative imports), @pep420 (namespace packages), @pep3147
+  (`__pycache__`), @pep451 (module specs), @pep517 / @pep518 / @pep621
+  (`pyproject.toml`), @pep427 (wheels), @pep660 (editable installs).
+- @kahn1962 — topological sorting; @cormen2022, §20.4.

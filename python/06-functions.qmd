@@ -1,0 +1,719 @@
+# Functions and procedural programming {#sec-ch-functions}
+
+> *"The purpose of abstraction is not to be vague, but to create a new semantic
+> level in which one can be absolutely precise."* — Edsger W. Dijkstra,
+> *The Humble Programmer* [@dijkstra1972].
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- define and call functions; distinguish **parameters** and **arguments**;
+  return one or several values;
+- use positional, keyword, default, variable-length (`*args`, `**kwargs`),
+  keyword-only and positional-only parameters — and avoid the **mutable
+  default** trap;
+- explain **scope** with the LEGB rule, and use `global`/`nonlocal` only when
+  justified;
+- treat functions as **first-class objects**: pass them, store them, return
+  them; write `lambda`s and closures;
+- write **recursive** functions, prove them correct by induction, analyse their
+  cost (naive vs memoised Fibonacci, fast exponentiation, the Towers of Hanoi)
+  and explain the **call stack**;
+- write **generators** with `yield`, and document functions with docstrings and
+  type hints.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 6.1 *Introduction to functions*. Practice: 6.2 *Functions* ·
+6.3 *Positional and keyword arguments* · 6.4 *Return values* ·
+6.5 *More function examples*.
+:::
+
+## Intuition: a machine with a slot and a chute
+
+A function is a small **machine**: you put something in the slot (the
+**arguments**), it does its work, and something comes out of the chute (the
+**return value**). You do not need to know *how* it works inside to use it —
+you only need its **interface**: what goes in, what comes out, and what it
+promises. This is **abstraction**, the most powerful idea in programming:
+once `sqrt` is written and tested, you think of it as one operation, not as
+the twenty lines inside it.
+
+Functions give three concrete benefits:
+
+1. **Reuse** — write once, call many times (*Don't Repeat Yourself*).
+2. **Decomposition** — break a big problem into small, named steps.
+3. **Testing and reasoning** — a small function with a clear contract can be
+   tested and proved correct in isolation.
+
+## Defining and calling functions {#sec-def}
+
+```{python}
+def greet(name):                     # 'name' is a PARAMETER
+    """Return a greeting for name."""
+    return f"Hello, {name}!"
+
+message = greet("Ada")               # "Ada" is an ARGUMENT
+print(message)
+print(greet("Alan"))
+```
+
+- `def` creates a **function object** and binds it to the name `greet`.
+- The body runs only when the function is **called** (`greet("Ada")`).
+- On a call, each parameter is bound to the corresponding argument — as with
+  assignment (@def-binding), the parameter becomes a **new name for the same
+  object**: Python passes **object references** ("call by sharing", a term from
+  the CLU language [@liskov1977]).
+- `return expr` ends the call and sends back the value. A function that ends
+  without `return` returns `None`.
+
+```{python}
+def append_one(lst):
+    lst.append(1)          # mutates the caller's object (same object!)
+    lst = [99]             # rebinding the local name does NOT affect the caller
+
+data = [0]
+append_one(data)
+print(data)                # [0, 1]
+```
+
+This is the sticky-note model again: inside the function `lst` is a second
+note on the caller's list. Mutating the object is visible outside; moving the
+note is not.
+
+## Parameters and arguments in detail {#sec-arguments}
+
+### Positional and keyword arguments
+
+```{python}
+def describe_pet(name, species="dog", age=None):
+    text = f"{name} is a {species}"
+    if age is not None:
+        text += f", {age} years old"
+    return text
+
+print(describe_pet("Rex"))                         # defaults for species, age
+print(describe_pet("Tom", "cat"))                  # positional
+print(describe_pet(species="parrot", name="Polly"))  # keyword: order does not matter
+print(describe_pet("Nemo", age=2, species="fish")) # mixed: positional first
+```
+
+Arguments are matched to parameters in this order: positional arguments fill
+parameters left to right, then keyword arguments by name, then defaults fill
+the rest; an unfilled parameter or a duplicate is a `TypeError`.
+
+### Default values are evaluated once {#sec-mutable-default}
+
+::: {.callout-warning}
+## The mutable-default trap
+A default value is evaluated **once**, when `def` executes, and the *same
+object* is reused at every call [@pythonreference, §8.7].
+:::
+
+```{python}
+def add_item_bad(item, basket=[]):       # one list shared by all calls!
+    basket.append(item)
+    return basket
+
+print(add_item_bad("apple"))
+print(add_item_bad("pear"))              # surprise: the apple is still there
+
+def add_item(item, basket=None):         # the idiom: None as a sentinel
+    if basket is None:
+        basket = []                      # a NEW list at every call
+    basket.append(item)
+    return basket
+
+print(add_item("apple"), add_item("pear"))
+```
+
+### Variable-length, keyword-only and positional-only parameters
+
+```{python}
+def total(*numbers, discount=0.0):       # *numbers collects extra positionals into a tuple
+    """discount is keyword-only: it comes after *numbers."""
+    return sum(numbers) * (1 - discount)
+
+print(total(10, 20, 30), total(10, 20, discount=0.5))
+
+def make_record(**fields):               # **fields collects extra keywords into a dict
+    return fields
+
+print(make_record(name="Ada", year=1815))
+
+def power(base, exp, /, *, mod=None):    # before '/': positional-only; after '*': keyword-only
+    return pow(base, exp, mod)
+
+print(power(2, 10), power(2, 10, mod=1000))
+
+args, kwargs = (3, 4), {"mod": 5}
+print(power(*args, **kwargs))            # unpacking at the call site
+```
+
+The full signature grammar is
+`def f(pos_only, /, normal, *args, kw_only, **kwargs)`; positional-only
+parameters were added by PEP 570 [@pep570] and keyword-only ones by PEP 3102
+[@pep3102]. Use keyword-only parameters for options (flags, tolerances): calls
+like `total(1, 2, discount=0.1)` are self-documenting.
+
+## Return values {#sec-return}
+
+A function returns exactly **one** object; to return several values, return a
+tuple and unpack it:
+
+```{python}
+def min_max_mean(values):
+    """Return (minimum, maximum, mean) of a non-empty sequence."""
+    lo = hi = values[0]
+    for v in values[1:]:
+        if v < lo:
+            lo = v
+        elif v > hi:
+            hi = v
+    return lo, hi, sum(values) / len(values)   # packs a tuple
+
+lo, hi, avg = min_max_mean([3, 1, 4, 1, 5, 9, 2, 6])   # unpacks it
+print(lo, hi, avg)
+```
+
+**Functions vs procedures.** A *pure function* computes a result from its
+arguments only and has no **side effects** (no printing, no mutation of
+arguments or globals, no I/O). Pure functions are easy to test and reason
+about — the result depends only on the input, like a mathematical function.
+Procedures act on the world (print, write files). Good design keeps them
+separate: compute with pure functions, perform I/O in a thin outer layer — a
+recommendation the project brief also makes ("keep the interaction logic out
+of the domain classes").
+
+## Scope: where names live {#sec-scope}
+
+Each function call creates a new **local namespace**. When Python looks up a
+name it searches four scopes in order — the **LEGB rule**
+[@pythonreference, §4.2]:
+
+1. **L**ocal — names assigned inside the current function;
+2. **E**nclosing — locals of enclosing functions (for nested functions);
+3. **G**lobal — names at the top level of the module;
+4. **B**uilt-in — `print`, `len`, `int`, …
+
+```{python}
+x = "global"
+
+def outer():
+    x = "enclosing"
+    def inner():
+        print("inner sees:", x)      # found in the Enclosing scope
+    inner()
+
+outer()
+print("module sees:", x)
+```
+
+The scope of a name is decided **at compile time**: if a function assigns to a
+name anywhere in its body, that name is local in the *whole* body.
+
+```{python}
+counter = 0
+def increment_wrong():
+    try:
+        counter += 1                 # 'counter' is local (it is assigned) but unbound
+    except UnboundLocalError as err:
+        print("UnboundLocalError:", err)
+increment_wrong()
+
+def increment():
+    global counter                   # declare: assign to the module-level name
+    counter += 1
+increment(); print(counter)
+```
+
+`nonlocal name` does the same for an enclosing function's variable. Both are
+occasionally necessary, but **global mutable state** makes programs hard to
+test; prefer passing values in and returning results out.
+
+## Functions are objects {#sec-first-class}
+
+In Python a function is an object like any other: it can be bound to names,
+stored in collections, passed as an argument and returned from another
+function. Languages with this property have **first-class functions**, an idea
+rooted in Alonzo Church's **λ-calculus** [@church1936; @church1941].
+
+```{python}
+def square(x): return x * x
+def cube(x): return x ** 3
+
+operations = {"square": square, "cube": cube}     # functions stored in a dict
+for name, f in operations.items():
+    print(name, f(3))
+
+def apply_twice(f, x):                            # a higher-order function
+    return f(f(x))
+print(apply_twice(square, 3))                     # (3^2)^2 = 81
+
+print(sorted(["Ada", "alan", "Grace"], key=str.lower))   # passing a function as key
+print(list(map(square, [1, 2, 3])), list(filter(lambda n: n % 2, range(6))))
+```
+
+A **dispatch table** — a dict from commands to functions — replaces a long
+`if`–`elif` chain and is how many menus are implemented (the project builds its
+menu from method names, @sec-ch-project-phonebook).
+
+### `lambda` expressions
+
+`lambda params: expression` creates a small anonymous function. The name comes
+from Church's notation $\lambda x.\, x^2$. Use lambdas for short `key=`
+functions; give anything longer a name with `def`.
+
+### Closures
+
+A nested function **remembers** the variables of its enclosing scope even
+after that scope has finished: the pair (function, captured environment) is a
+**closure**, a concept due to Landin [@landin1964].
+
+```{python}
+def make_multiplier(k):
+    def multiply(x):
+        return k * x          # k is captured from the enclosing call
+    return multiply
+
+double, triple = make_multiplier(2), make_multiplier(3)
+print(double(10), triple(10), double.__closure__[0].cell_contents)
+```
+
+### Decorators (a first look)
+
+A **decorator** is a function that takes a function and returns a new one;
+`@decorator` above a `def` applies it (PEP 318 [@pep318]). We will use the
+standard decorators `@functools.lru_cache` (below), `@property`,
+`@staticmethod`, `@classmethod` and `@dataclass` (@sec-ch-oop).
+
+```{python}
+import functools, time
+
+def timed(f):
+    @functools.wraps(f)                     # keep f's name and docstring
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = f(*args, **kwargs)
+        print(f"{f.__name__} took {time.perf_counter() - start:.6f} s")
+        return result
+    return wrapper
+
+@timed                                      # same as: slow_sum = timed(slow_sum)
+def slow_sum(n):
+    return sum(range(n))
+
+print(slow_sum(1_000_000))
+```
+
+## Recursion {#sec-recursion}
+
+A function is **recursive** if it calls itself. Recursion mirrors
+**inductive definitions** in mathematics:
+$$
+n! = \begin{cases} 1 & n = 0,\\ n\cdot(n-1)! & n \ge 1.\end{cases}
+$$
+
+```{python}
+def factorial(n: int) -> int:
+    """n! for n >= 0, by recursion on n."""
+    if n == 0:                      # base case
+        return 1
+    return n * factorial(n - 1)     # recursive case on a SMALLER input
+
+print([factorial(n) for n in range(8)])
+```
+
+Every correct recursive function has (1) one or more **base cases** solved
+directly, and (2) recursive calls on **smaller** inputs, so that the base case
+is eventually reached — the "smaller" is a variant, as in @sec-loop-invariants.
+
+::: {#prp-factorial}
+## Correctness of `factorial`
+For every $n \in \mathbb N$, `factorial(n)` terminates and returns $n!$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-factorial
+Induction on $n$. Base: `factorial(0)` returns 1 $= 0!$ without recursive
+calls. Step: assume `factorial(n)` terminates returning $n!$. Then
+`factorial(n+1)` makes one call `factorial(n)` (which terminates with $n!$ by
+hypothesis) and returns $(n+1)\cdot n! = (n+1)!$. $\blacksquare$
+
+This is the general pattern: **to prove a recursive function correct, assume
+the recursive calls are correct (induction hypothesis) and check that the
+function combines their results correctly.**
+:::
+
+### The call stack
+
+How can the same function be "running" several times at once? Each call gets
+its own **frame** — a record with its parameters, local variables and the
+point to return to — pushed on the **call stack**; `return` pops it. For
+`factorial(3)`:
+
+```text
+factorial(3)            waits for factorial(2) ...
+  factorial(2)          waits for factorial(1) ...
+    factorial(1)        waits for factorial(0) ...
+      factorial(0)  ->  returns 1
+    returns 1 * 1 = 1
+  returns 2 * 1 = 2
+returns 3 * 2 = 6
+```
+
+The stack has finite size: CPython limits the recursion depth (default 1000,
+see `sys.getrecursionlimit()`), raising `RecursionError` beyond it. Python does
+not optimise tail calls (van Rossum explained why in [@vanrossum2009tail]), so
+deep linear recursions are better written as loops.
+
+### Naive Fibonacci: exponential cost
+
+The recursive definition of the Fibonacci numbers (@thm-lame) translates
+directly:
+
+```{python}
+calls = 0
+def fib_naive(n):
+    global calls
+    calls += 1
+    return n if n < 2 else fib_naive(n - 1) + fib_naive(n - 2)
+
+for n in [10, 20, 25]:
+    calls = 0
+    value = fib_naive(n)
+    print(f"F({n}) = {value:>6}, calls = {calls:>7}")
+```
+
+::: {#prp-fib-calls}
+## Number of calls of naive Fibonacci
+`fib_naive(n)` makes exactly $C(n) = 2F_{n+1} - 1$ calls (counting the
+outermost one). Hence $C(n) \ge \varphi^{\,n-1}$: the cost is exponential.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-fib-calls
+$C(0) = C(1) = 1$ (base cases) and $C(n) = 1 + C(n-1) + C(n-2)$ for $n\ge2$.
+Check the formula: $2F_1 - 1 = 1$, $2F_2 - 1 = 1$ ✓. Step (strong induction):
+$C(n) = 1 + (2F_n - 1) + (2F_{n-1} - 1) = 2(F_n + F_{n-1}) - 1 = 2F_{n+1} - 1$.
+Finally $2F_{n+1} - 1 \ge F_{n+1} \ge \varphi^{n-1}$ by Part 2 of the proof of
+@thm-lame. $\blacksquare$
+
+The output above confirms it: $C(20) = 2F_{21} - 1 = 2\cdot10946 - 1 = 21891$.
+:::
+
+The waste comes from recomputing the same values: `fib(n-2)` is computed once
+inside `fib(n-1)` and again directly. **Memoisation** stores each result the
+first time it is computed — the term is due to Donald Michie [@michie1968]:
+
+```{python}
+from functools import lru_cache
+
+@lru_cache(maxsize=None)          # remember every result
+def fib(n):
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+
+print(fib(200))                   # instantaneous: each fib(k) computed once -> O(n) calls
+print(fib.cache_info())
+```
+
+Each value $F_0,\dots,F_n$ is now computed once, so the number of non-cached
+calls is $n+1$: from exponential to linear. This idea — solve each
+sub-problem once and reuse it — is **dynamic programming**, which reappears in
+reinforcement learning (Bellman's equations).
+
+### Fast exponentiation
+
+Computing $x^n$ with $n-1$ multiplications is slow for large $n$ (cryptography
+uses $n$ with hundreds of digits). Using $x^{2k} = (x^k)^2$ we can do much
+better; the method was already known in ancient India (*Chandaḥśāstra*, c. 200
+BC) [@knuth1997b, §4.6.3].
+
+```{python}
+def fast_pow(x, n: int):
+    """x**n for n >= 0 with O(log n) multiplications (iterative square-and-multiply).
+
+    Invariant: result * base**e == x**n.
+    """
+    result, base, e = 1, x, n
+    while e > 0:
+        if e % 2 == 1:          # lowest bit of e is 1
+            result *= base
+        base *= base            # square
+        e //= 2                 # shift e right by one bit
+    return result
+
+print(fast_pow(3, 13), 3 ** 13, fast_pow(2, 1000) == 2 ** 1000)
+print(pow(3, 13, 1000))         # built-in, with an optional modulus
+```
+
+::: {#thm-fast-pow}
+## Correctness and cost of fast exponentiation
+`fast_pow(x, n)` returns $x^n$ using at most $2(\lfloor\log_2 n\rfloor + 1)$
+multiplications (for $n\ge1$).
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-fast-pow
+*Invariant* $I$: $\text{result}\cdot\text{base}^{e} = x^n$. Initially
+$1\cdot x^n = x^n$ ✓. *Maintenance*: if $e$ is even, $e = 2k$, the body sets
+$\text{base}' = \text{base}^2$, $e' = k$, so
+$\text{result}\cdot(\text{base}^2)^k = \text{result}\cdot\text{base}^{2k}$ ✓.
+If $e$ is odd, $e = 2k+1$: $\text{result}' = \text{result}\cdot\text{base}$,
+$\text{base}' = \text{base}^2$, $e' = k$, and
+$\text{result}\cdot\text{base}\cdot\text{base}^{2k} = \text{result}\cdot\text{base}^{e}$ ✓.
+*Termination*: $e$ is a natural number that strictly decreases while positive
+($\lfloor e/2\rfloor < e$); at exit $e = 0$ and the invariant gives
+$\text{result} = x^n$. *Cost*: the loop runs once per binary digit of $n$,
+i.e. $\lfloor \log_2 n\rfloor + 1$ times (@thm-base-representation), with at
+most 2 multiplications per iteration. $\blacksquare$
+:::
+
+### The Towers of Hanoi
+
+The puzzle, published by Édouard Lucas in 1883: move a tower of $n$ disks
+from peg A to peg C, one disk at a time, never placing a larger disk on a
+smaller one. Recursion makes the solution almost obvious: move the top $n-1$
+disks to B (recursively), move the largest disk to C, move the $n-1$ disks
+from B to C (recursively).
+
+```{python}
+def hanoi(n, source="A", target="C", spare="B", moves=None):
+    if moves is None:
+        moves = []
+    if n > 0:
+        hanoi(n - 1, source, spare, target, moves)
+        moves.append((n, source, target))          # move disk n
+        hanoi(n - 1, spare, target, source, moves)
+    return moves
+
+print(hanoi(3))
+print([len(hanoi(n)) for n in range(1, 11)])
+```
+
+::: {#thm-hanoi}
+## Hanoi needs exactly $2^n - 1$ moves
+The recursive algorithm uses $T(n) = 2^n - 1$ moves, and **no** algorithm can
+use fewer.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-hanoi
+*Count.* $T(0) = 0$ and $T(n) = 2T(n-1) + 1$. By induction:
+$T(n) = 2(2^{n-1}-1) + 1 = 2^n - 1$.
+
+*Optimality.* Let $M(n)$ be the minimum number of moves for $n$ disks; we show
+$M(n) \ge 2M(n-1) + 1$. In any solution the largest disk must move at least
+once. Consider its **first** move, from A to some peg $X$: at that moment the
+$n-1$ smaller disks are all on the third peg (they cannot be on A, above the
+largest disk, nor on $X$, where it is going); moving them there from A took at
+least $M(n-1)$ moves. Consider the **last** move of the largest disk, onto C:
+afterwards the $n-1$ smaller disks, which are then all on a peg other than C,
+must be moved onto C, at least $M(n-1)$ more moves. Together with the move(s)
+of the largest disk, $M(n)\ge 2M(n-1)+1$, and $M(0) = 0$, so by induction
+$M(n) \ge 2^n - 1 = T(n)$. $\blacksquare$
+:::
+
+With 64 disks (Lucas' legend of the Brahmin priests), $2^{64}-1$ moves at one
+per second would take about 585 billion years.
+
+## Generators {#sec-generators}
+
+A function containing `yield` is a **generator function**: calling it does not
+run the body but returns a **generator**, an iterator (@sec-iteration-protocol)
+that runs the body lazily, pausing at each `yield` and resuming at the next
+`next()` (PEP 255 [@pep255]).
+
+```{python}
+def fibonacci_numbers():
+    """Infinite generator of Fibonacci numbers."""
+    a, b = 0, 1
+    while True:
+        yield a              # hand out a value and pause here
+        a, b = b, a + b
+
+gen = fibonacci_numbers()
+print([next(gen) for _ in range(10)])
+
+def read_valid_numbers(lines):
+    """Yield the integers among some text lines, skipping invalid ones."""
+    for line in lines:
+        line = line.strip()
+        if line.lstrip("-").isdigit():
+            yield int(line)
+
+print(list(read_valid_numbers(["10", "x", " -3 ", "", "7"])))
+```
+
+Generators process data **streams** in constant memory — a file of 100 GB can
+be processed line by line — and compose like pipes. They are the basis of data
+loaders in machine-learning libraries.
+
+## Documenting functions: docstrings and type hints {#sec-docstrings-functions}
+
+A **docstring** is a string literal placed first in a function body; it is
+stored in `f.__doc__` and shown by `help(f)`. PEP 257 [@pep257] gives the
+conventions: a one-line summary in the imperative mood, then (optionally) a
+blank line and details. **Type hints** (PEP 484 [@pep484]) document the
+expected types. Neither changes the behaviour, but both are read by humans,
+IDEs, static checkers — and AI assistants (@sec-ch-ai-tools).
+
+```{python}
+def bmi(weight_kg: float, height_m: float) -> float:
+    """Return the body-mass index weight / height**2.
+
+    Args:
+        weight_kg: body weight in kilograms (> 0).
+        height_m: height in metres (> 0).
+
+    Returns:
+        The BMI in kg/m^2.
+
+    >>> round(bmi(70, 1.75), 1)
+    22.9
+    """
+    return weight_kg / height_m ** 2
+
+help(bmi)
+import doctest
+print(doctest.testmod(verbose=False))   # runs the '>>>' examples in the docstrings
+```
+
+The `>>>` lines are **doctests** [@pythonlibrary, *doctest*]: executable
+examples that double as tests.
+
+::: {.project-link}
+**In the project.** The phone book is organised into methods (functions
+attached to classes, @sec-ch-oop) with docstrings, one per feature
+(`aggiungi_contatto`, `modifica_contatto`, `elimina_contatto`, …). Two ideas
+from this chapter are visible in the code: the comment in `Rubrica.__init__`
+explains that the default is `None` "because otherwise instances created
+without an argument would share the same list in memory" — precisely the
+**mutable-default trap** of @sec-mutable-default; and the menu is a
+**dispatch table** built at run time: `functionlaties()` lists the method
+names, and `getattr(rubr, name)()` calls the chosen one — functions as
+first-class objects.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Mutable default arguments** (`def f(x=[])`): use `None` and create inside.
+- **Forgetting `return`**: the function returns `None`, and the error appears
+  later (`TypeError: 'NoneType' object is not subscriptable`).
+- **`print` instead of `return`**: a function that prints its result cannot be
+  reused in a computation.
+- **Calling vs referencing**: `key=str.lower` passes the function;
+  `key=str.lower()` calls it (and fails).
+- **Recursion without a reachable base case** → `RecursionError`.
+- **Late binding in closures**: `[lambda: i for i in range(3)]` all return 2,
+  because `i` is looked up when the lambda is *called*. Bind early with a
+  default: `lambda i=i: i`.
+- **Modifying a global from many functions**: hard to test and to reason
+  about.
+:::
+
+## Summary
+
+- `def` creates a function object; calls bind parameters to the argument
+  objects (*call by sharing*); `return` sends back one object (use tuples for
+  several values).
+- Defaults are evaluated once: never use a mutable default.
+- Names are resolved by **LEGB**; assignment makes a name local to the whole
+  function.
+- Functions are first-class: dispatch tables, higher-order functions,
+  lambdas, closures, decorators.
+- Recursive functions are proved correct by **induction**; naive Fibonacci
+  makes $2F_{n+1} - 1$ calls, memoisation makes it linear; fast exponentiation
+  needs $O(\log n)$ multiplications; Hanoi needs exactly $2^n - 1$ moves.
+- Generators produce values lazily with `yield`.
+
+## Exercises
+
+::: {#exr-ch6-gcd-rec}
+Write Euclid's algorithm (@sec-algorithms) as a recursive function and prove
+it correct by strong induction on $b$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def gcd(a, b):
+    return a if b == 0 else gcd(b, a % b)
+```
+Base $b = 0$: returns $a = \gcd(a,0)$. Step: for $b > 0$, $a\bmod b < b$, so
+by the induction hypothesis `gcd(b, a % b)` returns $\gcd(b, a\bmod b)$, which
+equals $\gcd(a,b)$ by @lem-gcd-step.
+:::
+
+::: {#exr-ch6-binary-recursive}
+Write a recursive function `count_bits(n)` returning the number of 1s in the
+binary representation of $n \ge 0$, using the fact that the last bit is
+`n % 2`. Prove that it makes $\lfloor\log_2 n\rfloor + 2$ calls for $n\ge1$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def count_bits(n):
+    return 0 if n == 0 else n % 2 + count_bits(n // 2)
+```
+Each call on $n\ge1$ makes one call on $\lfloor n/2\rfloor$; a number with $k$
+binary digits reaches 0 after $k$ halvings, so there are $k$ calls with $n\ge1$
+plus the final call with $n=0$: $k + 1 = \lfloor\log_2 n\rfloor + 2$
+(@thm-base-representation).
+:::
+
+::: {#exr-ch6-closure}
+Write `make_counter()` that returns a function; each call of the returned
+function returns 1, 2, 3, … (use `nonlocal`). Why can't you do it without
+`nonlocal` (or a mutable object)?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def make_counter():
+    count = 0
+    def counter():
+        nonlocal count
+        count += 1
+        return count
+    return counter
+```
+Without `nonlocal`, `count += 1` assigns to `count`, making it local to
+`counter` (@sec-scope) and raising `UnboundLocalError`.
+:::
+
+::: {#exr-ch6-generator}
+Write a generator `chunks(seq, k)` that yields consecutive slices of length
+$k$ (the last may be shorter). How many chunks are produced for a sequence of
+length $n$?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def chunks(seq, k):
+    for i in range(0, len(seq), k):
+        yield seq[i:i + k]
+```
+$\lceil n/k\rceil$ chunks, by @prp-range-length.
+:::
+
+## Further reading {.unnumbered}
+
+- @pythontutorial, §4.7–4.9 (defining functions, argument kinds, lambdas,
+  docstrings); @pythonreference, §4.2 (naming and binding) and §8.7 (function
+  definitions).
+- @abelson1996, Chapter 1.2–1.3 — recursion vs iteration, orders of growth,
+  fast exponentiation, higher-order procedures. The classic treatment.
+- @knuth1997b, §4.6.3 — evaluation of powers, with the history of the
+  method.
+- @graham1994, Chapter 1 — recurrent problems, starting with the Tower of
+  Hanoi; the best book to learn to solve recurrences.
+- PEPs: @pep257 (docstrings), @pep255 (generators), @pep318 (decorators),
+  @pep570 and @pep3102 (parameter kinds).

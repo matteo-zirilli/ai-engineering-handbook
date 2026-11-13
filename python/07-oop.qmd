@@ -1,0 +1,840 @@
+# Object-oriented programming {#sec-ch-oop}
+
+> *"I thought of objects being like biological cells and/or individual computers
+> on a network, only able to communicate with messages."* — Alan Kay
+> [@kay2003].
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain the ideas behind object-oriented programming (OOP) — **abstraction,
+  encapsulation, inheritance, polymorphism** — and where they come from;
+- define **classes** with attributes and methods, create **objects**, and
+  explain `self`, bound methods and attribute lookup;
+- protect an object's **invariants** with encapsulation and **properties**;
+- implement **special methods** (`__init__`, `__repr__`, `__str__`, `__eq__`,
+  `__hash__`, `__lt__`, `__len__`, …) and state the mathematical laws they must
+  obey;
+- document classes with **docstrings**;
+- use **inheritance**, `super()`, **polymorphism** and abstract base classes;
+  apply the **Liskov substitution principle**; compute the **method
+  resolution order** with the C3 algorithm;
+- choose between inheritance and **composition**, and use `@dataclass`,
+  `@classmethod` and `@staticmethod`.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 7.1 *Introduction to classes and objects* · 7.2 *Inheritance and
+polymorphism*. Practice: 7.3 *Your first class* · 7.4 *Special methods* ·
+7.5 *Docstrings* · 7.6 *Inheritance and polymorphism*.
+:::
+
+## Intuition: blueprints and houses
+
+A **class** is a blueprint; an **object** (or *instance*) is a house built
+from it. From one blueprint you can build many houses; each house has its own
+state (the colour of its walls, who lives there), but all share the same
+structure and the same "things you can do" (open the door, turn on the lights).
+
+- The **state** of an object is stored in its **attributes** (data).
+- Its **behaviour** is given by its **methods** (functions attached to the
+  class).
+
+Procedural programming (@sec-ch-functions) organises a program around
+*actions* operating on data passed around. OOP bundles each kind of data with
+the operations allowed on it, so that the rest of the program interacts with
+the data **only through those operations**. That bundle is the unit of
+design.
+
+## A short history of the ideas {#sec-oop-history}
+
+- **Simula 67** (Ole-Johan Dahl and Kristen Nygaard, Norwegian Computing
+  Center) introduced classes, objects, inheritance and virtual methods, to
+  write *simulations* of systems made of interacting entities
+  [@dahl1966; @dahl1968].
+- **Abstract data types** (Barbara Liskov and Stephen Zilles, 1974): a type is
+  defined by the operations on it, not by its representation [@liskov1974].
+- **Information hiding** (David Parnas, 1972): hide each design decision likely
+  to change behind an interface (@sec-ch-modules) [@parnas1972].
+- **Smalltalk** (Alan Kay and colleagues at Xerox PARC, 1970s) coined the term
+  *object-oriented* and pushed the model of objects communicating through
+  **messages** [@kay1993].
+- **C++** (1985), **Java** (1995) and **Python** (1991) brought OOP to the
+  mainstream; the *Design Patterns* book (the "Gang of Four", 1994) catalogued
+  recurring object designs [@gamma1994].
+
+## Classes and objects {#sec-classes}
+
+### A first class
+
+```{python}
+class Contact:
+    """A person in a phone book."""
+
+    country_code_default = 39            # CLASS attribute: shared by all instances
+
+    def __init__(self, name, surname, phone):
+        # INSTANCE attributes: each object has its own
+        self.name = name
+        self.surname = surname
+        self.phone = phone
+
+    def full_name(self):                 # a METHOD
+        return f"{self.name} {self.surname}"
+
+ada = Contact("Ada", "Lovelace", "+44 20 0000")    # creating an instance calls __init__
+alan = Contact("Alan", "Turing", "+44 161 0000")
+print(ada.full_name(), "|", alan.full_name())
+print(type(ada), isinstance(ada, Contact), ada.country_code_default)
+```
+
+What happens in `Contact("Ada", "Lovelace", …)`:
+
+1. Python creates a new, empty object of type `Contact` (method `__new__`);
+2. it calls `__init__` with the new object as first argument, followed by your
+   arguments; `__init__` **initialises** the attributes;
+3. the expression evaluates to the new object.
+
+### `self` and bound methods
+
+Methods are ordinary functions defined in the class body. Their first
+parameter, by convention named `self`, receives the instance. When you write
+`ada.full_name()`, Python looks up `full_name` on the class and creates a
+**bound method** that remembers `ada`; calling it passes `ada` as `self`. The
+two calls below are therefore identical:
+
+```{python}
+print(ada.full_name())
+print(Contact.full_name(ada))      # what Python actually does
+print(ada.full_name)               # a bound method object
+```
+
+### Attribute lookup
+
+Each instance stores its attributes in a dictionary, `obj.__dict__`
+(@sec-dicts). Reading `obj.attr` looks first in the **instance** dictionary,
+then in the **class**, then in its **base classes** in method-resolution order
+(@sec-mro). Assignment `obj.attr = value` always writes into the instance.
+
+```{python}
+print(ada.__dict__)
+ada.country_code_default = 44                  # creates an INSTANCE attribute that shadows the class one
+print(ada.country_code_default, alan.country_code_default, Contact.country_code_default)
+```
+
+::: {.callout-warning}
+## Class attributes that are mutable
+A class attribute such as `contacts = []` is **shared by all instances**: one
+`append` through any instance changes it for all — the class-level twin of the
+mutable-default trap (@sec-mutable-default). Initialise per-instance state in
+`__init__`.
+:::
+
+## Encapsulation and invariants {#sec-encapsulation}
+
+An object usually has **invariants**: conditions on its state that must always
+hold — a bank balance is never negative, a contact always has a non-empty
+name. Bertrand Meyer called these **class invariants** and made them part of
+*Design by Contract* [@meyer1997]: every public method may assume the invariant
+on entry and must restore it on exit. Encapsulation is what makes this
+possible: if outside code can modify the attributes directly, nobody can
+guarantee anything.
+
+Python does not enforce privacy; it relies on conventions [@pep8]:
+
+- `name` — public;
+- `_name` — internal: "please don't touch from outside";
+- `__name` — *name mangling*: inside class `C` it becomes `_C__name`, to avoid
+  accidental clashes in subclasses (not a security mechanism).
+
+The Pythonic tool for controlled access is the **property**: an attribute
+whose reads and writes go through methods.
+
+```{python}
+class BankAccount:
+    """A bank account whose balance can never become negative (class invariant)."""
+
+    def __init__(self, owner: str, balance: float = 0.0):
+        if balance < 0:
+            raise ValueError("initial balance must be >= 0")
+        self.owner = owner
+        self._balance = balance              # internal: modified only by methods
+
+    @property
+    def balance(self) -> float:              # read-only from outside
+        return self._balance
+
+    def deposit(self, amount: float) -> None:
+        if amount <= 0:
+            raise ValueError("deposit must be positive")
+        self._balance += amount              # preserves balance >= 0
+
+    def withdraw(self, amount: float) -> None:
+        if not 0 < amount <= self._balance:
+            raise ValueError("invalid amount or insufficient funds")
+        self._balance -= amount              # preserves balance >= 0
+
+acct = BankAccount("Ada", 100)
+acct.deposit(50); acct.withdraw(30)
+print(acct.balance)
+try:
+    acct.balance = 1_000_000                 # no setter: the property is read-only
+except AttributeError as err:
+    print("AttributeError:", err)
+try:
+    acct.withdraw(500)
+except ValueError as err:
+    print("ValueError:", err)
+```
+
+::: {#prp-invariant-preserved}
+## The invariant always holds
+For any sequence of calls to `__init__`, `deposit` and `withdraw` that do not
+raise, `acct.balance >= 0` after each call (assuming no code touches
+`_balance` directly).
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-invariant-preserved
+Induction on the number of calls. After `__init__`, $b = \text{balance} \ge 0$
+because negative values raise. If $b \ge 0$ before `deposit(a)`, the method
+either raises (state unchanged) or $a > 0$ and the new balance is $b + a > 0$.
+Before `withdraw(a)`, either it raises (unchanged) or $0 < a \le b$, and the
+new balance is $b - a \ge 0$. Since `_balance` is modified only in these three
+places, the invariant holds after every call. $\blacksquare$
+
+This is the loop-invariant technique of @sec-loop-invariants applied to the
+*life* of an object: every method is one "iteration".
+:::
+
+## Special methods: the Python data model {#sec-special-methods}
+
+Python's syntax is implemented by **special methods** ("dunder" methods, from
+*double underscore*). `len(x)` calls `x.__len__()`, `a + b` calls
+`a.__add__(b)`, `a == b` calls `a.__eq__(b)`, `print(x)` calls
+`x.__str__()`, and so on. By defining them, your classes behave like
+built-in types. The full list is in the Language Reference, §3.3 *Special
+method names* [@pythonreference].
+
+| You write | Python calls | Purpose |
+|---|---|---|
+| `C(args)` | `__init__(self, args)` | initialise |
+| `repr(x)` | `__repr__(self)` | unambiguous text for developers |
+| `str(x)`, `print(x)` | `__str__(self)` | readable text for users |
+| `x == y` | `__eq__(self, y)` | equality |
+| `hash(x)` | `__hash__(self)` | for sets and dict keys (@sec-hash-contract) |
+| `x < y` | `__lt__(self, y)` | ordering (used by `sorted`) |
+| `len(x)` | `__len__(self)` | size |
+| `bool(x)`, `if x:` | `__bool__(self)` (else `__len__`) | truthiness |
+| `item in x` | `__contains__(self, item)` | membership |
+| `for i in x` | `__iter__(self)` | iteration (@sec-iteration-protocol) |
+| `x[k]` | `__getitem__(self, k)` | indexing |
+| `x + y` | `__add__(self, y)` | arithmetic |
+
+: Some special methods {#tbl-dunder}
+
+```{python}
+from functools import total_ordering
+
+@total_ordering                    # derives <=, >, >= from __eq__ and __lt__
+class Contact:
+    def __init__(self, name, surname, phone):
+        self.name, self.surname, self.phone = name, surname, phone
+
+    def __repr__(self):            # for developers: looks like code that rebuilds the object
+        return f"Contact({self.name!r}, {self.surname!r}, {self.phone!r})"
+
+    def __str__(self):             # for users
+        return f"{self.surname}, {self.name}: {self.phone}"
+
+    def _key(self):
+        return (self.surname.lower(), self.name.lower(), self.phone)
+
+    def __eq__(self, other):
+        if not isinstance(other, Contact):
+            return NotImplemented  # let Python try other.__eq__ or fall back to identity
+        return self._key() == other._key()
+
+    def __hash__(self):            # consistent with __eq__: equal keys -> equal hashes
+        return hash(self._key())
+
+    def __lt__(self, other):
+        if not isinstance(other, Contact):
+            return NotImplemented
+        return self._key() < other._key()   # lexicographic: surname, then name, then phone
+
+people = [Contact("Mario", "Rossi", "333"), Contact("anna", "Bianchi", "320"),
+          Contact("Anna", "Rossi", "347")]
+print(sorted(people))
+print(people[0])
+print(Contact("Ada", "L", "1") == Contact("ada", "l", "1"),
+      len({Contact("Ada", "L", "1"), Contact("ADA", "L", "1")}))
+```
+
+**`NotImplemented`** (a special singleton, not the exception
+`NotImplementedError`) tells Python "I don't know how to compare with this
+type"; Python then tries the reflected operation on the other operand and, for
+`==`, falls back to identity.
+
+### The laws behind `__eq__` and `__lt__`
+
+Built-in algorithms *assume* that your methods behave like mathematical
+relations. If they do not, sets, dicts and `sorted` silently misbehave.
+
+::: {#def-equivalence}
+## Equivalence relation
+A relation $\sim$ on a set is an **equivalence** if it is reflexive
+($a\sim a$), symmetric ($a\sim b \Rightarrow b\sim a$) and transitive
+($a\sim b \wedge b\sim c \Rightarrow a\sim c$).
+:::
+
+::: {#def-strict-weak-order}
+## Strict order
+A relation $<$ is a **strict partial order** if it is irreflexive (never
+$a<a$) and transitive. It is a **strict total order** if moreover for all
+$a \ne b$ either $a<b$ or $b<a$ (*trichotomy*).
+:::
+
+`__eq__` must be an equivalence (and consistent with `__hash__`,
+@prp-hash-contract); `__lt__` must be a strict order for `sorted` to return a
+meaningful result. Comparing **keys** that are tuples of strings, as above, is
+safe because:
+
+::: {#thm-lex-order}
+## Lexicographic order is a strict total order
+If $<_1$ and $<_2$ are strict total orders on sets $A$ and $B$, then the
+lexicographic order on $A\times B$,
+$(a,b) < (a',b') \iff a <_1 a' \ \vee\ (a = a' \wedge b <_2 b')$,
+is a strict total order. By induction the same holds for tuples of any length.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-lex-order
+*Irreflexive*: $(a,b)<(a,b)$ would need $a<_1 a$ or $b <_2 b$, both false.
+
+*Transitive*: let $(a,b) < (a',b')$ and $(a',b') < (a'',b'')$. If $a <_1 a'$
+and $a' <_1 a''$, then $a <_1 a''$. If $a<_1 a'$ and $a' = a''$, then
+$a <_1 a''$. If $a = a'$ and $a' <_1 a''$, then $a <_1 a''$. If $a = a' = a''$,
+then $b <_2 b'$ and $b' <_2 b''$, so $b <_2 b''$. In all cases
+$(a,b) < (a'',b'')$.
+
+*Trichotomy*: let $(a,b)\neq(a',b')$. If $a\ne a'$, trichotomy of $<_1$ gives
+$a <_1 a'$ or $a' <_1 a$. If $a = a'$, then $b \ne b'$ and trichotomy of $<_2$
+decides. $\blacksquare$
+:::
+
+Note what happens if the key is only `(surname, name)`: two different contacts
+"Mario Rossi, 333" and "Mario Rossi, 347" are then neither `<` nor `>` each
+other. The relation is no longer total — it is a **strict weak order**
+(incomparability is an equivalence), which is still fine for sorting: Python's
+sort is stable (@def-stable), so such ties keep their insertion order.
+
+## Docstrings {#sec-class-docstrings}
+
+Classes and methods are documented like functions (@sec-docstrings-functions):
+the first string in the class body is the class docstring. PEP 257 [@pep257]
+suggests summarising the class's behaviour and listing its public methods and
+attributes; `help(Class)` renders everything.
+
+```{python}
+class Rectangle:
+    """An axis-aligned rectangle.
+
+    Attributes:
+        width: horizontal side length (> 0).
+        height: vertical side length (> 0).
+    """
+
+    def __init__(self, width: float, height: float):
+        """Create a rectangle; raise ValueError if a side is not positive."""
+        if width <= 0 or height <= 0:
+            raise ValueError("sides must be positive")
+        self.width, self.height = width, height
+
+    def area(self) -> float:
+        """Return width * height."""
+        return self.width * self.height
+
+print(Rectangle.__doc__.splitlines()[0])
+print(Rectangle.area.__doc__)
+```
+
+## Inheritance and polymorphism {#sec-inheritance}
+
+### Inheritance
+
+A class can **inherit** from another: the **subclass** (child) gets all the
+attributes and methods of the **base class** (parent), can **add** new ones and
+can **override** existing ones. Inheritance models an **"is-a"** relation: a
+`Square` *is a* `Shape`.
+
+```{python}
+import math
+
+class Shape:
+    """Base class: every shape has a name and an area."""
+    def __init__(self, name: str):
+        self.name = name
+    def area(self) -> float:
+        raise NotImplementedError("subclasses must implement area()")
+    def describe(self) -> str:                  # uses area(), whatever the subclass
+        return f"{self.name} with area {self.area():.2f}"
+
+class Circle(Shape):
+    def __init__(self, r: float):
+        super().__init__("circle")              # run the parent's __init__
+        self.r = r
+    def area(self) -> float:                    # override
+        return math.pi * self.r ** 2
+
+class Rect(Shape):
+    def __init__(self, w: float, h: float):
+        super().__init__("rectangle")
+        self.w, self.h = w, h
+    def area(self) -> float:
+        return self.w * self.h
+
+class Square(Rect):
+    def __init__(self, side: float):
+        super().__init__(side, side)
+        self.name = "square"
+
+shapes = [Circle(1), Rect(2, 3), Square(2)]
+for s in shapes:
+    print(s.describe())                         # the right area() is chosen at run time
+print(isinstance(shapes[2], Rect), issubclass(Square, Shape), Square.__mro__)
+```
+
+`super()` returns a proxy that delegates to the **next class in the method
+resolution order** (@sec-mro) — usually the parent.
+
+### Polymorphism
+
+`describe` calls `self.area()` without knowing which subclass `self` belongs
+to; the method actually executed is chosen **at run time** from the object's
+class (*dynamic dispatch*). This is **subtype polymorphism** (*poly-morph*:
+"many forms"): one interface, many implementations. Code written against the
+`Shape` interface works for shapes that did not exist when it was written —
+this is the *open–closed principle* ("open for extension, closed for
+modification") of Bertrand Meyer [@meyer1997].
+
+Python also has **duck typing** — *"if it walks like a duck and quacks like a
+duck, it is a duck"*: any object with an `area()` method works with a function
+that calls `.area()`, inheritance or not. The `for` loop's iteration protocol
+and `len()` are duck-typed.
+
+### The Liskov substitution principle {#sec-lsp}
+
+When is inheritance *correct*? Barbara Liskov gave the answer in her 1987
+keynote, formalised with Jeannette Wing [@liskov1994]:
+
+::: {#def-lsp}
+## Liskov substitution principle (LSP)
+Let $\phi(x)$ be a property provable about objects $x$ of type $T$. Then
+$\phi(y)$ should be true for objects $y$ of type $S$, where $S$ is a subtype
+of $T$.
+:::
+
+In practice: a subclass must **honour the contract** of its parent — accept at
+least the same inputs (preconditions may only be weakened), guarantee at least
+the same results (postconditions may only be strengthened), and preserve the
+parent's invariants.
+
+::: {#exm-square-rectangle}
+## The square–rectangle problem
+Suppose `Rect` had a method `set_width(w)` with the postcondition "width
+becomes `w`, height is unchanged". A `Square` must keep `width == height`, so
+its `set_width` must also change the height — **violating** the parent's
+postcondition. Code like
+```python
+def stretch(r: Rect):
+    r.set_width(2 * r.w)
+    assert r.area() == 2 * old_area   # true for every Rect, false for a Square
+```
+breaks when given a `Square`. Geometrically a square *is* a rectangle; but a
+*mutable* `Square` object is not a substitutable *mutable* `Rect` object.
+Remedies: make the shapes immutable (our version above has no setters), or do
+not derive `Square` from `Rect`.
+:::
+
+### Abstract base classes
+
+`Shape.area` above raises `NotImplementedError` at *call* time. The `abc`
+module (PEP 3119 [@pep3119]) lets you declare **abstract methods**, so that
+instantiating an incomplete class fails immediately:
+
+```{python}
+from abc import ABC, abstractmethod
+
+class Storage(ABC):
+    """Interface: where a phone book can be saved."""
+    @abstractmethod
+    def save(self, records: list[dict]) -> None: ...
+    @abstractmethod
+    def load(self) -> list[dict]: ...
+
+class MemoryStorage(Storage):
+    def __init__(self):
+        self._data = []
+    def save(self, records):
+        self._data = [dict(r) for r in records]
+    def load(self):
+        return [dict(r) for r in self._data]
+
+try:
+    Storage()
+except TypeError as err:
+    print("TypeError:", err)
+m = MemoryStorage(); m.save([{"name": "Ada"}]); print(m.load())
+```
+
+### Multiple inheritance and the method resolution order {#sec-mro}
+
+Python allows a class to inherit from several bases. Then a question arises:
+when a method is defined in more than one ancestor, **which one is used?** The
+answer is the **method resolution order** (MRO), a linear ordering of the
+class and its ancestors, available as `Class.__mro__`. Since Python 2.3 the MRO
+is computed with the **C3 linearisation**, proposed for the Dylan language by
+Barrett et al. [@barrett1996] and adopted for Python by Samuele Pedroni and
+documented by Michele Simionato [@simionato2003].
+
+::: {#def-c3}
+## C3 linearisation
+For a class $C$ with bases $B_1, \dots, B_k$ (in the order written in the
+class statement), its linearisation $L[C]$ is
+$$
+L[C] = C + \operatorname{merge}\big(L[B_1], \dots, L[B_k],\ [B_1,\dots,B_k]\big),\qquad L[\texttt{object}] = [\texttt{object}],
+$$
+where **merge** repeatedly takes the first **head** (first element) of the
+lists that does **not** appear in the **tail** (any position but the first) of
+any list, appends it to the result and removes it from all lists. If no such
+head exists, the hierarchy is rejected.
+:::
+
+::: {#exm-c3-diamond}
+## The diamond
+`class A`, `class B(A)`, `class C(A)`, `class D(B, C)`. Write $O$ for
+`object`. $L[A] = [A, O]$, $L[B] = [B, A, O]$, $L[C] = [C, A, O]$.
+$$
+\begin{aligned}
+L[D] &= D + \operatorname{merge}([B,A,O],\,[C,A,O],\,[B,C])\\
+&= D, B + \operatorname{merge}([A,O],\,[C,A,O],\,[C]) && B \text{ is in no tail}\\
+&= D, B, C + \operatorname{merge}([A,O],\,[A,O]) && A \text{ is in the tail of } [C,A,O]\text{: skip; take } C\\
+&= D, B, C, A, O .
+\end{aligned}
+$$
+`A` comes after **both** `B` and `C`: a method of `A` is used only if neither
+`B` nor `C` overrides it.
+:::
+
+```{python}
+class A:
+    def hello(self): return "A"
+class B(A):
+    def hello(self): return "B -> " + super().hello()
+class C(A):
+    def hello(self): return "C -> " + super().hello()
+class D(B, C):
+    def hello(self): return "D -> " + super().hello()
+
+print([k.__name__ for k in D.__mro__])
+print(D().hello())               # super() follows the MRO, not just "the parent"
+
+try:
+    class X(A, B):               # A before B, but B is a subclass of A: inconsistent
+        pass
+except TypeError as err:
+    print("TypeError:", err)
+```
+
+Note how `super()` in `B` called `C`, not `A`: it delegates to the *next class
+in the MRO of the object's class*. This is what makes **cooperative multiple
+inheritance** work: each class calls `super()` once and every class in the
+diamond runs exactly once.
+
+::: {#prp-c3-properties}
+## Guarantees of C3
+If $L[C]$ exists, then (a) every class appears before all of its bases
+(**local precedence**: bases also appear in the order listed); and (b)
+$L[C]$ extends the linearisation of each base, i.e. the relative order of the
+classes in $L[B_i]$ is preserved in $L[C]$ (**monotonicity**).
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-c3-properties
+Both properties follow from one invariant of **merge**: *an element is output
+only when it is the head of every list that contains it.* Indeed, it is chosen
+only if it appears in no tail; so in every list where it appears, it is at the
+head. Consequently, if $x$ precedes $y$ in some input list, $y$ cannot be
+output before $x$: while $x$ is still present, $y$ is in the tail of that list.
+Hence merge preserves the order of every input list.
+(a) The last input list is $[B_1,\dots,B_k]$, so the bases appear in the listed
+order; and $C$ itself is placed first. Applying the same argument recursively
+to each $L[B_i]$ shows that every class precedes its own bases.
+(b) Each $L[B_i]$ is an input list of the merge, so its order is preserved.
+$\blacksquare$
+
+If the constraints are contradictory (as in `class X(A, B)` with `B` a
+subclass of `A`: the list $[A, B]$ demands $A$ before $B$, while $L[B]$
+demands $B$ before $A$), merge gets stuck and Python raises `TypeError`, as the
+code shows.
+:::
+
+## Composition over inheritance {#sec-composition}
+
+Inheritance couples the subclass tightly to the parent's implementation. The
+*Design Patterns* authors summarised decades of experience in one principle:
+**"Favor object composition over class inheritance"** [@gamma1994]. In
+composition, an object **has** other objects (a **"has-a"** relation) and
+delegates work to them.
+
+A phone book *is not* a list (it should not expose `pop`, `sort`, `insert` to
+arbitrary callers), but it *has* a collection of contacts:
+
+```{python}
+class PhoneBook:
+    """A collection of unique contacts (composition: it HAS a dict)."""
+    def __init__(self):
+        self._by_key = {}                       # key -> Contact; O(1) duplicate check
+    def add(self, contact: Contact) -> bool:
+        key = contact._key()
+        if key in self._by_key:
+            return False                        # invariant: no duplicates
+        self._by_key[key] = contact
+        return True
+    def __len__(self):
+        return len(self._by_key)
+    def __iter__(self):                         # iterate in sorted order
+        return iter(sorted(self._by_key.values()))
+    def search(self, text: str):
+        t = text.lower()
+        return [c for c in self if t in c.name.lower() or t in c.surname.lower()]
+
+book = PhoneBook()
+for c in people + [Contact("Mario", "Rossi", "333")]:   # the last one is a duplicate
+    book.add(c)
+print(len(book), [str(c) for c in book])
+print(book.search("ross"))
+```
+
+## Dataclasses, class methods and static methods {#sec-dataclasses}
+
+Writing `__init__`, `__repr__` and `__eq__` by hand is repetitive. The
+`dataclasses` module (PEP 557 [@pep557]) generates them from **annotated class
+attributes**:
+
+```{python}
+from dataclasses import dataclass, field, asdict
+
+@dataclass(order=True, frozen=True)      # order: generates __lt__ etc.; frozen: immutable & hashable
+class Person:
+    surname: str
+    name: str
+    phone: str = field(compare=False)     # excluded from ==, <, hash
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Person":     # alternative constructor
+        return cls(d["surname"], d["name"], d["phone"])
+
+    @staticmethod
+    def is_valid_phone(text: str) -> bool:       # utility: needs neither self nor cls
+        digits = text.replace(" ", "").lstrip("+")
+        return digits.isdigit() and 6 <= len(digits) <= 15
+
+p = Person.from_dict({"surname": "Hopper", "name": "Grace", "phone": "+1 202 555 0100"})
+print(p, asdict(p), Person.is_valid_phone(p.phone))
+print(sorted([Person("Rossi", "Mario", "1"), Person("Bianchi", "Anna", "2")]))
+```
+
+- A **class method** (`@classmethod`) receives the class as `cls`: ideal for
+  alternative constructors (`from_dict`, `from_json`), and it works correctly
+  for subclasses.
+- A **static method** (`@staticmethod`) receives neither the instance nor the
+  class: a plain function placed in the class namespace for organisation.
+
+The limit of 15 digits in `is_valid_phone` comes from the ITU-T E.164
+numbering plan, which caps international numbers at 15 digits [@itue164].
+
+## Design principles in one table {#sec-solid}
+
+| Principle | Meaning | Source |
+|---|---|---|
+| Single responsibility | a class should have one reason to change | @martin2003 |
+| Open–closed | extend behaviour by adding code, not changing it | @meyer1997 |
+| Liskov substitution | subclasses must honour the parent's contract | @liskov1994 |
+| Interface segregation | many small interfaces beat one large one | @martin2003 |
+| Dependency inversion | depend on abstractions (e.g. `Storage`), not concretions | @martin2003 |
+| Composition over inheritance | prefer *has-a* to *is-a* when in doubt | @gamma1994 |
+| Information hiding | hide decisions likely to change | @parnas1972 |
+
+The first five are known by the acronym **SOLID**.
+
+::: {.project-link}
+**In the project.** The brief asks for *"a `Contact` class representing the
+single record and a `PhoneBook` class managing the collection … keep the
+interaction logic with the user out of the domain classes"* — i.e. the
+**single-responsibility** principle. The implementation in `ai-projects`
+defines `Contatto` (with `__init__`, `__eq__` comparing all four fields, and
+`__lt__` comparing `(surname, name)` tuples — a strict weak order,
+@thm-lex-order) and `Rubrica`, which *has* a list of contacts (composition).
+Reading it with this chapter in mind suggests concrete improvements, discussed
+in @sec-ch-project-phonebook: (1) `__eq__` without `__hash__` makes contacts
+**unhashable**, so they cannot be put in a set or used as dict keys
+(@prp-hash-contract); (2) `Rubrica` reads `contatto._nome` directly, bypassing
+encapsulation — properties or public read-only attributes would be cleaner;
+(3) `input_valid_contact` is defined without `self` and called on the class:
+it should be a `@staticmethod` (or, better, live outside the domain class,
+since it does I/O); (4) a `@classmethod from_dict` would make JSON loading
+symmetric with saving.
+:::
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "UML class diagram of a clean phone-book design. Arrows with a diamond denote composition; the dashed arrow denotes dependency on an abstract interface."
+classDiagram
+    class Contact {
+      +name: str
+      +surname: str
+      +phone: str
+      +__eq__(other) bool
+      +__hash__() int
+      +__lt__(other) bool
+      +to_dict() dict
+      +from_dict(d)$ Contact
+    }
+    class PhoneBook {
+      -_by_key: dict
+      +add(c) bool
+      +remove(c) bool
+      +search(text) list
+      +__len__() int
+      +__iter__()
+    }
+    class Storage {
+      <<abstract>>
+      +save(records)
+      +load() list
+    }
+    class JsonStorage {
+      +path
+      +save(records)
+      +load() list
+    }
+    class ConsoleUI {
+      +run()
+    }
+    PhoneBook "1" *-- "many" Contact
+    Storage <|-- JsonStorage
+    ConsoleUI --> PhoneBook
+    ConsoleUI ..> Storage
+```
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Forgetting `self`** in a method definition (`def area():`) →
+  `TypeError: … takes 0 positional arguments but 1 was given`.
+- **Mutable class attributes** shared by all instances.
+- **Defining `__eq__` without `__hash__`** → instances become unhashable; or
+  defining `__hash__` inconsistently with `__eq__` → sets and dicts break.
+- **Comparisons that are not orders** (e.g. `__lt__` based on `<=`) → `sorted`
+  produces garbage without any error.
+- **Deep inheritance hierarchies** for code reuse: prefer composition.
+- **Subclasses that break the parent's contract** (LSP violations).
+- **Calling the parent's `__init__` by name** (`Parent.__init__(self)`) in
+  multiple inheritance: use `super()` consistently.
+:::
+
+## Summary
+
+- A class bundles data (attributes) and behaviour (methods); `self` is the
+  instance, passed automatically through bound methods.
+- Encapsulation (conventions, properties) lets a class guarantee its
+  **invariants**, proved like loop invariants.
+- Special methods integrate classes with Python syntax; `__eq__` must be an
+  equivalence consistent with `__hash__`, `__lt__` a strict (weak) order.
+- Inheritance models *is-a*; polymorphism picks the method at run time;
+  correct subclasses obey the **Liskov substitution principle**.
+- The MRO is computed by **C3**, which preserves local precedence and
+  monotonicity; `super()` follows the MRO.
+- Prefer composition; use `@dataclass`, `@classmethod`, `@staticmethod` to
+  remove boilerplate.
+
+## Exercises
+
+::: {#exr-ch7-fraction}
+Implement a class `Fraction(num, den)` that always stores the fraction in
+lowest terms with a positive denominator (use `math.gcd`), with `__repr__`,
+`__eq__`, `__hash__`, `__lt__`, `__add__`, `__mul__`. State the class
+invariant and argue that each method preserves it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Invariant: `den > 0` and `gcd(|num|, den) == 1`. Normalise in `__init__`
+(divide by the gcd, move the sign to the numerator; reject `den == 0`); every
+arithmetic method builds its result through `__init__`, so the invariant holds
+by construction. Then equality of values is equality of `(num, den)`, so
+`__hash__ = hash((num, den))` respects the contract;
+`a/b < c/d \iff ad < cb` since $b,d>0$. (The standard library has
+`fractions.Fraction`.)
+:::
+
+::: {#exr-ch7-mro}
+Compute by hand, with C3, the MRO of `class Z(K1, K2, K3)` where
+`class K1(A, B, C)`, `class K2(D, B, E)`, `class K3(D, A)`, and `A`…`E` derive
+from `object`. Check with Python.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$L[K1] = K1,A,B,C,O$; $L[K2] = K2,D,B,E,O$; $L[K3] = K3,D,A,O$. Merging with
+$[K1,K2,K3]$: $Z, K1, K2, K3, D, A, B, C, E, O$ (this is the example worked out in @simionato2003).
+:::
+
+::: {#exr-ch7-lsp}
+Give an example of a subclass that violates LSP by **strengthening a
+precondition**, and explain which client code breaks.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`class Account: def withdraw(self, amount)` accepts any `0 < amount <= balance`.
+`class LimitedAccount(Account)` raises if `amount > 100`. A client that, given
+any `Account` with enough balance, withdraws 150 works for `Account` and fails
+for `LimitedAccount`: the subclass demands more from its callers.
+:::
+
+::: {#exr-ch7-iter}
+Make `PhoneBook` support `"Ada" in book` (search by name) and `book["Rossi"]`
+(list of contacts with that surname) by implementing `__contains__` and
+`__getitem__`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def __contains__(self, name):
+    return any(c.name == name for c in self._by_key.values())
+def __getitem__(self, surname):
+    return [c for c in self if c.surname == surname]
+```
+:::
+
+## Further reading {.unnumbered}
+
+- @pythontutorial, §9 *Classes*; @pythonreference, §3.3 *Special method names*;
+  the *Descriptor HowTo Guide* in the documentation for how properties and
+  methods work underneath.
+- @ramalho2022, *Fluent Python* (2nd ed.) — Part I (the data model) and Part
+  III (classes and protocols): the best book on idiomatic Python objects.
+- @liskov1994 — the formal definition of behavioural subtyping; @meyer1997 —
+  Design by Contract and class invariants.
+- @barrett1996 and @simionato2003 — the C3 algorithm and its adoption in
+  Python.
+- @gamma1994 — *Design Patterns*, especially the introduction on composition
+  vs inheritance.
+- @dahl1966, @kay1993 — the origins of OOP, told by its inventors.

@@ -1,0 +1,137 @@
+# How to study with this book {.unnumbered}
+
+This page explains *how* the book is organised and *how* to use it to learn
+effectively. Read it once; come back to the notation table whenever you meet a
+symbol you do not recognise.
+
+## A study method in five steps {.unnumbered}
+
+Research on learning gives a few robust prescriptions. Two of the most
+replicated are **retrieval practice** (testing yourself is more effective than
+re-reading) and **spacing** (studying the same material in several short
+sessions is better than one long session) [@dunlosky2013; @roediger2006].
+The book is built around them. For each chapter:
+
+1. **Read the learning objectives.** They tell you what you should be able to
+   *do* at the end. If you can already do all of them, skim the chapter.
+2. **Read the intuition, then the formal part.** The intuition gives you a
+   mental picture; the formal part makes it precise. Do not skip the
+   definitions: most mistakes in programming and in mathematics come from a
+   vague definition.
+3. **Redo the worked examples by hand**, with paper and pencil, *before*
+   looking at the solution. Then run the code and compare.
+4. **Modify the code.** Change a value, break something on purpose, predict
+   what will happen *before* running it. Prediction followed by feedback is
+   retrieval practice.
+5. **Do the exercises** at the end of the chapter, a day or two later
+   (spacing). Solutions are collapsed: open them only after a real attempt.
+
+## Anatomy of a chapter {.unnumbered}
+
+Every chapter follows the same rhythm:
+
+| Section | Purpose |
+|---|---|
+| **Learning objectives** | What you will be able to do. |
+| **Intuition** | An everyday picture of the idea, with no formulas. |
+| **Theory** | Definitions, theorems, algorithms, with their history and sources. |
+| **Worked examples** | Problems solved step by step, by hand. |
+| **Practice** | Annotated, runnable code, following the *Practice* lessons of the course. |
+| **In the project** | Where and how the chapter is used in the course's final project. |
+| **Common pitfalls** | The errors that beginners (and experts) make most often. |
+| **Summary** | The ideas to remember. |
+| **Exercises** | With collapsed solutions. |
+| **Further reading** | An annotated list of the sources, telling you *what to read* in each one. |
+
+## The boxes {.unnumbered}
+
+::: {.callout-note}
+## Learning objectives / Definitions / Notes
+Blue boxes contain objectives and important remarks.
+:::
+
+::: {.callout-tip}
+## Intuition
+Green boxes contain intuitions, analogies and tips.
+:::
+
+::: {.callout-warning}
+## Watch out
+Orange boxes warn you about pitfalls and frequent misconceptions.
+:::
+
+::: {.callout-important}
+## Key result
+Red boxes highlight a result you must remember.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proofs
+Proofs live in collapsed boxes like this one. Each box is **preceded** by a
+one-line statement of its result. Open it to see the full derivation.
+:::
+
+Theorems, lemmas, definitions, equations, figures and tables are numbered
+per chapter — *Theorem 2.3* is the third theorem of Chapter 2 — and every
+reference to them is a link, so that a proof can always point precisely to the
+results it uses.
+
+## Code and outputs {.unnumbered}
+
+Code cells look like this; the box below the cell shows what Python printed
+when the book was built:
+
+```{python}
+#| echo: true
+greeting = "Hello, AI engineer!"
+print(greeting)
+```
+
+Some programs need a human at the keyboard (they call `input()`); those cells
+are shown but not executed, and a sample session is given as a comment.
+Lines starting with `>>>` reproduce an interactive session of the Python
+interpreter (the *REPL*, see @sec-repl).
+
+### How to run the code yourself {.unnumbered}
+
+You have two options, both explained in detail in @sec-dev-environment:
+
+- **Google Colab** (nothing to install): open
+  <https://colab.research.google.com>, create a notebook, paste a cell, press
+  <kbd>Shift</kbd>+<kbd>Enter</kbd>.
+- **Local installation**: install Python 3.13 from <https://www.python.org>,
+  then use the REPL, a text editor such as VS Code, or Jupyter.
+
+## Notation {.unnumbered}
+
+| Symbol | Meaning | Example |
+|---|---|---|
+| $\mathbb{N} = \{0,1,2,\dots\}$ | natural numbers (we include $0$) | $3 \in \mathbb{N}$ |
+| $\mathbb{Z}$, $\mathbb{Q}$, $\mathbb{R}$ | integers, rationals, reals | $-2 \in \mathbb{Z}$, $\tfrac12\in\mathbb{Q}$ |
+| $x \in A$ | $x$ is an element of the set $A$ | $2 \in \{1,2,3\}$ |
+| $A \subseteq B$ | every element of $A$ is in $B$ | $\{1\} \subseteq \{1,2\}$ |
+| $A\cup B$, $A\cap B$, $A\setminus B$ | union, intersection, difference | |
+| $\lvert A\rvert$ | number of elements of a finite set | $\lvert\{a,b\}\rvert = 2$ |
+| $\lfloor x \rfloor$, $\lceil x \rceil$ | floor (round down), ceiling (round up) | $\lfloor 2.7\rfloor = 2$, $\lceil 2.1\rceil=3$ |
+| $a \bmod n$ | remainder of the division of $a$ by $n$, in $\{0,\dots,n-1\}$ | $17 \bmod 5 = 2$ |
+| $\log_b x$ | logarithm in base $b$; $\lg x = \log_2 x$, $\ln x = \log_e x$ | $\lg 8 = 3$ |
+| $\sum_{i=1}^{n} a_i$ | $a_1 + a_2 + \dots + a_n$ | $\sum_{i=1}^{3} i = 6$ |
+| $\prod_{i=1}^{n} a_i$ | $a_1 \cdot a_2 \cdots a_n$ | $\prod_{i=1}^{3} i = 6$ |
+| $n!$ | factorial, $\prod_{i=1}^{n} i$, with $0! = 1$ | $4! = 24$ |
+| $f: A \to B$ | $f$ is a function from $A$ to $B$ | |
+| $O, \Omega, \Theta$ | asymptotic bounds (@sec-asymptotic) | $3n^2+n = \Theta(n^2)$ |
+| $\Pr[E]$, $\mathbb{E}[X]$ | probability of an event, expectation of a random variable | |
+| $\wedge, \vee, \neg$ | logical *and*, *or*, *not* (@sec-boolean-algebra) | $p \wedge \neg q$ |
+| $\Rightarrow$, $\Leftrightarrow$ | implies, if and only if | |
+| $:=$ | "is defined as" | $\varepsilon := 2^{-52}$ |
+| $\blacksquare$ | end of a proof | |
+
+## How references work {.unnumbered}
+
+A citation such as [@knuth1997] or @cormen2022 links to the full entry in the
+[References](references.qmd) at the end of the book; hover over it to see the
+entry. Each entry gives, whenever they exist, the **DOI** (a permanent
+identifier: prefix it with `https://doi.org/` to open the publisher's page),
+the **arXiv** identifier for preprints, and a **URL** for standards and
+documentation. @sec-finding-sources explains how to obtain each kind of source,
+including free legal copies.

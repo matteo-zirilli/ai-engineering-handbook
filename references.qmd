@@ -1,0 +1,11 @@
+# References {.unnumbered}
+
+All the sources cited in the handbook, in alphabetical order by author.
+Each entry gives, whenever available, its **DOI** (open it as
+`https://doi.org/<DOI>`), its **arXiv** identifier, its **ISBN** or its
+**URL**, followed by a note on **how to obtain it** and **which parts the book
+uses**. @sec-finding-sources explains how to find and read each kind of
+source.
+
+::: {#refs}
+:::

@@ -1,0 +1,826 @@
+# Data collections {#sec-ch-collections}
+
+> *"Bad programmers worry about the code. Good programmers worry about data
+> structures and their relationships."* — Linus Torvalds (2006).
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- use Python's four core collections — **list**, **tuple**, **set**,
+  **dict** — and their main operations;
+- index and slice any sequence, and explain why indices start at 0 and
+  slices are half-open;
+- explain how a list is stored (a **dynamic array**) and **prove** that
+  `append` costs $O(1)$ amortised;
+- explain how sets and dicts work (**hash tables**), **prove** their expected
+  cost, and state the hash/equality contract;
+- recognise and avoid **aliasing** bugs, and choose between shallow and deep
+  copies;
+- sort data with `sorted` and `key=`, explain **stability**, and **prove** that
+  no comparison-based sort can beat $n\log n$;
+- choose the right collection for a problem, and convert between collections.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 3.1 *Introduction to collections*. Practice: 3.2 *Lists* ·
+3.3 *Modify and check* · 3.4 *Nested lists* · 3.5 *Tuples* · 3.6 *Sets* ·
+3.7 *Dictionaries* · 3.8 *Length of a collection* · 3.9 *Casting between
+collections*.
+:::
+
+## Intuition: four ways to keep things
+
+Think of four everyday containers:
+
+- a **queue at the post office** — order matters, people can join and leave,
+  you can ask "who is 3rd?": a **list**;
+- a **birth date** written on an ID card — a fixed group of values (day,
+  month, year) that never changes: a **tuple**;
+- a **bag of distinct stamps** — no order, no duplicates, the only question
+  is "do I have this one?": a **set**;
+- a **dictionary** (the book!) — you look up a *word* (the key) to find its
+  *definition* (the value): a **dict**.
+
+The choice is not cosmetic: the same question ("is X in here?") can take one
+step or a million depending on the container. This chapter explains why.
+
+| | ordered | mutable | duplicates | lookup by | typical use |
+|---|---|---|---|---|---|
+| `list` | yes | yes | yes | position | sequences that change |
+| `tuple` | yes | no | yes | position | fixed records, dict keys |
+| `set` | no | yes | no | membership | uniqueness, fast `in` |
+| `dict` | insertion order | yes | keys unique | key | mapping keys → values |
+
+: The four core collections {#tbl-collections}
+
+## Sequences: indexing and slicing {#sec-indexing}
+
+Lists, tuples, strings (and `range`, @sec-ch-loops) are **sequences**: their
+elements are numbered by position.
+
+### Why indices start at 0
+
+For a sequence of length $n$, valid indices are $0, 1, \dots, n-1$. Edsger
+Dijkstra gave the classic argument [@dijkstra1982]: to denote a range of
+natural numbers, the convention $a \le i < b$ (*half-open*) is the best one,
+because the length is $b-a$, adjacent ranges $[a,b)$ and $[b,c)$ fit together
+with no overlap and no gap, and the empty range is $[a, a)$. With half-open
+ranges, starting at 0 gives the clean bound $0 \le i < n$. There is also a
+hardware reason: element $i$ of an array starting at address $A$, with elements
+of size $s$, is at address $A + i\cdot s$ — offset $0$ for the first element.
+
+**Negative indices** count from the end: `s[-1]` is the last element, `s[-k]`
+is `s[len(s) - k]`.
+
+### Slicing
+
+`s[i:j]` returns a new sequence with the elements at positions $i \le k < j$;
+`s[i:j:step]` takes every `step`-th element. Omitted bounds default to the
+start and the end.
+
+```{python}
+s = ["a", "b", "c", "d", "e", "f"]
+#      0    1    2    3    4    5      positive indices
+#     -6   -5   -4   -3   -2   -1      negative indices
+print(s[0], s[-1], s[2:4], s[:3], s[3:], s[::2], s[::-1])
+print(s[4:100])     # slices never raise IndexError: out-of-range bounds are clipped
+```
+
+::: {#prp-slices}
+## Algebra of slices
+For a sequence `s` of length $n$ and integers $0 \le i \le j \le n$:
+(a) `len(s[i:j]) == j - i`; (b) `s[:k] + s[k:] == s` for every
+$0\le k\le n$; (c) `s[i:j] + s[j:k] == s[i:k]` for $i\le j \le k \le n$.
+:::
+
+*In one line:* half-open slices have length "end minus start" and glue
+together perfectly — Dijkstra's argument made executable.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-slices
+By definition `s[i:j]` contains the elements with indices in
+$\{i, i+1, \dots, j-1\}$, a set with $j - i$ elements, in increasing order:
+(a). For (c), $\{i,\dots,j-1\}$ and $\{j, \dots, k-1\}$ are disjoint, their union
+is $\{i,\dots,k-1\}$, and every index of the first set precedes every index of
+the second, so concatenating the slices lists exactly the elements of
+`s[i:k]` in order. (b) is (c) with $i = 0$, $j = k$, $k = n$. $\blacksquare$
+:::
+
+## Lists {#sec-lists}
+
+### Creating and modifying lists
+
+```{python}
+fruits = ["apple", "kiwi"]          # a list literal
+fruits.append("banana")             # add at the end
+fruits.insert(0, "mango")           # add at position 0
+fruits.extend(["grape", "kiwi"])    # append every element of another iterable
+print(fruits)
+
+fruits[1] = "APPLE"                 # replace by index
+removed = fruits.pop()              # remove and return the last element
+fruits.remove("kiwi")               # remove the FIRST occurrence of a value
+del fruits[0]                       # delete by index
+print(fruits, "| popped:", removed)
+
+print("banana" in fruits, fruits.index("banana"), fruits.count("grape"))
+print(len(fruits), min([3, 1, 2]), max([3, 1, 2]), sum([3, 1, 2]))
+```
+
+Lists can hold objects of different types (`[1, "two", 3.0]`), though in
+practice a list usually holds items of one kind. `fruits.index(x)` raises
+`ValueError` if `x` is absent — check with `in` first, or handle the exception
+(@sec-ch-exceptions).
+
+### How a list is stored: dynamic arrays {#sec-dynamic-arrays}
+
+In CPython a list is a **dynamic array**: a contiguous block of memory holding
+**references** (addresses) to the element objects, plus two integers: the
+**size** $n$ (how many slots are used) and the **capacity** $c \ge n$ (how many
+are allocated). Because the slots are contiguous and all the same size, element
+$i$ is found in **one step** at address $\text{base} + 8i$ (64-bit references):
+indexing is $O(1)$.
+
+When `append` finds $n = c$, the list must **grow**: allocate a larger block,
+**copy** the $n$ references, free the old block. Copying costs $\Theta(n)$. So is
+`append` slow? The trick, which goes back to the early days of
+dynamic tables [@knuth1997, §2.2.2; @cormen2022, §16.4], is to grow
+**geometrically**: multiply the capacity by a constant factor $g > 1$ instead of
+adding a constant.
+
+::: {#thm-amortized-append}
+## Amortised cost of `append`
+Suppose that when a full array of capacity $c$ grows, the new capacity is at
+least $g \cdot c$ for a fixed $g > 1$. Then any sequence of $N$ appends starting
+from an empty array performs at most $\frac{g}{g-1}N$ element copies in total.
+Hence the **amortised** cost per append is $O(1)$; for doubling ($g=2$) the
+total is at most $2N$.
+:::
+
+*In one line:* expensive resizes are rare — each one is paid for by the many
+cheap appends since the previous resize.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-amortized-append (aggregate method)
+
+Copies happen only during resizes. Let the resizes that occur during the $N$
+appends happen when the array is full with sizes $c_1 < c_2 < \dots < c_m$;
+the $j$-th resize copies $c_j$ references. Since capacities grow by a factor at
+least $g$, $c_{j} \le c_m / g^{\,m-j}$. The last resize happened while appending,
+so $c_m \le N$ (the array was full with $c_m$ elements, and at most $N$
+elements were ever inserted). The total number of copies is
+$$
+\sum_{j=1}^{m} c_j \le c_m \sum_{t=0}^{m-1} g^{-t} < c_m \cdot \frac{1}{1 - 1/g} = c_m\frac{g}{g-1} \le \frac{g}{g-1}N,
+$$
+using the geometric series $\sum_{t\ge0} r^t = \frac1{1-r}$ for $0 \le r < 1$
+(which follows from $(1-r)(1 + r + \dots + r^{T}) = 1 - r^{T+1}$ and
+$r^{T+1}\to 0$). Adding the $N$ writes of the new elements, $N$ appends cost
+$O(N)$ in total, i.e. $O(1)$ amortised each. For $g = 2$, $\frac{g}{g-1} = 2$.
+$\blacksquare$
+:::
+
+::: {.callout-important}
+## Amortised ≠ average
+"Amortised $O(1)$" is a **worst-case guarantee on sequences**: *any* $N$
+appends cost $O(N)$ together, even though an individual append may cost
+$\Theta(n)$. It involves no probability. The concept and its techniques
+(aggregate, accounting and potential methods) were systematised by Tarjan
+[@tarjan1985].
+:::
+
+CPython uses a growth factor of about $1.125$ (plus a small constant), trading
+some copying ($\frac{g}{g-1} = 9$) for less wasted memory. We can watch the
+capacity jumps through the memory size of the list object:
+
+```{python}
+import sys
+sizes, previous = [], None
+lst = []
+for n in range(60):
+    size = sys.getsizeof(lst)          # bytes used by the list object (header + slots)
+    if size != previous:
+        sizes.append((n, size))
+        previous = size
+    lst.append(None)
+print("(length when the block grew, bytes):", sizes)
+```
+
+Each time the size jumps, a resize occurred; the jumps become further apart as
+the list grows — geometric growth in action.
+
+Not every operation is cheap. Inserting or deleting at the **front** shifts all
+the other references: $\Theta(n)$. The costs below come from the CPython
+implementation [@pythonwikicomplexity]:
+
+| Operation | Cost | Why |
+|---|---|---|
+| `s[i]`, `s[i] = x`, `len(s)` | $O(1)$ | address arithmetic; size is stored |
+| `s.append(x)`, `s.pop()` | $O(1)$ amortised | @thm-amortized-append |
+| `s.insert(0, x)`, `s.pop(0)` | $O(n)$ | shift all elements |
+| `x in s`, `s.index(x)`, `s.remove(x)` | $O(n)$ | linear scan |
+| `s[i:j]` | $O(j - i)$ | copies the slice |
+| `s.sort()` | $O(n \log n)$ | @sec-sorting |
+
+: Cost of list operations ($n$ = length) {#tbl-list-costs}
+
+If you need fast insertion at both ends, use `collections.deque`
+(@sec-ch-stdlib).
+
+### Nested lists and the aliasing trap {#sec-aliasing}
+
+A list can contain lists: a **matrix** is a list of rows.
+
+```{python}
+matrix = [[1, 2, 3],
+          [4, 5, 6]]
+print(matrix[1][2])                 # row 1, column 2 -> 6
+print(len(matrix), len(matrix[0]))  # 2 rows, 3 columns
+```
+
+Recall the sticky-note picture (@sec-variables): a list holds **references**.
+Consider building a 3×3 grid of zeros:
+
+```{python}
+wrong = [[0] * 3] * 3               # three references to the SAME inner list!
+wrong[0][0] = 99
+print(wrong)
+
+right = [[0] * 3 for _ in range(3)] # a new inner list for each row (comprehension, @sec-comprehensions)
+right[0][0] = 99
+print(right)
+print(wrong[0] is wrong[1], right[0] is right[1])
+```
+
+`[x] * 3` repeats the **reference** `x` three times. When the element is an
+immutable `0`, that is harmless; when it is a mutable list, all rows are the
+same object. This is **aliasing**: two names (or slots) for one object.
+
+::: {.callout-tip}
+## Shallow vs deep copy
+- `b = a` copies nothing: `b` is another name for the same list.
+- `b = a.copy()` (or `a[:]`, `list(a)`) makes a **shallow copy**: a new outer
+  list whose slots refer to the *same* elements.
+- `b = copy.deepcopy(a)` copies recursively: nested mutable objects are
+  duplicated too.
+:::
+
+```{python}
+import copy
+a = [[1, 2], [3, 4]]
+shallow, deep = a.copy(), copy.deepcopy(a)
+a[0].append(99)                     # mutate a nested list
+print(shallow, deep)                # the shallow copy sees the change, the deep copy does not
+```
+
+## Tuples {#sec-tuples}
+
+A **tuple** is an immutable sequence. It is the natural type for a **record**
+whose fields are fixed: a point $(x, y)$, a date $(2026, 11, 13)$, a database
+row.
+
+```{python}
+point = (3, 4)
+single = (5,)                     # a one-element tuple needs the comma: (5) is just 5
+empty = ()
+x, y = point                      # unpacking
+first, *rest = (1, 2, 3, 4)       # extended unpacking (PEP 3132)
+print(x, y, first, rest, type(single), type((5)))
+try:
+    point[0] = 10
+except TypeError as err:
+    print("TypeError:", err)
+```
+
+Why have an immutable list? (1) **Safety**: a tuple passed to a function cannot
+be modified by it. (2) **Hashability**: a tuple of immutable values can be a
+`dict` key or a `set` element (@sec-hash-contract) — a list cannot.
+(3) Slightly less memory. Note that immutability is **shallow**: a tuple
+containing a list cannot change *which* list it holds, but the list itself can
+be mutated.
+
+`collections.namedtuple` (and `typing.NamedTuple`) give names to the fields:
+
+```{python}
+from collections import namedtuple
+Contact = namedtuple("Contact", ["name", "surname", "phone"])
+c = Contact("Ada", "Lovelace", "+44 20 7946 0000")
+print(c.surname, c[0], c)
+```
+
+## Sets {#sec-sets}
+
+A **set** is an unordered collection of **distinct, hashable** objects,
+modelled on the mathematical notion. Its key strength is that `x in s` takes
+$O(1)$ expected time.
+
+```{python}
+a = {1, 2, 3, 4}
+b = {3, 4, 5}
+print(a | b, a & b, a - b, a ^ b)       # union, intersection, difference, symmetric difference
+print(a <= {1, 2, 3, 4, 5}, 2 in a)     # subset test, membership
+emails = ["x@a.it", "y@b.it", "x@a.it"]
+print(set(emails), len(set(emails)))    # remove duplicates (order is lost!)
+s = set()                               # the empty set: {} would be an empty DICT
+s.add("python"); s.add("python"); s.discard("java")
+print(s)
+```
+
+`frozenset` is the immutable (hence hashable) version of `set`.
+
+| Mathematics | Python | Meaning |
+|---|---|---|
+| $A \cup B$ | `A \| B` | elements in $A$ or $B$ |
+| $A \cap B$ | `A & B` | elements in both |
+| $A \setminus B$ | `A - B` | in $A$ but not in $B$ |
+| $A \,\triangle\, B$ | `A ^ B` | in exactly one of them |
+| $A \subseteq B$ | `A <= B` | subset |
+| $x \in A$ | `x in A` | membership |
+
+## Hash tables: how sets and dicts work {#sec-hash-tables}
+
+### The idea
+
+Suppose we must store up to $n$ keys and answer "is $k$ present?". A list
+needs a scan: $O(n)$. If keys were small integers $0,\dots,m-1$ we could use a
+table of $m$ slots and look at slot $k$ directly: $O(1)$. **Hashing**, invented
+at IBM in the early 1950s (H. P. Luhn's internal memo of 1953) and first
+described in print by Arnold Dumey [@dumey1956], makes this work for *any*
+keys: a **hash function** $h$ maps each key to a slot index
+$h(k) \in \{0,\dots,m-1\}$.
+
+Different keys may land in the same slot: a **collision**. Two families of
+strategies handle collisions:
+
+- **chaining**: each slot holds a small list of all keys hashed there;
+- **open addressing**: if the slot is taken, probe other slots in a
+  deterministic sequence until a free one is found. CPython's `dict` and `set`
+  use open addressing.
+
+The crucial parameter is the **load factor** $\alpha = n/m$ (keys per slot).
+
+### Expected cost
+
+We cannot avoid bad luck with *every* set of keys (any fixed $h$ maps at least
+$n/m$ keys to some slot). The analysis assumes that $h$ "looks random":
+
+::: {#def-suha}
+## Simple uniform hashing
+Each key is equally likely to hash to any of the $m$ slots, independently of
+where the other keys hashed.
+:::
+
+::: {#thm-chaining}
+## Hashing with chaining
+Under simple uniform hashing, in a table with chaining and load factor
+$\alpha = n/m$, the expected number of keys examined by an unsuccessful
+search is $\alpha$, so the expected time is $\Theta(1+\alpha)$. If $m$ is kept
+proportional to $n$ (so $\alpha \le$ a constant), search, insertion and
+deletion take $O(1)$ expected time.
+:::
+
+*In one line:* on average each slot holds $\alpha$ keys, and an unsuccessful
+search must look at all of them.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-chaining
+Let the stored keys be $k_1,\dots,k_n$ and search for a key $k$ not in the
+table. The search scans the chain at slot $h(k)$. For each $i$, define the
+indicator $X_i = 1$ if $h(k_i) = h(k)$ and $0$ otherwise. By simple uniform
+hashing, $\Pr[X_i = 1] = 1/m$, so $\mathbb{E}[X_i] = 1/m$. The chain length is
+$L = \sum_i X_i$, and by **linearity of expectation** (which holds without any
+independence assumption)
+$$
+\mathbb{E}[L] = \sum_{i=1}^n \mathbb{E}[X_i] = \frac{n}{m} = \alpha .
+$$
+Adding $O(1)$ for computing $h(k)$ gives $\Theta(1+\alpha)$. If the table
+doubles whenever $\alpha$ exceeds a constant, the resizing cost is $O(1)$
+amortised by the same argument as @thm-amortized-append. $\blacksquare$
+:::
+
+For open addressing, the analysis assumes **uniform hashing**: the probe
+sequence of each key is equally likely to be any permutation of the slots.
+
+::: {#thm-open-addressing}
+## Open addressing
+Under uniform hashing, with load factor $\alpha < 1$, the expected number of
+probes in an unsuccessful search is at most $\dfrac{1}{1-\alpha}$.
+:::
+
+*In one line:* each probe hits an occupied slot with probability at most
+$\alpha$, so the number of probes behaves like waiting for the first "free"
+outcome in repeated trials.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-open-addressing
+Let $X$ be the number of probes. The first probe always happens. A second
+probe happens only if the first slot is occupied: probability $n/m$. Given
+that, a third happens only if the second slot (a different, uniformly random
+slot among the remaining $m-1$) is occupied: probability $(n-1)/(m-1)$; and so
+on. So
+$$
+\Pr[X \ge i] = \frac{n}{m}\cdot\frac{n-1}{m-1}\cdots\frac{n-i+2}{m-i+2} \le \alpha^{\,i-1},
+$$
+because $\frac{n-j}{m-j} \le \frac{n}{m}$ when $n \le m$. For a random variable
+with values in $\{1,2,\dots\}$, $\mathbb{E}[X] = \sum_{i\ge1}\Pr[X\ge i]$ (each
+outcome $x$ is counted once for every $i\le x$). Hence
+$$
+\mathbb{E}[X] \le \sum_{i=1}^{\infty} \alpha^{i-1} = \frac{1}{1-\alpha}.
+\qquad\blacksquare
+$$
+:::
+
+CPython keeps its dict tables at most $2/3$ full, so $\frac{1}{1-\alpha} \le 3$
+expected probes, and resizes (roughly tripling the space) when the threshold is
+exceeded. Knuth [@knuth1998, §6.4] gives the exact analysis of many probing
+schemes, including the famous result for linear probing, whose cost is
+$\frac12\big(1+\frac1{(1-\alpha)^2}\big)$ — much worse near full tables.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof alphaMax = Inputs.range([0.5, 0.95], {step: 0.01, value: 0.9, label: "max load factor α"})
+probeData = {
+  const out = [];
+  for (let a = 0; a <= alphaMax + 1e-9; a += 0.01) {
+    out.push({alpha: a, probes: 1 + a, scheme: "chaining"});
+    out.push({alpha: a, probes: 1 / (1 - a), scheme: "uniform open addressing"});
+    out.push({alpha: a, probes: 0.5 * (1 + 1 / ((1 - a) ** 2)), scheme: "linear probing"});
+  }
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-probes
+//| fig-cap: "Expected probes for an unsuccessful search: chaining (1 + α), open addressing with uniform hashing (1/(1−α)), linear probing (½(1 + 1/(1−α)²)). The dashed line marks CPython's maximum load factor 2/3."
+Plot.plot({x: {label: "load factor α"}, y: {label: "expected probes", type: "log"}, color: {legend: true},
+  marks: [Plot.line(probeData, {x: "alpha", y: "probes", stroke: "scheme"}), Plot.ruleX([2/3], {strokeDasharray: "4,4"})]})
+```
+:::
+
+### The hash/equality contract {#sec-hash-contract}
+
+Python computes slots from `hash(key)`. For lookups to work, equal keys must be
+found in the same place:
+
+::: {#prp-hash-contract}
+## Contract
+If `a == b` then `hash(a) == hash(b)`. And the hash of an object must not
+change while it is stored in a set or dict.
+:::
+
+*In one line:* the table looks for a key only along the probe sequence of its
+hash, so an equal key with a different hash would never be found.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — why the contract is necessary
+Suppose `a == b` but `hash(a) != hash(b)`, and insert `a`. A lookup of `b`
+starts at the slot determined by `hash(b)` and follows its probe sequence,
+comparing with `==` only the keys it meets there; nothing forces that sequence
+to pass through the slot where `a` is stored, so `b in table` can return
+`False` although an equal key is present. Similarly, if a key is **mutated**
+after insertion so that its hash changes, a later lookup starts from the new
+hash and misses the slot where the key actually sits. The converse is *not*
+required: different objects may have the same hash (that is just a collision).
+$\blacksquare$
+:::
+
+This is why **mutable** built-ins (`list`, `dict`, `set`) are **unhashable**:
+their value — hence their equality — can change. Tuples are hashable only if all
+their elements are. For your own classes, defining `__eq__` without `__hash__`
+makes instances unhashable (@sec-ch-oop).
+
+```{python}
+print(hash(42) == hash(42.0), 42 == 42.0)     # equal numbers of different types have equal hashes
+print(hash(("Ada", "Lovelace")))              # tuples of strings are hashable
+try:
+    {["a", "list"]: 1}
+except TypeError as err:
+    print("TypeError:", err)
+```
+
+::: {.callout-note}
+## Hash randomisation
+`hash("text")` changes **between runs** of Python: since Python 3.3 string
+hashes are salted with a random seed to defeat *hash-flooding* denial-of-service
+attacks, in which an attacker submits many keys with the same hash to make every
+lookup $O(n)$ [@crosby2003]. Never store `hash()` values in files.
+:::
+
+## Dictionaries {#sec-dicts}
+
+A **dict** maps **keys** (hashable) to **values** (anything).
+
+```{python}
+phone = {"Ada": "+44 20 1234", "Alan": "+44 161 5678"}
+phone["Grace"] = "+1 202 0000"                # insert or overwrite
+print(phone["Ada"])                           # lookup: KeyError if missing
+print(phone.get("Linus"), phone.get("Linus", "unknown"))   # safe lookup with default
+print("Alan" in phone, len(phone))            # membership tests the KEYS
+del phone["Alan"]
+for name, number in phone.items():            # iterate over (key, value) pairs
+    print(f"{name:<6} {number}")
+print(list(phone.keys()), list(phone.values()))
+```
+
+Useful methods: `d.setdefault(k, default)` (get, inserting the default if
+missing), `d.pop(k[, default])`, `d.update(other)`, `d | other` (merge, 3.9+),
+and `collections.Counter` / `collections.defaultdict` for counting and grouping
+(@sec-ch-stdlib).
+
+::: {#exm-word-count}
+## Counting words
+```{python}
+text = "the cat and the hat and the bat"
+counts = {}
+for word in text.split():
+    counts[word] = counts.get(word, 0) + 1    # O(1) expected per word
+print(counts)
+print(max(counts, key=counts.get))            # the most frequent word
+```
+Total cost: $O(n)$ expected for $n$ words — with a list of pairs it would be
+$O(n^2)$.
+:::
+
+**Order.** Since Python 3.7, dicts **preserve insertion order** as part of the
+language specification. This came from a 2012 redesign by Raymond Hettinger:
+a *compact* dict stores the entries densely in insertion order and keeps a
+separate, sparse array of small indices for the hash table, using less memory
+and, as a side effect, remembering the order [@hettinger2012].
+
+## Length of a collection
+
+`len(x)` works on every collection and costs $O(1)$: lists, tuples, strings,
+sets and dicts store their size, so `len` simply reads it. (`len` calls the
+special method `__len__`, @sec-ch-oop.)
+
+## Casting between collections {#sec-collection-casting}
+
+Each collection type, called with an **iterable**, builds a new collection
+from its elements:
+
+```{python}
+word = "mississippi"
+print(list(word))                     # characters, in order
+print(tuple([1, 2, 3]))
+print(set(word))                      # distinct characters, arbitrary order
+print(sorted(set(word)))              # distinct and sorted -> a list
+print(list(dict.fromkeys(word)))      # distinct, keeping first-appearance order (dicts keep order!)
+pairs = [("a", 1), ("b", 2)]
+print(dict(pairs), list({"a": 1, "b": 2}))   # a dict from pairs; list(dict) gives the keys
+print(dict(zip(["x", "y"], [10, 20])))       # zip pairs two sequences (@sec-ch-loops)
+```
+
+## Sorting {#sec-sorting}
+
+### `sorted`, `list.sort` and keys
+
+`sorted(iterable)` returns a **new** sorted list; `lst.sort()` sorts **in
+place** and returns `None`. Both accept `reverse=True` and a `key` function,
+applied once to each element to obtain the value to compare.
+
+```{python}
+names = ["mario", "Anna", "luigi", "Zoe"]
+print(sorted(names))                      # uppercase letters sort before lowercase (code points!)
+print(sorted(names, key=str.lower))       # case-insensitive
+print(sorted(names, key=len, reverse=True))
+people = [("Rossi", "Mario"), ("Bianchi", "Anna"), ("Rossi", "Anna")]
+print(sorted(people))                     # tuples compare lexicographically
+```
+
+**Lexicographic order** is the dictionary order generalised to sequences:
+compare the first elements; if they differ, that decides; otherwise compare the
+second elements, and so on; a proper prefix comes first. Formally, for tuples
+$a = (a_1,\dots,a_p)$ and $b = (b_1,\dots,b_q)$: $a < b$ iff there is an
+index $i$ with $a_j = b_j$ for all $j < i$ and either $i \le \min(p,q)$ and
+$a_i < b_i$, or $i = p+1 \le q$ (that is, $a$ is a proper prefix of $b$).
+Sorting by "surname, then name" is therefore
+`sorted(people, key=lambda p: (p.surname, p.name))` — exactly what the
+project's `Contatto.__lt__` does (@sec-ch-project-phonebook).
+
+### Stability and Timsort
+
+::: {#def-stable}
+## Stable sort
+A sort is **stable** if elements with equal keys keep their original relative
+order.
+:::
+
+Stability lets you sort by several criteria in successive passes: sort by the
+secondary key first, then by the primary key. Python's sort is guaranteed
+stable. It is **Timsort**, designed by Tim Peters in 2002 for CPython
+[@peters2002]: a hybrid of merge sort and insertion sort that detects
+already-sorted **runs** in the data, so it takes $O(n)$ time on sorted or
+nearly sorted input and $O(n\log n)$ in the worst case. (Since Python 3.11 the
+merge strategy is the *powersort* variant of Munro and Wild [@munro2018].)
+
+### Why $n \log n$ is the best possible
+
+Can a cleverer algorithm sort with fewer comparisons? Not if it only learns
+about the data by **comparing** pairs of elements.
+
+::: {#thm-sort-lower-bound}
+## Lower bound for comparison sorting
+Every comparison-based sorting algorithm performs, in the worst case, at least
+$\lceil\log_2(n!)\rceil$ comparisons on inputs of $n$ distinct elements, and
+$\log_2(n!) = \Theta(n \log n)$.
+:::
+
+*In one line:* each comparison has two outcomes, so $k$ comparisons can
+distinguish at most $2^k$ cases, but there are $n!$ possible orders to
+distinguish.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-sort-lower-bound (decision trees)
+
+Fix $n$ and an algorithm. Its behaviour on inputs of $n$ distinct elements can
+be drawn as a binary **decision tree**: each internal node is a comparison
+"$a_i < a_j$?", with two children for the two answers; each leaf is the point
+where the algorithm stops, having determined the sorted order. Distinct input
+orderings (permutations) must reach **distinct** leaves: if two different
+permutations reached the same leaf, the algorithm would rearrange them in the
+same way, and could not produce the sorted output for both. So the tree has at
+least $n!$ leaves.
+
+A binary tree of height $h$ (longest root-to-leaf path) has at most $2^h$
+leaves (by induction on $h$, the same argument as @thm-bit-strings). Hence
+$2^h \ge n!$, i.e. $h \ge \log_2(n!)$, and since $h$ is an integer,
+$h \ge \lceil \log_2(n!)\rceil$. The height is the worst-case number of
+comparisons.
+
+Finally, $\log_2 (n!) = \sum_{i=1}^n \log_2 i \le n \log_2 n$, and keeping only
+the largest $\lceil n/2\rceil$ terms, each at least $\log_2(n/2)$,
+$$
+\log_2(n!) \ge \frac n2 \log_2 \frac n2 = \frac n2(\log_2 n - 1) \ge \frac n4 \log_2 n \quad (n \ge 4).
+$$
+So $\log_2(n!) = \Theta(n\log n)$. (Stirling's formula gives the sharper
+$\log_2 n! = n\log_2 n - n\log_2 e + O(\log n)$.) $\blacksquare$
+:::
+
+::: {#exm-sort-3}
+## Three elements
+$3! = 6$ orders, $\lceil \log_2 6\rceil = 3$: no algorithm sorts every
+3-element input with 2 comparisons (2 comparisons give only 4 outcomes for 6
+cases), and 3 suffice. For $n = 5$: $\lceil\log_2 120\rceil = 7$, and 7
+comparisons are indeed enough [@knuth1998, §5.3.1].
+:::
+
+Non-comparison sorts (counting sort, radix sort) can be faster on special keys
+such as small integers, because they look *inside* the keys.
+
+## Choosing a collection {#sec-choosing-collection}
+
+```{python}
+import timeit
+n = 100_000
+data_list = list(range(n))
+data_set = set(data_list)
+target = n - 1                                  # worst case for the list: the last element
+t_list = timeit.timeit(lambda: target in data_list, number=200)
+t_set = timeit.timeit(lambda: target in data_set, number=200)
+print(f"list: {t_list:.4f} s   set: {t_set:.6f} s   ratio ≈ {t_list / t_set:,.0f}×")
+```
+
+| Question you ask most often | Choose |
+|---|---|
+| "what is the $i$-th element?", order matters, duplicates allowed | `list` |
+| a fixed record, or a key made of several parts | `tuple` |
+| "have I seen $x$?", remove duplicates, set algebra | `set` |
+| "what is associated with key $k$?" | `dict` |
+| add/remove at both ends (queues) | `collections.deque` |
+| count occurrences | `collections.Counter` |
+
+::: {.project-link}
+**In the project.** The brief asks to *"choose with care the data structure …
+lists, dictionary or a combination: assess what makes search and modification
+more efficient, and motivate the choice"*. The implementation in
+[`ai-projects`](https://github.com/matteo-zirilli/ai-projects/blob/main/Phone_Book_Python_OOP.ipynb)
+stores contacts in a **list** of `Contatto` objects, sorted with `list.sort()`
+(Timsort, relying on `__lt__` which compares the tuples `(surname, name)`
+lexicographically). With this chapter you can quantify the trade-off: the list
+keeps order and allows duplicates of names (two "Mario Rossi" with different
+numbers), but `in`, search and duplicate checks are $O(n)$ scans; a `dict`
+keyed by a normalised `(surname, name, number)` tuple would make the duplicate
+check $O(1)$ expected. For a personal phone book ($n$ in the hundreds) both are
+instantaneous — and *saying so, with the numbers*, is exactly the motivation the
+brief asks for.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **`[[0]*m]*n`** creates aliased rows; use a comprehension.
+- **Modifying a list while iterating over it** skips elements; iterate over a
+  copy (`for x in lst[:]`) or build a new list.
+- **`{}` is an empty dict**, not an empty set: use `set()`.
+- **`lst.sort()` returns `None`**: `lst = lst.sort()` destroys your list. Use
+  `sorted(lst)` for a new list.
+- **`x in lst` inside a loop** turns $O(n)$ into $O(n^2)$; convert to a set
+  once.
+- **Using a mutable object as a dict key** raises `TypeError`; use a tuple.
+- **Relying on set order.** Sets are unordered; sort if you need order.
+:::
+
+## Summary
+
+- Sequences are 0-indexed with half-open slices: `s[i:j]` has $j-i$
+  elements.
+- A list is a **dynamic array**: $O(1)$ indexing, $O(1)$ amortised append
+  (geometric growth), $O(n)$ insertion at the front and membership tests.
+- Tuples are immutable records; immutability makes them hashable.
+- Sets and dicts are **hash tables**: $O(1)$ expected membership and lookup,
+  provided the **hash/eq contract** holds and the load factor stays bounded.
+  Dicts preserve insertion order.
+- Python's `sort` is stable Timsort, $O(n\log n)$, which is optimal for
+  comparison sorts ($\log_2 n!$ lower bound).
+
+## Exercises
+
+::: {#exr-ch3-slices}
+Let `s = list(range(10))`. Predict `s[2:8:3]`, `s[-3:]`, `s[8:2:-2]`,
+`s[::-3]`, and `s[3:3]`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`[2, 5]`, `[7, 8, 9]`, `[8, 6, 4]`, `[9, 6, 3, 0]`, `[]`.
+:::
+
+::: {#exr-ch3-arith-growth}
+Show that if a dynamic array grew by a **constant** amount $k$ (capacity
+$c \to c + k$) instead of a constant factor, then $N$ appends would cost
+$\Theta(N^2/k)$ copies.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Resizes happen at sizes $k, 2k, 3k, \dots, \lfloor N/k\rfloor k$; the total
+copies are $k(1 + 2 + \dots + m)$ with $m = \lfloor N/k\rfloor$, i.e.
+$k\frac{m(m+1)}{2} = \Theta(k m^2) = \Theta(N^2/k)$ (using
+$\sum_{i=1}^m i = m(m+1)/2$, proved in @sec-ch-loops).
+:::
+
+::: {#exr-ch3-birthday}
+Under simple uniform hashing, insert $n$ keys into $m$ slots. Show that the
+expected number of pairs of keys that collide is $\binom n2 \frac1m$. With
+$m = 365$, how large must $n$ be for this expectation to exceed 1? (This is the
+*birthday paradox*.)
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+For each pair $\{i,j\}$ let $X_{ij}$ indicate $h(k_i)=h(k_j)$;
+$\Pr = 1/m$. By linearity, $\mathbb{E}[\sum X_{ij}] = \binom n2 / m$.
+$\binom{n}{2} > 365 \iff n(n-1) > 730 \iff n \ge 28$.
+:::
+
+::: {#exr-ch3-dedupe}
+Write a function `dedupe(lst)` that removes duplicates **keeping the first
+occurrence order**, in $O(n)$ expected time, without using `dict.fromkeys`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+def dedupe(lst):
+    seen, out = set(), []
+    for x in lst:
+        if x not in seen:        # O(1) expected
+            seen.add(x)
+            out.append(x)        # O(1) amortised
+    return out
+```
+:::
+
+::: {#exr-ch3-stable}
+Given `records = [("Rossi", 30), ("Bianchi", 25), ("Verdi", 30), ("Neri", 25)]`,
+produce the list sorted by age descending and, for equal ages, by name
+ascending, using (a) one `sorted` call with a tuple key; (b) two stable sorts.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) `sorted(records, key=lambda r: (-r[1], r[0]))`.
+(b) `tmp = sorted(records, key=lambda r: r[0]); sorted(tmp, key=lambda r: r[1], reverse=True)`
+— stability (which `reverse=True` preserves) keeps names ascending within each
+age. Both give `[('Rossi', 30), ('Verdi', 30), ('Bianchi', 25), ('Neri', 25)]`.
+:::
+
+## Further reading {.unnumbered}
+
+- @pythontutorial, §3.1.3 (lists), §5 (data structures) and the *Sorting
+  Techniques* HOWTO in the documentation.
+- @cormen2022: Chapter 11 (hash tables: Theorems on chaining and open
+  addressing), §16.4 (dynamic tables, amortised analysis), §8.1 (lower bound
+  for sorting).
+- @knuth1998: §5.3.1 (minimum-comparison sorting), §6.4 (hashing, with the
+  history of the technique).
+- @tarjan1985 — the paper that named and systematised amortised analysis.
+- @dijkstra1982 (EWD 831) — two pages on why numbering should start at zero.
+- @peters2002 (`listsort.txt`) — Tim Peters' own description of Timsort,
+  in the CPython source tree.
+- @hettinger2012 — the proposal of the compact, ordered dict.

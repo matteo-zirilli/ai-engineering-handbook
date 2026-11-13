@@ -1,0 +1,15 @@
+/* Wider reading column for formulas and tables */
+main.content { line-height: 1.65; }
+/* Proof boxes */
+.proof { border-left: 3px solid #8a8a8a; padding-left: 0.8em; }
+/* Theorem-like environments */
+.theorem, .lemma, .definition, .corollary, .proposition {
+  border-left: 4px solid #1a5fb4; padding: 0.4em 0.9em; margin: 1em 0;
+  background: rgba(26, 95, 180, 0.05);
+}
+/* Project link boxes */
+.project-link { border: 1px dashed #26a269; padding: 0.6em 1em; border-radius: 6px; }
+/* Tables */
+table { font-size: 0.93em; }
+/* Interactive widgets */
+.widget { border: 1px solid rgba(127,127,127,.35); border-radius: 8px; padding: 0.8em 1em; margin: 1em 0; }

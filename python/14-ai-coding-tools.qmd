@@ -1,0 +1,655 @@
+# AI tools for writing — and verifying — code {#sec-ch-ai-tools}
+
+> *"The hottest new programming language is English."* — Andrej Karpathy
+> (January 2023). This chapter adds: *and the hottest new skill is reading
+> code critically.*
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain, at a level sufficient to use them wisely, **how large language
+  models generate code**: tokens, next-token probabilities, the softmax,
+  temperature and sampling — with proofs of the key properties;
+- describe the main families of tools — **chat assistants** (ChatGPT and
+  similar), **AI-native editors** (Cursor), **IDE assistants** (GitHub Copilot
+  in VS Code), **agents** — and what each is good at;
+- explain how code models are **evaluated** (HumanEval, pass@$k$) and **prove**
+  that the standard pass@$k$ estimator is unbiased;
+- distinguish **vibe coding** from **structured prompt engineering**, and write
+  structured prompts with requirements, context, interfaces and tests;
+- **verify** AI-generated code systematically (reading, tests, static
+  analysis, security and dependency checks), and know the documented risks.
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 14.1 *Code generation with ChatGPT* · 14.2 *Code generation with
+Cursor* · 14.3 *Code generation with Copilot in Visual Studio Code* ·
+14.4 *Vibe coding vs. structured prompt engineering*.
+:::
+
+## Intuition: a very well-read, overconfident intern
+
+An AI coding assistant is like an intern who has read **billions of lines** of
+public code and documentation, types at superhuman speed, never gets tired —
+and **does not know when it is wrong**. It produces code that *looks* right
+because it has seen a lot of code that looks like it. Often the code *is*
+right. Sometimes it calls a function that does not exist, mishandles an edge
+case, or introduces a security hole, with exactly the same confident tone.
+
+Used well, the intern multiplies your productivity. Used blindly, it
+multiplies your bugs. The difference is **you**: the clarity of what you ask
+(the *specification*) and the rigour with which you check what you get (the
+*verification*). Everything in the previous thirteen chapters — types, edge
+cases, invariants, exceptions, file formats, dependencies — is what lets you
+do both.
+
+## How a language model writes code {#sec-llm-basics}
+
+The models behind these tools are **large language models** (LLMs) based on
+the **Transformer** architecture [@vaswani2017], trained on enormous amounts of
+text and code [@brown2020; @chen2021]. The details belong to later parts of
+this book; here we need four ideas.
+
+### Tokens
+
+Text is split into **tokens** — frequent character sequences, produced by
+algorithms such as **byte-pair encoding** (BPE) [@sennrich2016], which starts
+from single bytes and repeatedly merges the most frequent adjacent pair into a
+new token. Common words and code fragments become single tokens (`def`,
+` return`, ` self`); rare ones are split into pieces. A model's vocabulary $V$
+typically has $10^4$–$10^5$ tokens.
+
+### Next-token prediction
+
+A language model defines a probability distribution over token sequences
+$x_1,\dots,x_T$ by the **chain rule of probability**:
+$$
+P(x_1,\dots,x_T) = \prod_{t=1}^{T} P(x_t \mid x_1,\dots,x_{t-1}).
+$$ {#eq-chain-rule}
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @eq-chain-rule
+By the definition of conditional probability, $P(A\cap B) = P(A)\,P(B\mid A)$.
+For $T = 1$ the formula is trivial. Assuming it for $T-1$:
+$P(x_1..x_T) = P(x_1..x_{T-1})\,P(x_T\mid x_1..x_{T-1}) = \prod_{t=1}^{T-1}P(x_t\mid x_{<t})\cdot P(x_T\mid x_{<T})$.
+$\blacksquare$ The formula is an identity: it holds for any distribution, which
+is why a model only needs to learn the **conditional** next-token
+distributions.
+:::
+
+So the model is a function that, given the **context** (the prompt plus what it
+has generated so far), outputs a probability for every possible next token.
+Generation repeats: pick a token, append it, ask again. Everything the model
+"knows" about your project is what is in the context — which is why giving it
+the right context matters so much (@sec-structured-prompting).
+
+### Softmax and temperature
+
+The network outputs a real **score** (*logit*) $z_i$ for each token $i$; the
+**softmax** turns scores into probabilities. A **temperature** $\tau > 0$
+controls how peaked the distribution is:
+$$
+p_i(\tau) = \frac{e^{z_i/\tau}}{\sum_{j\in V} e^{z_j/\tau}} .
+$$ {#eq-softmax}
+
+::: {#thm-softmax}
+## Properties of the softmax with temperature
+Let $z \in \mathbb{R}^{|V|}$.
+
+1. $p_i(\tau) > 0$ and $\sum_i p_i(\tau) = 1$: it is a probability
+   distribution.
+2. **Shift invariance**: adding the same constant $c$ to every $z_i$ does not
+   change $p(\tau)$.
+3. If the maximum score is attained by a unique token $m$, then
+   $p_m(\tau)\to 1$ as $\tau\to0^+$ (**greedy** decoding).
+4. As $\tau\to\infty$, $p_i(\tau) \to 1/|V|$ for every $i$ (**uniform**
+   distribution).
+5. Larger scores get larger probabilities: $z_i > z_j \Rightarrow p_i > p_j$,
+   and the ratio $p_i/p_j = e^{(z_i - z_j)/\tau}$ grows as $\tau$ decreases.
+:::
+
+*In one line:* low temperature makes the model pick its favourite token
+(deterministic, repetitive); high temperature flattens the choice (diverse,
+error-prone).
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-softmax
+1. Exponentials are positive, and the numerators sum to the denominator.
+2. $\dfrac{e^{(z_i + c)/\tau}}{\sum_j e^{(z_j+c)/\tau}} = \dfrac{e^{c/\tau}e^{z_i/\tau}}{e^{c/\tau}\sum_j e^{z_j/\tau}} = p_i(\tau)$.
+3. By 2, subtract $z_m$: $p_m(\tau) = 1\big/\big(1 + \sum_{j\ne m} e^{(z_j - z_m)/\tau}\big)$.
+   Each exponent $(z_j - z_m)/\tau \to -\infty$ because $z_j - z_m < 0$, so each
+   term $\to 0$ and $p_m\to1$.
+4. Each $z_i/\tau\to 0$, so each $e^{z_i/\tau}\to1$, numerator $\to 1$ and
+   denominator $\to |V|$.
+5. $p_i/p_j = e^{z_i/\tau}/e^{z_j/\tau} = e^{(z_i-z_j)/\tau}$, which is $>1$ when
+   $z_i > z_j$ and is decreasing in $\tau$. $\blacksquare$
+
+Property 2 is also how softmax is **computed** safely: subtract $\max_j z_j$
+before exponentiating, so that no $e^{x}$ overflows (@sec-floats).
+:::
+
+```{python}
+import numpy as np
+
+def softmax(z, tau=1.0):
+    z = np.asarray(z, dtype=float) / tau
+    z = z - z.max()                      # shift invariance: avoids overflow in exp
+    e = np.exp(z)
+    return e / e.sum()
+
+tokens = [" range", " enumerate", " zip", " sorted", " reversed"]
+logits = [4.0, 2.5, 1.5, 0.5, 0.0]      # hypothetical scores after "for i in"
+for tau in [0.2, 0.7, 1.0, 2.0, 10.0]:
+    p = softmax(logits, tau)
+    print(f"tau={tau:>4}: " + "  ".join(f"{t.strip()}={q:.2f}" for t, q in zip(tokens, p)))
+print(softmax([1000, 999]), "(no overflow thanks to the shift)")
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof tauSlider = Inputs.range([0.1, 5], {step: 0.05, value: 1, label: "temperature τ"})
+softmaxData = {
+  const toks = ["range", "enumerate", "zip", "sorted", "reversed"];
+  const z = [4.0, 2.5, 1.5, 0.5, 0.0];
+  const m = Math.max(...z);
+  const e = z.map(v => Math.exp((v - m) / tauSlider));
+  const s = e.reduce((a, b) => a + b, 0);
+  return toks.map((t, i) => ({token: t, p: e[i] / s}));
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-softmax-temperature
+//| fig-cap: "Next-token probabilities for the same scores at different temperatures (hypothetical logits after the prompt `for i in`)."
+Plot.plot({y: {domain: [0, 1], label: "probability"}, x: {label: null, domain: ["range", "enumerate", "zip", "sorted", "reversed"]},
+  marks: [Plot.barY(softmaxData, {x: "token", y: "p", fill: "steelblue"}),
+          Plot.text(softmaxData, {x: "token", y: "p", text: d => d.p.toFixed(2), dy: -8}), Plot.ruleY([0])]})
+```
+:::
+
+Two common refinements: **top-$k$ sampling** keeps only the $k$ most probable
+tokens; **nucleus (top-$p$) sampling** keeps the smallest set of tokens whose
+probabilities sum to at least $p$ [@holtzman2020]. For code, assistants
+usually run at low temperature: code tolerates little creativity at the token
+level.
+
+### What follows for you
+
+- The model optimises **plausibility**, not **correctness**. A wrong but
+  common-looking line can have high probability.
+- Its knowledge has a **cut-off date** and reflects the frequency of patterns
+  in training data: recent library versions, rare APIs and your private code
+  are poorly represented unless you put them in the context.
+- It has **no access to the truth** unless a tool gives it one: running the
+  code, reading the documentation, executing the tests. Modern agentic tools do
+  exactly that — and that is why they work better.
+- By @thm-halting and Rice's theorem (@sec-halting), no tool — AI or not — can
+  decide in general that a program is correct. Verification remains an
+  engineering activity.
+
+## The tools {#sec-ai-tools-landscape}
+
+The landscape changes every few months; what follows describes the **kinds**
+of tools covered in the course, as of the writing of this book.
+
+| Kind | Examples | How you use it | Strengths | Watch out |
+|---|---|---|---|---|
+| **Chat assistant** | ChatGPT (OpenAI, launched November 2022), Claude, Gemini | describe a task in a conversation, paste code and errors | explaining concepts and errors, drafting functions, reviewing a snippet, brainstorming designs | it sees only what you paste; copy–paste errors; outdated APIs |
+| **IDE assistant** | GitHub Copilot in VS Code (2021, originally powered by Codex [@chen2021]) | inline completions as you type; a chat panel aware of open files; "edit" and agent modes | low friction, boilerplate, tests, small refactors | accepting completions without reading them |
+| **AI-native editor** | Cursor (a VS Code-based editor by Anysphere) | the editor indexes the whole codebase; chat and multi-file edits ("composer"/agent) with diffs to accept or reject | changes spanning many files, codebase questions | large diffs are hard to review; scope creep |
+| **Coding agents** | agentic modes of the above; command-line agents | give a goal; the agent plans, edits files, runs commands and tests, iterates | multi-step tasks with a feedback loop | give it tests and limits; review everything; protect secrets |
+
+: Families of AI coding tools {#tbl-ai-tools}
+
+### ChatGPT-style assistants: a workflow
+
+1. **State the task and constraints** (see the template in
+   @sec-structured-prompting).
+2. **Paste the relevant code** and the **exact error message** with its
+   traceback (@sec-anatomy) — not a paraphrase.
+3. Ask for an **explanation** as well as the code; ask what could go wrong.
+4. **Run** the answer, **test** it, and paste back the *actual* behaviour if
+   it fails.
+5. Never paste secrets, personal data or proprietary code you are not allowed
+   to share (the phone book's company values data protection: real contacts
+   are personal data under GDPR).
+
+### Copilot in VS Code: a workflow
+
+- Write a **descriptive function signature and docstring** first
+  (@sec-docstrings-functions); completions follow it. Type hints help.
+- Treat a grey suggestion as a **proposal**: read it before pressing
+  <kbd>Tab</kbd>.
+- Use the chat to **generate tests** for the function you wrote, then make them
+  pass — the reverse of the usual direction, and much safer.
+
+### Cursor: a workflow
+
+- Ask questions **about the codebase** ("where is the JSON file written?") —
+  answers point to files you can open.
+- For multi-file changes, describe the change, then **review the diff file by
+  file**; reject what you do not understand.
+- Keep a project **rules file** describing conventions (style, libraries,
+  "never use print for errors"), so they are part of every context.
+
+### What the evidence says
+
+- In a randomised controlled trial, developers with Copilot implemented a
+  small HTTP server **55.8% faster** than the control group [@peng2023]. The
+  task was small and self-contained.
+- In another randomised trial on **real issues** in large, mature open-source
+  projects they knew well, experienced developers using early-2025 tools took
+  **19% longer** — while believing they had been about 20% faster
+  [@becker2025].
+- Of 1,689 programs Copilot generated for security-relevant scenarios, about
+  **40% were vulnerable** [@pearce2022].
+- Across 16 models and 576,000 generated samples, on average at least **5.2%**
+  (commercial models) and **21.7%** (open-source models) of recommended
+  packages **did not exist** — names an attacker can register
+  [@spracklen2025] (@sec-choosing-packages).
+
+The picture is consistent: large gains on well-specified, self-contained tasks;
+smaller or negative gains when the context is large and implicit; real
+security and supply-chain risks when output is not verified.
+
+## Measuring code models: pass@$k$ {#sec-passk}
+
+How do we measure whether a model writes correct code? The Codex paper
+introduced **HumanEval**: 164 hand-written Python problems, each with a
+signature, a docstring and hidden **unit tests**; a generated solution counts
+as correct if it passes all the tests [@chen2021]. Since generation is random,
+one reports **pass@$k$**: the probability that **at least one of $k$**
+generated samples passes.
+
+If each sample is independently correct with probability $p$, then
+$$
+\text{pass@}k = 1 - (1-p)^k ,
+$$ {#eq-passk}
+because "none of $k$ is correct" has probability $(1-p)^k$ (independence) and
+we take the complement. With $p = 0.3$: pass@1 $= 0.3$, pass@10
+$= 1 - 0.7^{10} \approx 0.97$ — sampling several solutions and **testing** them
+is very effective, which is precisely why tests are so valuable when working
+with AI.
+
+In practice $p$ is unknown. Chen et al. generate $n \ge k$ samples per
+problem, count the $c$ correct ones, and use the estimator
+$$
+\widehat{\text{pass@}k} = 1 - \frac{\binom{n-c}{k}}{\binom nk}.
+$$ {#eq-passk-estimator}
+
+::: {#thm-passk-unbiased}
+## The pass@$k$ estimator is unbiased
+If the $n$ samples are independent and each is correct with probability $p$,
+then $\mathbb{E}\big[\widehat{\text{pass@}k}\big] = 1 - (1-p)^k$.
+:::
+
+*In one line:* the fraction $\binom{n-c}{k}/\binom nk$ is the probability that
+$k$ samples chosen at random among the $n$ are all wrong; averaging over the
+randomness of the $n$ samples gives the probability that $k$ fresh samples are
+all wrong.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-passk-unbiased
+Generate the $n$ samples, and independently choose a subset $S$ of $k$ of
+them uniformly at random. Compute the probability $q$ that all samples in $S$
+are wrong in two ways.
+
+*Conditioning on the samples.* Given the $n$ samples with $c$ correct ones,
+there are $\binom nk$ equally likely subsets, of which $\binom{n-c}{k}$
+contain only wrong samples (@thm-comb). So
+$q = \mathbb{E}\!\left[\binom{n-c}{k}/\binom nk\right]$.
+
+*Directly.* Because $S$ is chosen independently of the outcomes and the
+samples are i.i.d., the $k$ samples in $S$ are themselves $k$ independent
+samples, each wrong with probability $1-p$. So $q = (1-p)^k$.
+
+Equating, $\mathbb{E}\big[\binom{n-c}{k}/\binom nk\big] = (1-p)^k$, and by
+linearity of expectation
+$\mathbb{E}\big[\widehat{\text{pass@}k}\big] = 1 - (1-p)^k$. $\blacksquare$
+:::
+
+The "obvious" plug-in estimate $1 - (1 - c/n)^k$ is **biased** (it
+underestimates), because $x\mapsto 1-(1-x)^k$ is concave (Jensen's
+inequality). For computation, the binomial coefficients can be huge; Chen et
+al. use the equivalent product
+$$
+\frac{\binom{n-c}{k}}{\binom nk} = \prod_{i=n-c+1}^{n}\Big(1 - \frac ki\Big),
+$$
+which follows by writing both coefficients with factorials:
+$\frac{(n-c)!\,(n-k)!}{n!\,(n-c-k)!} = \prod_{i=n-c+1}^{n}\frac{i-k}{i}$
+(for $n - c \ge k$; otherwise the ratio is $0$ and the estimate is $1$).
+
+```{python}
+from math import comb, prod
+import random
+
+def pass_at_k(n: int, c: int, k: int) -> float:
+    """Unbiased pass@k estimator of Chen et al. (2021), numerically stable form."""
+    if n - c < k:
+        return 1.0
+    return 1.0 - prod(1 - k / i for i in range(n - c + 1, n + 1))
+
+print(pass_at_k(20, 5, 1), pass_at_k(20, 5, 10), 1 - comb(15, 10) / comb(20, 10))
+
+# Monte Carlo check of unbiasedness (and of the bias of the plug-in estimate)
+random.seed(0)
+p, n, k, trials = 0.15, 20, 5, 20_000
+unbiased = plugin = 0.0
+for _ in range(trials):
+    c = sum(random.random() < p for _ in range(n))
+    unbiased += pass_at_k(n, c, k)
+    plugin += 1 - (1 - c / n) ** k
+print(f"true {1 - (1 - p) ** k:.4f} | unbiased {unbiased / trials:.4f} | plug-in {plugin / trials:.4f}")
+```
+
+## Vibe coding versus structured prompt engineering {#sec-vibe-vs-structured}
+
+### Vibe coding
+
+In February 2025 Andrej Karpathy described a new way of programming he called
+**vibe coding**: you *"fully give in to the vibes, embrace exponentials, and
+forget that the code even exists"* [@karpathy2025] — you describe what you
+want, accept the changes without reading them, paste error messages back, and
+keep going until it seems to work. The term spread instantly (Collins
+Dictionary named it its 2025 word of the year).
+
+Vibe coding has a legitimate niche: **throwaway prototypes**, personal
+scripts, exploring an idea, learning what is possible. Its defining feature —
+*not reading the code* — is also its limit: nobody understands the result, so
+nobody can guarantee its correctness, security or maintainability, and every
+change risks breaking something invisible. For anything that handles real
+users' data, money or safety, or that must live longer than a weekend, it is
+not engineering.
+
+### Structured prompt engineering {#sec-structured-prompting}
+
+**Structured prompt engineering** treats the prompt as a **specification** and
+the output as a **proposal to be verified**. A good code prompt contains:
+
+| Part | What to write | Why |
+|---|---|---|
+| **Goal** | one sentence: what the code must achieve | anchors everything else |
+| **Context** | language/version, libraries and versions, relevant existing code, conventions | the model only knows what is in the context |
+| **Interface** | function/class signatures, types, inputs and outputs | constrains the solution; makes it testable |
+| **Requirements** | functional behaviour, including **edge cases** and **error handling** | the parts the model is most likely to skip |
+| **Constraints** | what *not* to do: no new dependencies, no I/O in domain code, performance limits | prevents plausible-but-unwanted designs |
+| **Examples / tests** | input → expected output pairs, or a test suite to pass | the single most effective addition: examples steer the model [@brown2020], tests let you verify |
+| **Output format** | "return only the function", "explain the design first", "show a diff" | makes the answer usable and reviewable |
+
+Asking the model to **reason step by step** or to **explain its plan before
+writing code** tends to improve results on complex tasks (*chain-of-thought*
+prompting [@wei2022]). Iterate: when the result is wrong, refine the
+specification or add the failing test, rather than just saying "it doesn't
+work".
+
+::: {#exm-structured-prompt}
+## A structured prompt for the project
+```text
+GOAL: Write a function that normalises phone numbers for a terminal phone book.
+
+CONTEXT: Python 3.13, standard library only. Numbers are typed by Italian users;
+the result is stored as a string in a JSON file.
+
+INTERFACE:
+    def normalize_phone(text: str, default_cc: str = "39") -> str
+
+REQUIREMENTS:
+1. Ignore spaces, '-', '.', '(' and ')'.
+2. A leading '+' or '00' introduces the country code; otherwise prepend default_cc.
+3. KEEP leading zeros of the national number (Italian landlines start with 0).
+4. Return '+' followed by digits only (E.164 style), 8 to 15 digits in total.
+5. Raise ValueError with a clear message for any other character or wrong length.
+
+CONSTRAINTS: no regex libraries beyond `re`; no int() conversion of the number.
+
+TESTS (must all pass):
+    "06 1234 5678"      -> "+390612345678"
+    "+39 333-123.4567"  -> "+393331234567"
+    "0039 333 1234567"  -> "+393331234567"
+    "(02) 1234567"      -> "+39021234567"
+    "12ab34"            -> ValueError
+    "+1 2"              -> ValueError
+
+OUTPUT: the function with a docstring, then a list of edge cases you considered.
+```
+:::
+
+## Verifying AI-generated code {#sec-verification}
+
+Here is a **plausible** answer to a vaguer prompt ("write a function that
+normalises Italian phone numbers"), of the kind assistants frequently produce
+— short, readable, and wrong:
+
+```{python}
+def normalize_phone_v1(text, default_cc="39"):
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if text.strip().startswith("+"):
+        return "+" + digits
+    return "+" + default_cc + str(int(digits))
+```
+
+The tests from the structured prompt expose it immediately:
+
+```{python}
+TESTS = [
+    ("06 1234 5678", "+390612345678"),
+    ("+39 333-123.4567", "+393331234567"),
+    ("0039 333 1234567", "+393331234567"),
+    ("(02) 1234567", "+39021234567"),
+    ("12ab34", ValueError),
+    ("+1 2", ValueError),
+]
+
+def run_tests(fn):
+    failures = 0
+    for text, expected in TESTS:
+        try:
+            got = fn(text)
+        except Exception as err:
+            got = type(err)
+        ok = got == expected
+        failures += not ok
+        print(f"{'PASS' if ok else 'FAIL'}  {text!r:22} expected {expected!s:<26} got {got}")
+    print(f"--> {len(TESTS) - failures}/{len(TESTS)} passed\n")
+
+run_tests(normalize_phone_v1)
+```
+
+Only one test out of six passes, and each failure is a lesson from earlier
+chapters: `int()` **drops leading
+zeros** (@sec-casting); the `00` prefix is treated as part of the number;
+letters are **silently ignored** instead of rejected (validate input,
+@sec-ch-exceptions); no length check (E.164 [@itue164]). A corrected version,
+written against the specification:
+
+```{python}
+import re
+
+ALLOWED_SEPARATORS = " -.()"
+
+def normalize_phone(text: str, default_cc: str = "39") -> str:
+    """Normalise a phone number to '+<digits>' (E.164 style).
+
+    Separators ' -.()' are ignored; a leading '+' or '00' introduces the country
+    code, otherwise `default_cc` is prepended. Leading zeros are kept.
+    Raises ValueError for invalid characters or a total length outside 8..15 digits.
+    """
+    s = "".join(ch for ch in text.strip() if ch not in ALLOWED_SEPARATORS)
+    if s.startswith("+"):
+        body = s[1:]
+    elif s.startswith("00"):
+        body = s[2:]
+    else:
+        body = default_cc + s
+    if not re.fullmatch(r"\d+", body):
+        raise ValueError(f"invalid characters in phone number: {text!r}")
+    if not 8 <= len(body) <= 15:
+        raise ValueError(f"phone number must have 8-15 digits, got {len(body)}: {text!r}")
+    return "+" + body
+
+run_tests(normalize_phone)
+```
+
+### A verification checklist
+
+1. **Read every line.** If you cannot explain a line, you cannot ship it. Ask
+   the assistant to explain it — then check the explanation against the
+   documentation.
+2. **Run it**, on normal inputs *and* on edge cases: empty input, zero,
+   negative numbers, huge inputs, Unicode, missing files, wrong types.
+3. **Test it**: write (or generate, then review) unit tests *before* accepting
+   the code; keep them in the project (`doctest`, `unittest`, `pytest`).
+   Property-based testing (e.g. the Hypothesis library) generates hundreds of
+   random inputs to check invariants such as "normalising twice gives the same
+   result".
+4. **Check the invariants and contracts** you know from the design (class
+   invariants, @sec-encapsulation; loop invariants, @sec-loop-invariants) —
+   add `assert`s for internal ones.
+5. **Static analysis**: a linter (`ruff`), a type checker (`mypy`), a security
+   scanner (`bandit`), a secrets scanner. They catch whole classes of errors for
+   free.
+6. **Dependencies**: does every imported package **exist**, is it the one you
+   think, is it maintained, is its licence acceptable (@sec-choosing-packages)?
+7. **Security and privacy**: no hard-coded secrets, no `eval` on user input,
+   no SQL built by string concatenation, no personal data sent to external
+   services without permission.
+8. **Review the diff, not just the result**: in multi-file edits, unrelated
+   changes slip in.
+
+::: {.callout-important}
+## The rule of this book
+Use AI tools as much as you like to **draft**, **explain**, **review** and
+**test** — but you are the engineer of record: **never commit code you have not
+read, understood and verified.**
+:::
+
+::: {.project-link}
+**In the project.** The brief closes with *"if you have doubts about how to
+set up the classes, write to me before starting"* — today you could also ask an
+assistant, and this chapter shows how to do it well: give it the brief as a
+**structured prompt** (requirements, constraints such as "keep the interaction
+logic out of the domain classes", the JSON format), ask for a **design and its
+rationale** before any code, then use it to **generate edge-case tests** for
+your own implementation (empty file, duplicate contact, non-numeric choice,
+interrupted save). The phone-number normaliser above is a ready-made
+improvement for the project's `Contatto`, which stores numbers as `int` and
+therefore loses leading zeros (@sec-ch-project-phonebook).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Accepting code you have not read** (the essence of vibe coding).
+- **Vague prompts** → plausible code for a different problem.
+- **Missing context**: library versions, existing code, conventions.
+- **Hallucinated APIs and packages**: check names against the official
+  documentation and PyPI.
+- **Pasting secrets or personal data** into external tools.
+- **Letting the model grade itself**: "are you sure?" is not verification;
+  tests are.
+- **Over-reliance while learning**: if the assistant writes all your exercises,
+  you do not learn to program — and you lose the very skill needed to verify
+  it. Do the exercises of this book by hand first.
+:::
+
+## Summary
+
+- LLMs generate code token by token from conditional probabilities (chain
+  rule); the softmax with temperature turns scores into probabilities —
+  low $\tau$ is greedy, high $\tau$ uniform.
+- They optimise plausibility, not correctness, and know only what is in their
+  training data and context.
+- Chat assistants, IDE assistants (Copilot), AI-native editors (Cursor) and
+  agents differ in how much context they see and how much they act.
+- Code models are evaluated with unit tests and pass@$k$; the estimator
+  $1 - \binom{n-c}{k}/\binom nk$ is unbiased.
+- Vibe coding is fine for throwaway prototypes; engineering requires
+  structured prompts (goal, context, interface, requirements, constraints,
+  tests, format) and systematic verification.
+- Evidence: big speed-ups on small, well-specified tasks; slow-downs on large
+  familiar codebases; frequent security flaws and hallucinated packages when
+  unverified.
+
+## Exercises
+
+::: {#exr-ch14-softmax}
+For logits $z = (2, 1, 0)$ compute the softmax probabilities by hand (with
+$e \approx 2.718$) at $\tau = 1$, and the ratio $p_1/p_3$ at $\tau = 1$ and
+$\tau = 0.5$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$e^2 \approx 7.389$, $e^1\approx 2.718$, $e^0 = 1$; sum $\approx 11.107$:
+$p \approx (0.665, 0.245, 0.090)$. $p_1/p_3 = e^{2/\tau}$: $e^2\approx 7.39$ at
+$\tau=1$, $e^4 \approx 54.6$ at $\tau = 0.5$.
+:::
+
+::: {#exr-ch14-passk}
+A model solves a problem with probability $p = 0.2$ per sample. How many
+samples $k$ are needed for pass@$k \ge 0.9$? If you can run a test suite on
+each sample, what does this suggest about how to use such a model?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$1 - 0.8^k \ge 0.9 \iff 0.8^k\le 0.1 \iff k \ge \ln 0.1/\ln 0.8 \approx 10.3$,
+so $k = 11$. With automatic tests, generating several candidates and keeping
+one that passes turns a weak per-sample accuracy into a high success rate —
+provided the tests are good (a wrong test selects wrong code).
+:::
+
+::: {#exr-ch14-prompt}
+Write a structured prompt (goal, context, interface, requirements,
+constraints, tests, output) asking an assistant for the `load_contacts`
+function of @exr-ch8-load. Then compare what you get with the solution of that
+exercise and list the differences.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Key requirements to state: return `[]` for a missing **or empty** file; raise a
+custom, chained error for invalid JSON; open with `encoding="utf-8"`; no
+`os.path.exists` check (TOCTOU, @exm-toctou); tests for the three cases.
+Typical differences in generated code: an LBYL existence check, empty files not
+handled (`JSONDecodeError`), a bare `except`, missing encoding.
+:::
+
+::: {#exr-ch14-idempotent}
+Write a test that checks the **idempotence** of `normalize_phone`
+(normalising an already-normalised number returns it unchanged) on the valid
+test inputs. Why is idempotence a good property to test?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+for text, expected in TESTS:
+    if expected is not ValueError:
+        once = normalize_phone(text)
+        assert normalize_phone(once) == once
+```
+Stored numbers may be normalised again (on load, on edit); idempotence
+guarantees that repeated processing never corrupts them. Properties like this
+are ideal for property-based testing because they hold for *all* valid inputs.
+:::
+
+## Further reading {.unnumbered}
+
+- @chen2021 — the Codex paper: HumanEval, pass@$k$ and its estimator
+  (Section 2.1), and an early discussion of risks.
+- @vaswani2017 — the Transformer; @brown2020 — few-shot prompting in GPT-3;
+  @wei2022 — chain-of-thought prompting; @holtzman2020 — nucleus sampling;
+  @sennrich2016 — byte-pair encoding. All will be studied in depth in the
+  generative-AI part of the book.
+- @peng2023 and @becker2025 — two randomised trials with different settings
+  and opposite results: read both.
+- @pearce2022 — security of AI-generated code; @spracklen2025 — package
+  hallucinations.
+- The official documentation of the tools (GitHub Copilot, Cursor, ChatGPT):
+  features change quickly, so always check the current version.

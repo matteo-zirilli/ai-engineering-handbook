@@ -1,0 +1,627 @@
+# Conditional statements {#sec-ch-conditionals}
+
+> *"The design of the following treatise is to investigate the fundamental laws
+> of those operations of the mind by which reasoning is performed."*
+> — George Boole, *An Investigation of the Laws of Thought* (1854).
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- write **Boolean expressions** with comparison operators, including chained
+  comparisons;
+- apply the laws of **Boolean algebra**, and **prove** De Morgan's laws and the
+  functional completeness of `and`, `or`, `not`;
+- predict exactly what `and` and `or` return, use **short-circuit
+  evaluation** as a guard, and explain **truthiness**;
+- write `if`, `if`–`else`, `if`–`elif`–`else` statements and **conditional
+  expressions**, and use `match` for structural pattern matching;
+- explain why sequence, selection and iteration are enough to write any
+  program (the **Böhm–Jacopini theorem**).
+:::
+
+::: {.callout-tip}
+## Course lessons covered
+Theory: 4.1 *Boolean expressions* · 4.2 *Logical operators* · 4.3
+*Introduction to conditional statements*. Practice: 4.4 *If* · 4.5 *The
+if-else statement* · 4.6 *Elif* · 4.7 *The if expression*.
+:::
+
+## Intuition: a railway switch
+
+A program without conditions is a train on a straight track: it always does
+the same thing. A **conditional statement** is a **railway switch**: depending
+on a **condition** — a question whose answer is *yes* or *no* — the train goes
+one way or the other. In machine terms (§ [-@sec-von-neumann]) it is a
+*conditional jump*: if the condition is false, the program counter skips over a
+block of instructions.
+
+## Boolean expressions {#sec-boolean-expressions}
+
+A **Boolean expression** is an expression whose value is `True` or `False`.
+The simplest ones are **comparisons**:
+
+| Operator | Meaning | Example | Value |
+|---|---|---|---|
+| `==` | equal value | `3 == 3.0` | `True` |
+| `!=` | different value | `"a" != "A"` | `True` |
+| `<`, `<=`, `>`, `>=` | order | `"apple" < "banana"` | `True` |
+| `in`, `not in` | membership | `"y" in "Python"` | `True` |
+| `is`, `is not` | identity (@sec-variables) | `x is None` | depends |
+
+: Comparison operators {#tbl-comparisons}
+
+Strings compare **lexicographically by code point** (@sec-strings,
+@sec-sorting): `"Zoe" < "anna"` is `True` because `ord("Z") = 90 < ord("a") = 97`.
+Comparing values of unrelated types with `<` raises `TypeError`
+(`3 < "4"`), while `==` simply returns `False`.
+
+Python allows **chained comparisons**, as in mathematics: `a < b < c` means
+`a < b and b < c`, except that `b` is evaluated only once
+[@pythonreference, §6.10]:
+
+```{python}
+age = 25
+print(18 <= age < 65)          # same as (18 <= age) and (age < 65)
+x = 5
+print(1 < x > 3)               # legal but confusing: 1 < x and x > 3
+```
+
+## Boolean algebra {#sec-boolean-algebra}
+
+### Boole's algebra of logic
+
+In 1847 and 1854 George Boole showed that logical reasoning could be written as
+algebra on two values [@boole1854]. Almost a century later, Claude Shannon
+observed that relay circuits obey the same algebra [@shannon1938] — which is
+why every digital computer is, at bottom, a Boolean-algebra machine.
+
+Let $p, q$ be propositions (statements that are true or false). The three
+basic connectives are defined by **truth tables**:
+
+| $p$ | $q$ | $\neg p$ (`not p`) | $p \wedge q$ (`p and q`) | $p \vee q$ (`p or q`) | $p \oplus q$ (`p != q`) |
+|---|---|---|---|---|---|
+| F | F | T | F | F | F |
+| F | T | T | F | T | T |
+| T | F | F | F | T | T |
+| T | T | F | T | T | F |
+
+: Truth tables of the logical connectives {#tbl-truth}
+
+`or` is **inclusive** ("one or the other *or both*"); the exclusive or
+$\oplus$ (XOR) is written `!=` between booleans (or `^`).
+
+### The laws
+
+::: {#thm-boolean-laws}
+## Laws of Boolean algebra
+For all Boolean values $p, q, r$:
+
+| Law | *and* form | *or* form |
+|---|---|---|
+| identity | $p \wedge \text{T} = p$ | $p \vee \text{F} = p$ |
+| domination | $p \wedge \text{F} = \text{F}$ | $p \vee \text{T} = \text{T}$ |
+| idempotence | $p \wedge p = p$ | $p \vee p = p$ |
+| complement | $p \wedge \neg p = \text{F}$ | $p \vee \neg p = \text{T}$ |
+| commutativity | $p \wedge q = q \wedge p$ | $p \vee q = q \vee p$ |
+| associativity | $(p\wedge q)\wedge r = p \wedge(q\wedge r)$ | $(p\vee q)\vee r = p\vee(q\vee r)$ |
+| distributivity | $p \wedge (q\vee r) = (p\wedge q)\vee(p\wedge r)$ | $p \vee (q\wedge r) = (p\vee q)\wedge(p\vee r)$ |
+| absorption | $p \wedge (p \vee q) = p$ | $p \vee (p\wedge q) = p$ |
+| **De Morgan** | $\neg(p\wedge q) = \neg p \vee \neg q$ | $\neg(p \vee q) = \neg p\wedge\neg q$ |
+| double negation | $\neg\neg p = p$ | |
+:::
+
+*In one line:* "not (A and B)" means "not A, or not B" — to negate a
+conjunction, negate each part and swap *and* with *or*.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-boolean-laws
+Each law involves at most three variables, so it can be checked on all
+$2^3 = 8$ combinations of truth values (@thm-bit-strings): this is a complete
+proof, called **proof by exhaustion** or by truth table. For De Morgan's first
+law:
+
+| $p$ | $q$ | $p\wedge q$ | $\neg(p\wedge q)$ | $\neg p$ | $\neg q$ | $\neg p\vee\neg q$ |
+|---|---|---|---|---|---|---|
+| F | F | F | **T** | T | T | **T** |
+| F | T | F | **T** | T | F | **T** |
+| T | F | F | **T** | F | T | **T** |
+| T | T | T | **F** | F | F | **F** |
+
+The two bold columns coincide. The other laws are checked the same way; the
+code below checks **all** of them mechanically. $\blacksquare$
+:::
+
+```{python}
+from itertools import product          # product([F,T], repeat=3): all 8 combinations
+
+laws = {
+    "De Morgan (and)": lambda p, q, r: (not (p and q)) == ((not p) or (not q)),
+    "De Morgan (or)":  lambda p, q, r: (not (p or q)) == ((not p) and (not q)),
+    "distributivity":  lambda p, q, r: (p and (q or r)) == ((p and q) or (p and r)),
+    "distributivity 2": lambda p, q, r: (p or (q and r)) == ((p or q) and (p or r)),
+    "absorption":      lambda p, q, r: (p and (p or q)) == p,
+    "associativity":   lambda p, q, r: ((p and q) and r) == (p and (q and r)),
+}
+for name, law in laws.items():
+    holds = all(law(p, q, r) for p, q, r in product([False, True], repeat=3))
+    print(f"{name:<17} holds for all 8 cases: {holds}")
+```
+
+De Morgan's laws are named after Augustus De Morgan, who stated them in 1847
+[@demorgan1847], although they were known to medieval logicians. They are the
+most useful laws in practice: they let you rewrite a negated condition into a
+readable one.
+
+::: {#exm-demorgan}
+## Simplifying a condition
+"Reject the password unless it is long enough **and** contains a digit":
+```python
+if not (len(pw) >= 12 and any(c.isdigit() for c in pw)):
+    reject()
+```
+By De Morgan this is
+```python
+if len(pw) < 12 or not any(c.isdigit() for c in pw):
+    reject()
+```
+which reads as the list of reasons for rejection.
+:::
+
+### Any condition can be built from `and`, `or`, `not`
+
+A Boolean function of $n$ inputs is a table with $2^n$ rows. Can every such
+table be written with our three connectives? Yes.
+
+::: {#thm-dnf}
+## Functional completeness (disjunctive normal form)
+Every Boolean function $f(x_1,\dots,x_n)$ can be expressed using only
+$\wedge$, $\vee$, $\neg$.
+:::
+
+*In one line:* write one *and*-term for each row where $f$ is true, and join
+the terms with *or*.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-dnf
+For a row $a = (a_1,\dots,a_n) \in \{\text{F},\text{T}\}^n$ define the
+**minterm** $m_a = \ell_1\wedge\dots\wedge \ell_n$, where $\ell_i = x_i$ if
+$a_i = \text{T}$ and $\ell_i = \neg x_i$ if $a_i = \text{F}$. By construction
+$m_a$ is true exactly on the input $a$ and false on every other input. Let
+$T = \{a : f(a) = \text{T}\}$ and set
+$$
+g = \bigvee_{a \in T} m_a \quad(\text{and } g = x_1\wedge\neg x_1 \text{ if } T = \varnothing).
+$$
+For any input $b$: if $b\in T$, the minterm $m_b$ is true, so $g(b) = \text{T}$;
+if $b\notin T$, every minterm $m_a$ with $a\in T$ has $a \ne b$ and is false, so
+$g(b) = \text{F}$. Hence $g = f$. $\blacksquare$
+:::
+
+::: {#exm-xor-dnf}
+## XOR from and/or/not
+$p\oplus q$ is true on the rows $(\text{F},\text{T})$ and $(\text{T},\text{F})$,
+so $p\oplus q = (\neg p\wedge q)\vee(p \wedge \neg q)$.
+:::
+
+By De Morgan, $p\vee q = \neg(\neg p\wedge\neg q)$, so `and` and `not` alone
+already suffice; and the single operation NAND, $\neg(p\wedge q)$, suffices on
+its own (since $\neg p = \mathrm{NAND}(p,p)$), a fact noted by Henry Sheffer in
+1913 [@sheffer1913]. That is why chips can be built from a single kind of gate.
+
+## Logical operators in Python {#sec-logical-operators}
+
+### Short-circuit evaluation
+
+Python's `and` and `or` evaluate their right operand **only if needed**, and
+they return one of the **operands**, not necessarily `True`/`False`
+[@pythonreference, §6.11]:
+
+::: {#def-short-circuit}
+## Semantics of `and`, `or`, `not`
+- `x and y`: evaluate `x`; if it is falsy, return `x` (without evaluating `y`);
+  otherwise evaluate and return `y`.
+- `x or y`: evaluate `x`; if it is truthy, return `x` (without evaluating
+  `y`); otherwise evaluate and return `y`.
+- `not x`: return `True` if `x` is falsy, `False` otherwise (always a `bool`).
+:::
+
+These definitions agree with the truth tables when the operands are booleans
+— check the four cases — and add two powers:
+
+1. **Guards**: `y` may be an expression that would *fail* if `x` were false.
+2. **Defaults**: `x or default` gives `x` unless it is empty/zero/`None`.
+
+```{python}
+contacts = []
+# Guard: contacts[0] is evaluated only if the list is non-empty
+if contacts and contacts[0] == "Ada":
+    print("first is Ada")
+else:
+    print("no Ada at the front (or empty list) - and no IndexError")
+
+name = ""
+print(name or "Anonymous")             # default for an empty string
+print(0 and 1/0)                       # 1/0 is never evaluated: returns 0
+print([] or {} or "last")              # returns the first truthy operand, else the last one
+```
+
+**Precedence.** `not` binds tighter than `and`, which binds tighter than `or`;
+all three are weaker than comparisons. So
+`not a == b or c and d` means `(not (a == b)) or (c and d)`. Use parentheses
+for anything non-trivial.
+
+### Truthiness {#sec-truthiness}
+
+In a Boolean context (`if`, `while`, `and`, `or`, `not`, `bool()`), **every**
+object is either *truthy* or *falsy*. The falsy values are
+[@pythonlibrary, *Truth Value Testing*]:
+
+- `None` and `False`;
+- zero of any numeric type: `0`, `0.0`, `0j`, `Decimal(0)`, …;
+- empty collections: `""`, `[]`, `()`, `{}`, `set()`, `range(0)`.
+
+Everything else is truthy. For your own classes, Python calls `__bool__`, or
+else `__len__` (@sec-ch-oop). PEP 8 recommends `if seq:` / `if not seq:` over
+`if len(seq) > 0:`, but `if x is None:` over `if not x:` when `0` or `""`
+would be valid values.
+
+## The `if` statement {#sec-if}
+
+### Syntax and indentation
+
+```python
+if condition:
+    statement_1        # the indented block runs only if condition is truthy
+    statement_2
+statement_after        # always runs
+```
+
+Python delimits blocks by **indentation** (the *off-side rule*, a term coined by
+Peter Landin in 1966 [@landin1966]) instead of braces. The colon `:` opens a
+block; all statements of the block must be indented by the same amount (PEP 8:
+4 spaces). This forces the visual structure to match the logical structure.
+
+```{python}
+temperature = 31
+if temperature > 30:
+    print("It's hot.")
+    print("Drink water.")
+print("Weather report done.")
+```
+
+### `if`–`else`
+
+```{python}
+n = 7
+if n % 2 == 0:
+    print(n, "is even")
+else:
+    print(n, "is odd")
+```
+
+### `if`–`elif`–`else` chains
+
+`elif` ("else if") tests conditions **in order** and runs the block of the
+**first** true one; at most one block runs.
+
+```{python}
+def grade(score: int) -> str:
+    """Italian university grade bands (out of 30)."""
+    if score < 18:
+        return "fail"
+    elif score < 24:          # here we already know score >= 18
+        return "pass"
+    elif score < 28:          # here score >= 24
+        return "good"
+    else:                     # score >= 28
+        return "excellent"
+
+for s in [12, 18, 23, 24, 29]:
+    print(s, grade(s))
+```
+
+The order of the tests matters: each `elif` may rely on the negation of all the
+previous conditions. Formally, the chain
+`if c1: A elif c2: B else: C` executes $A$ when $c_1$; $B$ when
+$\neg c_1 \wedge c_2$; $C$ when $\neg c_1 \wedge \neg c_2$. These three
+conditions are mutually exclusive and their disjunction is always true (by the
+complement and distributive laws), so **exactly one** block runs.
+
+### Nested conditions and guard clauses
+
+Conditions can be nested, but deep nesting is hard to read. Two remedies:
+combine conditions with `and`, or use **early returns** ("guard clauses") that
+handle the special cases first.
+
+```{python}
+def can_vote(age, is_citizen, is_registered):
+    # Guard clauses: each special case exits immediately
+    if not is_citizen:
+        return False
+    if age < 18:
+        return False
+    return is_registered
+
+print(can_vote(20, True, True), can_vote(16, True, True))
+```
+
+## Conditional expressions {#sec-if-expression}
+
+When the two branches just produce a value, use the **conditional expression**
+(the *ternary operator*), added by PEP 308 [@pep308]:
+
+$$
+\texttt{value\_if\_true if condition else value\_if\_false}
+$$
+
+```{python}
+n = 7
+parity = "even" if n % 2 == 0 else "odd"
+print(parity)
+fee = 0 if n < 10 else 2.5
+print(fee, abs(-3), (-3 if -3 >= 0 else 3))    # abs written as a conditional expression
+```
+
+Only the selected branch is evaluated. Avoid nesting conditional expressions:
+use a statement instead.
+
+## Structural pattern matching: `match` {#sec-match}
+
+Python 3.10 added the `match` statement (PEPs 634–636 [@pep634]), which
+compares a value against **patterns** — literals, sequences, mappings, class
+instances — and can **bind** parts of the value to names:
+
+```{python}
+def describe(command):
+    match command.split():
+        case ["quit"] | ["exit"]:
+            return "bye"
+        case ["add", name, number]:
+            return f"add {name} with number {number}"
+        case ["search", *words]:
+            return f"search for {' '.join(words)!r}"
+        case _:                                    # wildcard: matches anything
+            return "unknown command"
+
+for c in ["exit", "add Ada 12345", "search Ada Lovelace", "dance"]:
+    print(f"{c!r:24} -> {describe(c)}")
+```
+
+`match` is more than a `switch` on constants: it *destructures* data. For
+simple comparisons with a few constants, an `if`–`elif` chain or a dict lookup
+is often simpler.
+
+## Why three constructs are enough: Böhm–Jacopini {#sec-bohm-jacopini}
+
+Early programs were written with **jumps** (`goto`) anywhere, producing
+"spaghetti code". In 1966 Corrado Böhm and Giuseppe Jacopini proved that jumps
+are unnecessary [@bohm1966]; in 1968 Edsger Dijkstra's letter *Go To Statement
+Considered Harmful* [@dijkstra1968] started the **structured programming**
+movement built on this result.
+
+::: {#thm-bohm-jacopini}
+## Structured program theorem (Böhm–Jacopini)
+Every algorithm expressible as a flowchart (boxes of actions and decision
+diamonds connected by arbitrary arrows) can be expressed using only
+**sequence**, **selection** (`if`–`else`) and **iteration** (`while`), at the
+cost of possibly adding one extra variable.
+:::
+
+*In one line:* keep a variable saying "which box I am in", and simulate the
+flowchart with a single loop containing an `if`–`elif` chain.
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @thm-bohm-jacopini (the "folk" construction)
+Number the boxes of the flowchart $1, \dots, k$ and add a special number $0$
+meaning "stop". Each box $i$ is either an **action** $S_i$ followed by an arrow
+to box $j_i$, or a **decision** on condition $c_i$ with arrows to $t_i$ (if
+true) and $f_i$ (if false). Introduce a new integer variable `pc` (a software
+"program counter", @sec-von-neumann), and write:
+
+```python
+pc = 1                          # the start box
+while pc != 0:
+    if pc == 1:
+        ...                     # box 1 translated as below
+    elif pc == 2:
+        ...
+    # ... one branch per box ...
+```
+
+where an action box $i$ becomes `S_i; pc = j_i` and a decision box $i$ becomes
+`if c_i: pc = t_i` / `else: pc = f_i`. The program uses only sequence,
+`if`–`elif`–`else` and one `while`. By induction on the number of steps, after
+each iteration of the loop the original variables and `pc` are exactly in the
+state the flowchart would reach after executing the same number of boxes, with
+`pc` naming the next box; so the loop terminates if and only if the flowchart
+reaches "stop", and in the same final state. $\blacksquare$
+
+This construction (in a later, simpler form, popularised as a "folk theorem";
+see @harel1980) proves *possibility*, not good style: the resulting program is
+as unreadable as the flowchart. The real lesson of structured programming is to
+**design** with the three constructs from the start.
+:::
+
+## Worked example: leap years {#sec-leap-years}
+
+**Problem.** Decide whether a year is a leap year in the Gregorian calendar.
+
+**The rule and its origin.** The Julian calendar (46 BC) added one day every 4
+years, giving an average year of $365.25$ days. The **tropical year** (from
+one spring equinox to the next) is about $365.2422$ days, so the Julian
+calendar drifted by about 3 days every 400 years. Pope Gregory XIII's reform of
+1582 removed 3 leap days every 400 years: years divisible by 100 are not leap
+years, *unless* they are divisible by 400. The average length becomes
+$$
+365 + \frac14 - \frac1{100} + \frac1{400} = 365 + \frac{100 - 4 + 1}{400} = 365 + \frac{97}{400} = 365.2425 \text{ days},
+$$
+an error of about one day in 3,000 years.
+
+**Translating the rule.** A year $y$ is a leap year iff
+$$
+(4 \mid y) \wedge \big(\neg (100 \mid y) \vee (400 \mid y)\big),
+$$
+where $d \mid y$ means "$d$ divides $y$", i.e. `y % d == 0`.
+
+```{python}
+def is_leap(year: int) -> bool:
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+def is_leap_elif(year: int) -> bool:
+    """The same rule as an if-elif chain, from the most specific case."""
+    if year % 400 == 0:
+        return True
+    elif year % 100 == 0:
+        return False
+    elif year % 4 == 0:
+        return True
+    else:
+        return False
+
+import calendar
+for y in [1900, 2000, 2024, 2026, 2100]:
+    print(y, is_leap(y), is_leap_elif(y), calendar.isleap(y))
+assert all(is_leap(y) == is_leap_elif(y) == calendar.isleap(y) for y in range(1, 5000))
+print("97 leap years per 400:", sum(is_leap(y) for y in range(2000, 2400)))
+```
+
+::: {#prp-leap-equivalence}
+## The two formulations agree
+`is_leap(y) == is_leap_elif(y)` for every integer $y$.
+:::
+
+::: {.callout-caution collapse="true"}
+## For the interested reader — proof of @prp-leap-equivalence
+Case analysis following the chain. (1) If $400\mid y$: then $4 \mid y$, and the
+formula is $\text{T} \wedge (\dots\vee \text{T}) = \text{T}$; the chain returns
+`True`. (2) If $400 \nmid y$ and $100 \mid y$: then $4\mid y$ and the formula is
+$\text{T}\wedge(\text{F}\vee\text{F}) = \text{F}$; the chain returns `False`.
+(3) If $100 \nmid y$ and $4 \mid y$: formula
+$\text{T}\wedge(\text{T}\vee\dots) = \text{T}$; chain `True`. (4) If $4\nmid y$:
+then also $100 \nmid y$ and $400\nmid y$; formula $\text{F}\wedge\dots = \text{F}$;
+chain `False`. The four cases cover all integers. $\blacksquare$
+:::
+
+The `assert` in the code checks the same fact on 4,999 years — testing is
+evidence; the case analysis is proof.
+
+::: {.project-link}
+**In the project.** Every menu of the phone book is a selection: the main loop
+reads a number and dispatches to the corresponding feature, and the search
+menu uses an `if`–`elif`–`else` chain on the choices 1, 2, 3 with a final
+`else` that handles invalid numbers — exactly the "exactly one branch runs"
+property above. The duplicate check `if not self.cerca_contatto(contatto):`
+uses a Boolean-returning method directly as a condition, and `Contatto.__eq__`
+is a conjunction of four equalities.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **`=` vs `==`.** `if x = 3:` is a `SyntaxError`; assignment is not a
+  comparison.
+- **`if choice == "y" or "Y":`** is *always* true: it parses as
+  `(choice == "y") or "Y"`, and `"Y"` is truthy. Write
+  `choice in ("y", "Y")` or `choice.lower() == "y"`.
+- **Floats in conditions.** `if total == 1.0` after a computation is fragile;
+  use `math.isclose` (@sec-floats).
+- **Unreachable `elif`.** In `if x > 0: … elif x > 10: …` the second branch
+  can never run; order from the most specific condition to the least.
+- **Inconsistent indentation** (mixing tabs and spaces) raises
+  `TabError`/`IndentationError`. Configure your editor to insert 4 spaces.
+- **`not x` when `x` can legitimately be `0` or `""`.** Use `x is None`.
+:::
+
+## Summary
+
+- Comparisons produce booleans; Python supports chained comparisons.
+- Boolean algebra obeys simple laws, provable by truth tables; De Morgan's laws
+  negate compound conditions; `and`, `or`, `not` can express every Boolean
+  function.
+- `and`/`or` **short-circuit** and return one of their operands; every object
+  has a **truth value**.
+- `if`/`elif`/`else` runs exactly one branch of a chain; the conditional
+  expression chooses between two values; `match` destructures data.
+- Sequence, selection and iteration suffice for every algorithm
+  (Böhm–Jacopini).
+
+## Exercises
+
+::: {#exr-ch4-demorgan}
+Simplify `not (age < 18 or not has_ticket)` using De Morgan's laws and double
+negation.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$\neg(a \vee \neg t) = \neg a \wedge \neg\neg t = \neg a \wedge t$:
+`age >= 18 and has_ticket`.
+:::
+
+::: {#exr-ch4-eval}
+What do these expressions evaluate to? `"" or 0 or None`, `"a" and [] and 1/0`,
+`not []`, `3 and 4`, `None or [] or "x"`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`None` (all falsy: the last operand); `[]` (stops at the first falsy operand,
+`1/0` is never evaluated); `True`; `4`; `"x"`.
+:::
+
+::: {#exr-ch4-majority}
+Write the Boolean function "majority of three" $M(p,q,r)$ (true iff at least
+two inputs are true) (a) in disjunctive normal form, as in @thm-dnf; (b) as a
+shorter formula; prove they are equal by truth table (or with code).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Rows with at least two T:
+$(\neg p\wedge q\wedge r)\vee(p\wedge\neg q\wedge r)\vee(p\wedge q\wedge\neg r)\vee(p\wedge q\wedge r)$.
+(b) $(p\wedge q)\vee(p\wedge r)\vee(q\wedge r)$. Check:
+```python
+from itertools import product
+dnf = lambda p,q,r: (not p and q and r) or (p and not q and r) or (p and q and not r) or (p and q and r)
+short = lambda p,q,r: (p and q) or (p and r) or (q and r)
+print(all(dnf(*v) == short(*v) for v in product([False, True], repeat=3)))  # True
+```
+:::
+
+::: {#exr-ch4-triangle}
+Read three side lengths and print whether they form a triangle (each side
+shorter than the sum of the other two), and if so whether it is equilateral,
+isosceles or scalene. Make sure the `elif` order is correct.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```python
+a, b, c = (float(input(f"side {i}: ")) for i in (1, 2, 3))
+if a + b <= c or a + c <= b or b + c <= a:
+    print("not a triangle")
+elif a == b == c:
+    print("equilateral")
+elif a == b or b == c or a == c:
+    print("isosceles")
+else:
+    print("scalene")
+```
+Equilateral must be tested before isosceles, because every equilateral
+triangle also satisfies the isosceles condition.
+:::
+
+## Further reading {.unnumbered}
+
+- @pythonreference, §6.10–6.13 (comparisons, Boolean operations,
+  conditional expressions) and §8.1, §8.6 (`if`, `match`).
+- @boole1854 — the founding text; Chapters 1–3 introduce the algebra (free on
+  Project Gutenberg).
+- @shannon1938 — Boolean algebra applied to circuits.
+- @bohm1966 and @dijkstra1968 — the two documents behind structured
+  programming; @harel1980 tells the story of the theorem and its variants.
+- @rosen2019, Chapter 1 (logic and proofs) — a standard, very readable
+  textbook on discrete mathematics.
+- @pep308 (conditional expressions), @pep634 / PEP 636 (pattern matching
+  tutorial).
