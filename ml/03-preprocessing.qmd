@@ -1,0 +1,676 @@
+# Data preprocessing: encoding, scaling, missing values {#sec-ch-ml-preprocessing}
+
+> *"Garbage in, garbage out."* — a proverb of computing since the 1950s.
+
+```{python}
+#| echo: false
+import mlbook
+mlbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- encode categorical variables with **ordinal**, **one-hot** and **label**
+  encoding, choosing by the variable's type, and **prove** why one category
+  must be dropped when the model has an intercept (the dummy-variable trap);
+- rescale numerical features by **normalisation** (min–max) and
+  **standardisation**, prove their properties, and explain *which* models need
+  scaling and why — in particular, why least squares does not and penalised
+  models do;
+- classify **missing data** (MCAR, MAR, MNAR), choose between deletion and
+  imputation, and prove what mean imputation does to a variable's spread;
+- recognise **data leakage**, demonstrate how it fakes good results, and
+  prevent it with scikit-learn **pipelines** and `ColumnTransformer`.
+:::
+
+::: {.callout-tip}
+## Topics covered
+How to transform features so that a data set becomes usable by a model —
+encoding categories, rescaling numbers, handling missing values — without
+compromising the honesty of the evaluation.
+:::
+
+## Intuition: preprocessing is part of the model
+
+A learning algorithm sees only a matrix of numbers. Preprocessing decides
+*which* numbers: whether "semi-furnished" becomes 1, 2 or a pair of 0/1
+columns; whether a surface is in square metres or in standard deviations from
+the average; what to write where a value is missing. These decisions change
+what the model can learn, sometimes more than the choice of algorithm.
+
+They also involve **learning from data**: the mean used to fill a gap, the
+minimum and maximum used to rescale, the list of categories of a column are
+all computed from a data set. That makes them part of the fitted model —
+and, by the argument of @thm-train-optimistic, they must be computed on the
+**training** data only. The second half of this chapter shows what goes wrong
+otherwise and how pipelines make the right thing automatic.
+
+## Encoding categorical variables {#sec-encoding}
+
+### Ordinal encoding
+
+For an **ordinal** variable (@tbl-stevens) the natural encoding maps the
+categories, *in their order*, to $0, 1, \dots, K-1$. The model then treats
+the variable as a number, which presumes that consecutive categories are
+equally spaced — a modelling choice to be aware of.
+
+The order must be **stated**, not inferred. Both pandas' `factorize` and
+scikit-learn's `OrdinalEncoder` default to the order of appearance or the
+alphabetical order, which for furnishing levels is wrong:
+
+```{python}
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import OrdinalEncoder
+
+furnishing = pd.DataFrame({"furnishingstatus": ["semi-furnished", "unfurnished", "furnished", "semi-furnished"]})
+
+default = OrdinalEncoder().fit(furnishing)
+print("default (alphabetical):", dict(zip(default.categories_[0], range(3))))
+
+levels = ["unfurnished", "semi-furnished", "furnished"]           # the real order, stated explicitly
+ordinal = OrdinalEncoder(categories=[levels]).fit(furnishing)
+print("explicit order:        ", dict(zip(ordinal.categories_[0], range(3))))
+print(ordinal.transform(furnishing).ravel())
+```
+
+The alphabetical code puts "semi-furnished" *above* "furnished": a model would
+learn a relationship with a scrambled variable. With pandas the same is done
+with an explicit dictionary, `series.map({"unfurnished": 0, ...})`, or with an
+**ordered categorical** dtype.
+
+### One-hot encoding
+
+For a **nominal** variable no order exists, and any integer code invents one.
+**One-hot encoding** replaces a variable with $K$ categories by $K$ binary
+**indicator** (dummy) columns, one per category, exactly one of which is 1 in
+each row.
+
+```{python}
+zones = pd.DataFrame({"zone": ["centre", "suburbs", "hills", "centre"],
+                      "price": [300, 100, 200, 310]})
+pd.get_dummies(zones, columns=["zone"], dtype=int)
+```
+
+Why it matters: suppose a model is linear in its inputs. With the integer
+codes centre = 0, hills = 1, suburbs = 2, the prediction must change by the
+same amount from centre to hills as from hills to suburbs — the codes impose
+it. With indicators, each zone gets its own coefficient.
+
+```{python}
+from sklearn.linear_model import LinearRegression
+
+codes = zones["zone"].map({"centre": 0, "hills": 1, "suburbs": 2}).to_frame()
+onehot = pd.get_dummies(zones["zone"], drop_first=True, dtype=int)
+for name, X in [("integer codes", codes), ("one-hot", onehot)]:
+    fit = LinearRegression().fit(X, zones["price"])
+    print(f"{name:14s} predictions: {fit.predict(X).round(1)}   (true prices: {zones['price'].tolist()})")
+```
+
+The integer code forces a straight line through three zones whose prices are
+not in that order; the indicators reproduce the zone averages exactly
+(centre 305, hills 200, suburbs 100).
+
+### The dummy-variable trap
+
+`drop_first=True` above removed one indicator (here "centre", the first in
+alphabetical order), which becomes the **reference category**. This is not
+a matter of taste when the model has an intercept, as Suits pointed out in
+1957 [@suits1957].
+
+::: {#prp-dummy-trap}
+## The dummy-variable trap
+Let a design matrix contain a column of ones (the intercept) and the $K$
+indicator columns $d_1, \dots, d_K$ of one categorical variable. Then its
+columns are linearly dependent, so $X^\top X$ is singular and the least-squares
+coefficients are not unique. Dropping one indicator removes this dependence.
+:::
+
+*In one line:* the $K$ indicators always add up to the column of ones, so with
+an intercept one of them is redundant.
+
+::: {.deep kind="proof"}
+## Proof of @prp-dummy-trap
+Every row has exactly one indicator equal to 1, so $d_1 + \dots + d_K =
+\mathbf{1}$: a non-trivial linear combination of columns (coefficients
+$1, \dots, 1, -1$) equals zero, and $X$ does not have full column rank. Then
+there is $v \ne 0$ with $Xv = 0$, hence $X^\top X v = 0$: $X^\top X$ is
+singular. If $\beta$ is a least-squares solution, so is $\beta + t v$ for every
+$t$, because $X(\beta + tv) = X\beta$ — the fit is the same and the
+coefficients are arbitrary.
+
+After dropping $d_1$, the columns $\mathbf 1, d_2, \dots, d_K$ span the same
+space as $d_1, \dots, d_K$ (since $d_1 = \mathbf 1 - d_2 - \dots - d_K$),
+which has dimension $K$ when every category occurs (the $d_k$ have disjoint
+supports, so they are independent). $K$ vectors spanning a $K$-dimensional
+space are independent. $\blacksquare$
+:::
+
+With the reference category dropped, the intercept is the prediction for the
+reference category and each remaining coefficient is the **difference** from
+it. Software that adds a small penalty (ridge, @sec-ch-ml-regularization)
+copes with the redundant column, but the coefficients are then harder to
+interpret; dropping one category is the clean solution for linear models.
+
+### `OneHotEncoder` and unseen categories
+
+`pd.get_dummies` is convenient for exploration but it is a one-shot function:
+it does not *remember* the categories it saw. On a new batch of data with a
+missing or new category it produces a different set of columns. scikit-learn's
+`OneHotEncoder` learns the categories in `fit` and applies the same columns
+in `transform`; `handle_unknown="ignore"` encodes an unseen category as all
+zeros instead of failing.
+
+```{python}
+from sklearn.preprocessing import OneHotEncoder
+
+enc = OneHotEncoder(handle_unknown="ignore", sparse_output=False).fit(zones[["zone"]])
+new = pd.DataFrame({"zone": ["hills", "lakeside"]})                  # "lakeside" never seen in training
+print(enc.get_feature_names_out())
+print(enc.transform(new))
+```
+
+### Label encoding of the target
+
+For a **classification target**, scikit-learn wants class labels it can sort;
+`LabelEncoder` maps them to $0, \dots, K-1$ and back. It is meant for `y`
+only: the order it assigns is alphabetical and meaningless, which is harmless
+for a target (classifiers treat classes as unordered) and harmful for a
+feature.
+
+```{python}
+from sklearn.preprocessing import LabelEncoder
+
+labels = ["benign", "malignant", "benign", "benign"]
+le = LabelEncoder().fit(labels)
+print(le.classes_, le.transform(labels), le.inverse_transform([1]))
+```
+
+| Variable | Encoding | Tool |
+|---|---|---|
+| binary feature (yes/no) | one 0/1 column | `map`, `OrdinalEncoder(categories=[["no", "yes"]])` |
+| ordinal feature | integers in the stated order | `OrdinalEncoder(categories=[levels])` |
+| nominal feature | one-hot ($K-1$ columns with an intercept) | `OneHotEncoder(drop="first")` |
+| classification target | integers $0..K-1$ | `LabelEncoder` (or nothing: estimators accept strings) |
+
+: Which encoding for which variable {#tbl-encodings}
+
+## Feature scaling {#sec-scaling}
+
+### Normalisation and standardisation
+
+Two rescalings are standard. Both are **affine** maps $x \mapsto (x - c)/s$,
+learned from the training data.
+
+::: {#def-scalings}
+## Min–max normalisation and standardisation
+For a feature with training values $x_1, \dots, x_n$, minimum $x_{\min}$,
+maximum $x_{\max}$, mean $\bar x$ and standard deviation
+$s = \sqrt{\frac1n\sum_i (x_i - \bar x)^2}$:
+$$
+\text{min–max: } x' = \frac{x - x_{\min}}{x_{\max} - x_{\min}}, \qquad
+\text{standardisation: } z = \frac{x - \bar x}{s}.
+$$ {#eq-scalings}
+:::
+
+::: {#prp-scalings}
+## What the two scalings guarantee
+On the training data, (a) min–max values lie in $[0, 1]$, with $0$ and $1$
+attained; (b) standardised values have mean $0$ and standard deviation $1$.
+:::
+
+*In one line:* normalisation fixes the **range**, standardisation fixes the
+**centre and spread**.
+
+::: {.deep kind="proof"}
+## Proof of @prp-scalings
+(a) $x_{\min} \le x_i \le x_{\max}$; subtract $x_{\min}$ and divide by the
+positive number $x_{\max} - x_{\min}$ (assuming the feature is not
+constant): $0 \le x'_i \le 1$, with $x'_i = 0$ at the minimum and $1$ at the
+maximum. (b) $\bar z = (\bar x - \bar x)/s = 0$ by linearity of the mean, and
+$\frac1n\sum_i z_i^2 = \frac{1}{s^2}\cdot\frac1n\sum_i (x_i - \bar x)^2 = 1$.
+$\blacksquare$
+:::
+
+(scikit-learn's `StandardScaler` uses the $1/n$ standard deviation of the
+definition; pandas' `.std()` uses $1/(n-1)$. The difference is negligible for
+large $n$ but explains small discrepancies.) New data are transformed with
+the **training** constants, so test values can fall outside $[0, 1]$ or have
+a mean different from 0 — that is correct, not a bug.
+
+Min–max scaling is very sensitive to outliers: one extreme value squeezes all
+the others into a small interval. Standardisation is less so, and
+`RobustScaler` (median and interquartile range) even less. A word of warning
+about vocabulary: "normalisation" is also used for rescaling each **row** to
+unit length (scikit-learn's `Normalizer`), a different operation.
+
+```{python}
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+
+houses = mlbook.load_housing()
+area = houses[["area"]]
+both = pd.DataFrame({
+    "area": area["area"],
+    "min-max": MinMaxScaler().fit_transform(area).ravel(),
+    "standardised": StandardScaler().fit_transform(area).ravel(),
+})
+both.describe().loc[["mean", "std", "min", "max"]].round(3)
+```
+
+### Which models need scaling, and why
+
+Scaling changes the units of a feature. Whether a model cares depends on
+whether its answer depends on units.
+
+1. **Least squares does not care.** Multiplying a feature by $c$ divides its
+   coefficient by $c$ and leaves every prediction unchanged
+   (@prp-ols-equivariance below).
+2. **Distance-based methods care a lot.** Nearest neighbours and k-means
+   (@sec-ch-ml-clustering) compute Euclidean distances, in which a feature
+   measured in thousands (area in square feet) swamps one measured in units
+   (bathrooms).
+3. **Penalised models care.** Ridge, lasso and elastic net
+   (@sec-ch-ml-regularization) add a penalty on the *size* of the coefficients,
+   and the size of a coefficient depends on the unit of its feature. Without
+   scaling, the penalty falls more heavily on features measured in small units.
+4. **Gradient-based training cares** about speed: badly scaled features make
+   the error surface a long narrow valley in which gradient descent zig-zags
+   [@lecun2012] (@sec-gradient-descent).
+5. **Tree-based models** (later parts) split on thresholds of one feature at a
+   time and do not care.
+
+::: {#prp-ols-equivariance}
+## Least squares is equivariant under rescaling
+Let $\hat\beta$ be a least-squares solution for $X$, and let $X' = XD$ with
+$D = \operatorname{diag}(c_1, \dots, c_p)$, all $c_j \neq 0$ (each feature
+rescaled). Then $\hat\beta' = D^{-1}\hat\beta$ is a least-squares solution for
+$X'$, and the fitted values are identical: $X'\hat\beta' = X\hat\beta$.
+:::
+
+*In one line:* rescale a feature and least squares rescales its coefficient
+inversely; the predictions do not move.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ols-equivariance
+For any $\gamma$, $\lVert y - X'\gamma \rVert^2 = \lVert y - X(D\gamma) \rVert^2$.
+As $\gamma$ ranges over $\mathbb{R}^p$, $D\gamma$ ranges over all of
+$\mathbb{R}^p$ ($D$ is invertible), so the minimum over $\gamma$ equals the
+minimum over $\beta = D\gamma$, attained at $\gamma = D^{-1}\hat\beta$. Then
+$X'\hat\beta' = XDD^{-1}\hat\beta = X\hat\beta$. (Shifting a feature by a
+constant is absorbed by the intercept in the same way.) $\blacksquare$
+:::
+
+The penalised models break this equivariance: their objective contains
+$\lVert \beta \rVert$, which is not invariant under $\beta \mapsto D^{-1}\beta$.
+A two-line experiment shows it — expressing the area in thousands of square
+feet instead of square feet changes the ridge predictions, but not the least
+squares ones.
+
+```{python}
+from sklearn.linear_model import Ridge
+
+X = houses[["area", "bathrooms"]].astype(float)
+X_k = X.assign(area=X["area"] / 1000)                     # same information, different unit
+y = np.log(houses["price"])
+for model in (LinearRegression(), Ridge(alpha=100)):
+    p1, p2 = model.fit(X, y).predict(X), model.fit(X_k, y).predict(X_k)
+    print(f"{type(model).__name__:16s} max change in predictions: {np.max(np.abs(p1 - p2)):.2e}")
+```
+
+Standardising first removes the arbitrariness: every feature has standard
+deviation 1, so the penalty treats them on an equal footing.
+
+## Missing values {#sec-missing}
+
+Real data have holes: a sensor was offline, a respondent skipped a question,
+a field did not exist when old records were created. What to do depends on
+**why** the values are missing, a question formalised by Rubin [@rubin1976].
+
+::: {#def-missingness}
+## Missingness mechanisms
+Let $M$ indicate whether a value of variable $x$ is missing.
+
+- **MCAR** (missing completely at random): $M$ is independent of all data,
+  observed or not. *A form lost in the post.*
+- **MAR** (missing at random): $M$ depends only on *observed* variables.
+  *Older houses' records lack the energy class, and the year of construction
+  is recorded.*
+- **MNAR** (missing not at random): $M$ depends on the missing value itself.
+  *Owners of very expensive houses decline to state the price.*
+:::
+
+*In one line:* MCAR is harmless except for the lost data, MAR can be corrected
+using the other variables, MNAR biases every simple method.
+
+### Deletion
+
+The simplest response is to **drop**: rows with any missing value
+(`df.dropna()`, "complete-case analysis") or columns with too many
+(`df.dropna(axis=1, thresh=...)`). Under MCAR the remaining rows are a random
+subsample and estimates stay unbiased, at the cost of a smaller sample; under
+MAR and MNAR the remaining rows are a *selected* sample and estimates can be
+biased [@little2019, ch. 3]. Dropping rows is also impossible at prediction
+time: a model must answer for a new house even if one field is blank.
+
+### Imputation
+
+**Imputation** fills each gap with a plausible value: the mean or median of
+the column (numerical), the most frequent category (categorical), or a value
+predicted from the other columns (nearest neighbours, regression). It keeps
+every row but has a price.
+
+::: {#prp-mean-imputation}
+## What mean imputation does to a variable
+Let a variable have $n$ entries, of which $k \ge 2$ are observed, with mean
+$\bar x_{\text{obs}}$ and sample variance $s^2_{\text{obs}}$ (denominator
+$k-1$). After replacing the $n - k$ missing entries by $\bar x_{\text{obs}}$,
+the completed variable has mean $\bar x_{\text{obs}}$ and sample variance
+$$
+s^2_{\text{imp}} = \frac{k-1}{n-1}\, s^2_{\text{obs}} \;<\; s^2_{\text{obs}} \quad (\text{if } k < n).
+$$
+:::
+
+*In one line:* filling with the mean keeps the average but shrinks the spread
+in proportion to the fraction of values that were missing.
+
+::: {.deep kind="proof"}
+## Proof of @prp-mean-imputation
+The sum of the completed variable is $k\bar x_{\text{obs}} + (n-k)\bar
+x_{\text{obs}} = n\bar x_{\text{obs}}$, so its mean is $\bar x_{\text{obs}}$.
+The imputed entries contribute zero to the sum of squared deviations from this
+mean, so the sum of squares equals that of the observed entries,
+$(k-1)s^2_{\text{obs}}$; dividing by $n - 1$ gives the formula. $\blacksquare$
+:::
+
+The shrinkage weakens the variable's relationships with others (correlations
+move towards zero), and the imputed values pretend to a certainty they do not
+have. Two cheap mitigations are common in machine learning: impute the
+**median** for skewed variables, and add a **missing-indicator** column so the
+model can learn whether "was missing" itself predicts the target — often it
+does, precisely under MNAR. Principled alternatives (multiple imputation) are
+covered by van Buuren [@vanbuuren2018].
+
+The experiment below removes 20% of the `area` values from the house data,
+once completely at random and once *not* at random (large houses more likely
+to be missing), and compares what each strategy reports as the mean area.
+
+```{python}
+from sklearn.impute import SimpleImputer
+
+rng = np.random.default_rng(0)
+true_mean = houses["area"].mean()
+n = len(houses)
+mcar = rng.random(n) < 0.2                                           # MCAR: 20% at random
+rank = houses["area"].rank(pct=True).to_numpy()
+mnar = rng.random(n) < 0.4 * rank                                    # MNAR: larger area, more often missing
+
+for name, mask in [("MCAR", mcar), ("MNAR", mnar)]:
+    a = houses["area"].mask(mask)                                    # NaN where mask is True
+    imputed = SimpleImputer(strategy="mean").fit_transform(a.to_frame()).ravel()
+    print(f"{name}: {mask.mean():.0%} missing | complete-case mean {a.mean():7.1f} | "
+          f"imputed mean {imputed.mean():7.1f} | true mean {true_mean:7.1f} | "
+          f"std ratio imputed/true {imputed.std() / houses['area'].std():.2f}")
+```
+
+Under MCAR both strategies estimate the mean well; under MNAR both are biased
+downwards, because the missing values were systematically the large ones —
+no imputation that only looks at the observed values of the same column can
+recover what it never saw. In both cases imputation shrinks the spread, as
+@prp-mean-imputation predicts.
+
+`SimpleImputer(strategy=..., add_indicator=True)` implements median, mean,
+most-frequent and constant imputation with the optional indicator columns;
+`KNNImputer` fills a gap with the average of the most similar rows.
+
+## Data leakage and pipelines {#sec-leakage}
+
+::: {#def-leakage}
+## Data leakage
+**Leakage** is the use, while building a model, of information that will not
+be available when the model is used — in particular, information from the
+test data [@kaufman2012].
+:::
+
+*In one line:* the evaluation cheats if the model, or anything it is built
+from, has seen the answers.
+
+Leakage is not a beginner's curiosity. Kapoor and Narayanan surveyed published
+reviews of machine-learning-based science and found leakage-related errors in
+294 papers across 17 fields [@kapoor2023]. The most common forms are
+preprocessing or feature selection performed on the whole data set before the
+split, features that are only known after the event being predicted (the
+final sale price when predicting the asking price), and duplicates of the
+same item in both training and test data.
+
+### A dramatic example: selection before validation
+
+The classic demonstration, due to Ambroise and McLachlan [@ambroise2002] and
+discussed by Hastie et al. as "the wrong way to do cross-validation"
+[@hastie2009, §7.10.2], uses data that are **pure noise**: 50 examples, 5 000
+random features, random labels. No model can do better than a coin toss. But
+if we first select the 20 features most correlated with the labels *using all
+the data*, and only then cross-validate a classifier on them, the reported
+accuracy is spectacular. (Cross-validation, the repeated train/test split of
+@sec-ch-ml-regularization, is used here as a black box that returns an
+average test accuracy.)
+
+```{python}
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import make_pipeline
+
+rng = np.random.default_rng(42)
+X_noise = rng.normal(size=(50, 5000))
+y_noise = rng.integers(0, 2, size=50)                         # labels unrelated to X
+
+# WRONG: select features on all the data, then cross-validate the classifier
+selected = SelectKBest(f_classif, k=20).fit_transform(X_noise, y_noise)
+wrong = cross_val_score(LogisticRegression(), selected, y_noise, cv=5).mean()
+
+# RIGHT: selection is a step of the model, refitted inside every training fold
+pipe = make_pipeline(SelectKBest(f_classif, k=20), LogisticRegression())
+right = cross_val_score(pipe, X_noise, y_noise, cv=5).mean()
+print(f"selection outside CV: accuracy {wrong:.2f}   <- an illusion")
+print(f"selection inside CV:  accuracy {right:.2f}   <- the truth: no signal")
+```
+
+With 5 000 noise features, some are correlated with the labels *by chance* in
+this particular sample; selecting them on all the data lets the test folds
+influence which features are used, and the classifier then "predicts" the
+chance pattern. Inside the pipeline, selection sees only the training folds,
+and the illusion disappears.
+
+### Pipelines
+
+The cure is structural: make every data-dependent step part of the model
+object, so that `fit` learns it from the training data and `predict` merely
+applies it. scikit-learn's `Pipeline` chains transformers and a final
+estimator; `ColumnTransformer` applies different transformers to different
+columns. Below is the preprocessing of the house data, built once and
+reusable in the regression chapters and the project.
+
+```{python}
+from sklearn.compose import ColumnTransformer
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+
+numeric = ["area", "bedrooms", "bathrooms", "stories", "parking"]
+binary = ["mainroad", "guestroom", "basement", "hotwaterheating", "airconditioning", "prefarea"]
+
+preprocess = ColumnTransformer([
+    ("num", StandardScaler(), numeric),
+    ("bin", OrdinalEncoder(categories=[["no", "yes"]] * len(binary)), binary),
+    ("furn", OneHotEncoder(drop=["unfurnished"], sparse_output=False), ["furnishingstatus"]),
+])
+model = Pipeline([("preprocess", preprocess), ("regress", LinearRegression())])
+
+X_all = houses.drop(columns="price")
+y_all = np.log(houses["price"])
+X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=0)
+model.fit(X_train, y_train)                     # scaler statistics and categories learned on X_train only
+print("features seen by the regression:", list(model[:-1].get_feature_names_out()))
+print(f"R^2 on the test set: {model.score(X_test, y_test):.3f}")
+```
+
+```{python}
+#| echo: false
+_scaler = model.named_steps["preprocess"].named_transformers_["num"]
+```
+
+The scaler inside the fitted pipeline stores the training means
+(`model.named_steps["preprocess"].named_transformers_["num"].mean_`, here
+`{python} f"{_scaler.mean_[0]:.0f}"` for the area); the test houses are
+standardised with those numbers, exactly as a house arriving next year would
+be. One object can now be cross-validated, tuned (@sec-ch-ml-regularization),
+saved and deployed, with no way to leak the test data into the preprocessing.
+
+::: {.callout-important}
+## The rule
+**Split first.** Everything that is learned from data — imputation values,
+scaling constants, category lists, selected features, chosen
+hyper-parameters — is learned on the training part only, preferably by putting
+it inside a `Pipeline`.
+:::
+
+::: {.project-link}
+**In the project.** The brief asks for exactly the three operations of this
+chapter: handle missing values (the data set has none — @sec-first-look —
+and the notebook should *say* so and why no imputation is needed), encode the
+categorical variables (six binary ones and the furnishing status, for which
+@sec-ch-project-housing compares one-hot and ordinal encoding), and scale the
+numerical features, which is "far from a detail" because the models are
+penalised (@prp-ols-equivariance and the ridge experiment above). The
+reference implementation does all three inside one `Pipeline`, so the
+cross-validation of the regularised models cannot leak.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Letting the encoder choose the order** of an ordinal variable
+  (alphabetical: furnished < semi-furnished < unfurnished).
+- **Integer codes for nominal variables**: they invent an order and equal
+  spacing.
+- **All $K$ dummies plus an intercept** in a linear model: singular design,
+  meaningless coefficients (@prp-dummy-trap).
+- **`get_dummies` at prediction time**: different data, different columns.
+  Use a fitted `OneHotEncoder`.
+- **Scaling (or imputing, or selecting) before splitting**: leakage. Fit on
+  training data, transform the rest.
+- **Forgetting to scale** before a penalised or distance-based model; scaling
+  for nothing before ordinary least squares (harmless, but not a cure for
+  anything).
+- **Dropping rows with missing values without asking why** they are missing.
+- **Using `LabelEncoder` on features.** It is for targets.
+:::
+
+## Summary
+
+- **Ordinal** variables → integers in an explicitly stated order;
+  **nominal** → one-hot indicators, dropping one reference category when the
+  model has an intercept (the $K$ indicators sum to the intercept column);
+  **targets** → `LabelEncoder` if needed.
+- **Min–max** maps the training range to $[0, 1]$; **standardisation** gives
+  mean 0 and standard deviation 1. Least squares is unaffected by rescaling;
+  penalised, distance-based and gradient-trained models are not.
+- Missing data are **MCAR, MAR or MNAR**; deletion is unbiased only under
+  MCAR; **mean imputation** keeps the mean and shrinks the variance by
+  $(k-1)/(n-1)$; indicators can capture informative missingness.
+- **Leakage** — using test information while building the model — fakes
+  results; **pipelines** make preprocessing part of the model and prevent it.
+
+## Exercises
+
+::: {#exr-ml3-dummy}
+A categorical feature "heating" has the levels gas, electric, heat pump.
+(a) Write the indicator columns for the rows gas, heat pump, gas, electric.
+(b) With an intercept and the reference level "gas", what do the intercept and
+the two coefficients of a linear model mean? (c) Show that keeping all three
+indicators and the intercept gives a singular $X^\top X$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Columns (gas, electric, heat pump): (1,0,0), (0,0,1), (1,0,0), (0,1,0).
+(b) Dropping gas: the intercept is the predicted value for a gas-heated house
+(with the other features at zero); the coefficient of "electric" is the
+difference electric − gas; that of "heat pump" is heat pump − gas.
+(c) gas + electric + heat pump = 1 in every row, i.e. equal to the intercept
+column; @prp-dummy-trap applies.
+```{python}
+Xd = np.array([[1, 1, 0, 0], [1, 0, 0, 1], [1, 1, 0, 0], [1, 0, 1, 0]])   # intercept + 3 dummies
+print("rank of X:", np.linalg.matrix_rank(Xd), "of", Xd.shape[1], "columns")
+print("det(X^T X) =", round(np.linalg.det(Xd.T @ Xd), 10))
+```
+:::
+
+::: {#exr-ml3-minmax-test}
+A min–max scaler is fitted on training areas ranging from 1 650 to 16 200.
+What value does it assign to a test house with area 18 000? Is that a bug?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$(18\,000 - 1\,650)/(16\,200 - 1\,650) = 16\,350/14\,550 \approx 1.124$. Not a
+bug: the scaler must use the training constants, so values outside the
+training range map outside $[0, 1]$. If a model needs bounded inputs, clip
+explicitly (`MinMaxScaler(clip=True)`) and know that you did.
+:::
+
+::: {#exr-ml3-imputation}
+A column has the observed values 2, 4, 6, 8 and two missing entries.
+Compute its sample variance before and after mean imputation, and check the
+formula of @prp-mean-imputation.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Observed: mean 5, deviations $-3,-1,1,3$, sum of squares 20,
+$s^2_{\text{obs}} = 20/3 \approx 6.67$. Completed: $(2,4,6,8,5,5)$, mean 5,
+same sum of squares 20, $s^2_{\text{imp}} = 20/5 = 4$. Formula:
+$\frac{k-1}{n-1}s^2_{\text{obs}} = \frac{3}{5}\cdot\frac{20}{3} = 4$. ✓
+:::
+
+::: {#exr-ml3-leak}
+Repeat the noise experiment of @sec-leakage with $k = 5$ and $k = 200$
+selected features, both outside and inside the pipeline. How does the
+illusion depend on $k$? Why?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+for k in (5, 20, 200):
+    sel = SelectKBest(f_classif, k=k).fit_transform(X_noise, y_noise)
+    out = cross_val_score(LogisticRegression(), sel, y_noise, cv=5).mean()
+    inn = cross_val_score(make_pipeline(SelectKBest(f_classif, k=k), LogisticRegression()), X_noise, y_noise, cv=5).mean()
+    print(f"k = {k:3d}: outside {out:.2f}   inside {inn:.2f}")
+```
+Outside the pipeline the reported accuracy is 0.90 with 5 features and a
+perfect 1.00 with 20 or 200: the more chance-correlated features are selected
+on the full data, the more completely the classifier can reproduce the
+labels' chance pattern in the test folds. Inside the pipeline the accuracy
+stays between 0.5 and 0.6 — compatible with a coin toss, since with 50
+examples Hoeffding's half-width at 95% is
+$\sqrt{\ln 40/100} \approx 0.19$ (@thm-test-set-size). Selection outside
+validation reports accuracies the model will never reach, whatever $k$.
+:::
+
+## Further reading {.unnumbered}
+
+- @james2023, §3.3.1 — qualitative predictors and dummy variables, with the
+  interpretation of the coefficients.
+- @little2019, ch. 1–4 — missingness mechanisms and why simple fixes are
+  biased; @vanbuuren2018, ch. 1–2 (free online) — imputation in practice.
+- @kaufman2012 — the formal definition of leakage, with case studies from
+  data-mining competitions.
+- @kapoor2023 — leakage in published science, with a taxonomy and a checklist
+  ("model info sheets").
+- @hastie2009, §7.10.2 — the wrong and the right way to cross-validate.
+- @lecun2012, §4.3 — why centred, scaled inputs make gradient training faster.
+- scikit-learn user guide, "Preprocessing data" and "Pipelines and composite
+  estimators" [@pedregosa2011].

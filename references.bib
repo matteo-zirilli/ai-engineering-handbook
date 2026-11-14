@@ -2222,6 +2222,1259 @@
   note      = {Libraries. Ch. 11, "Plan to Throw One Away" (and the author's second thoughts in ch. 19)}
 }
 
+% -----------------------------------------------------------------------------
+% Part III — Foundations of machine learning
+% -----------------------------------------------------------------------------
+
+% ---- Textbooks and software used throughout Part III ------------------------
+
+@book{hastie2009,
+  author    = {Hastie, Trevor and Tibshirani, Robert and Friedman, Jerome},
+  title     = {The Elements of Statistical Learning: Data Mining, Inference, and Prediction},
+  edition   = {2},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {2009},
+  doi       = {10.1007/978-0-387-84858-7},
+  isbn      = {978-0-387-84857-0},
+  note      = {Free PDF on the authors' site (hastie.su.domains/ElemStatLearn). Used: ch. 2 (supervised learning), 3 (linear methods, ridge, lasso), 4.4 (logistic regression), 7 (model assessment, bias-variance, cross-validation), 14.3 (clustering)}
+}
+
+@book{james2023,
+  author    = {James, Gareth and Witten, Daniela and Hastie, Trevor and Tibshirani, Robert and Taylor, Jonathan},
+  title     = {An Introduction to Statistical Learning: With Applications in {P}ython},
+  publisher = {Springer},
+  address   = {Cham},
+  year      = {2023},
+  doi       = {10.1007/978-3-031-38747-0},
+  note      = {Free PDF at statlearning.com. The gentlest companion to this part: ch. 2--6, 10 and 12}
+}
+
+@book{bishop2006,
+  author    = {Bishop, Christopher M.},
+  title     = {Pattern Recognition and Machine Learning},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {2006},
+  isbn      = {978-0-387-31073-2},
+  note      = {Free PDF from Microsoft Research. Used: §1.5 (decision theory), §3.1--3.2 (linear regression, bias-variance), §4.3 (logistic regression), §9.1 (k-means)}
+}
+
+@book{murphy2022,
+  author    = {Murphy, Kevin P.},
+  title     = {Probabilistic Machine Learning: An Introduction},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2022},
+  isbn      = {978-0-262-04682-4},
+  note      = {Free PDF at probml.github.io. Used: ch. 1 (the paradigms), 4 (statistics), 10 (logistic regression), 11 (linear regression), 21 (clustering)}
+}
+
+@book{shalevshwartz2014,
+  author    = {Shalev-Shwartz, Shai and Ben-David, Shai},
+  title     = {Understanding Machine Learning: From Theory to Algorithms},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2014},
+  doi       = {10.1017/CBO9781107298019},
+  note      = {Free PDF on the first author's site. Used: ch. 2 (empirical risk minimisation), 5 (no free lunch), 11 (validation)}
+}
+
+@article{pedregosa2011,
+  author  = {Pedregosa, Fabian and Varoquaux, Ga{\"e}l and Gramfort, Alexandre and Michel, Vincent and Thirion, Bertrand and Grisel, Olivier and Blondel, Mathieu and Prettenhofer, Peter and Weiss, Ron and Dubourg, Vincent and Vanderplas, Jake and Passos, Alexandre and Cournapeau, David and Brucher, Matthieu and Perrot, Matthieu and Duchesnay, {\'E}douard},
+  title   = {Scikit-learn: Machine Learning in {P}ython},
+  journal = {Journal of Machine Learning Research},
+  volume  = {12},
+  pages   = {2825--2830},
+  year    = {2011},
+  url     = {https://jmlr.org/papers/v12/pedregosa11a.html},
+  note    = {Open access. The library used for every model of this part; its user guide (scikit-learn.org) documents each estimator and its exact objective}
+}
+
+@inproceedings{buitinck2013,
+  author    = {Buitinck, Lars and Louppe, Gilles and Blondel, Mathieu and Pedregosa, Fabian and Mueller, Andreas and Grisel, Olivier and Niculae, Vlad and Prettenhofer, Peter and Gramfort, Alexandre and Grobler, Jaques and Layton, Robert and VanderPlas, Jake and Joly, Arnaud and Holt, Brian and Varoquaux, Ga{\"e}l},
+  title     = {{API} Design for Machine Learning Software: Experiences from the scikit-learn Project},
+  booktitle = {ECML PKDD Workshop: Languages for Data Mining and Machine Learning},
+  pages     = {108--122},
+  year      = {2013},
+  eprint    = {1309.0238},
+  archiveprefix = {arXiv},
+  note      = {Free on arXiv. The estimator / transformer / pipeline design (fit, predict, transform)}
+}
+
+% ---- What is machine learning (Chapter 1) -----------------------------------
+
+@incollection{box1979,
+  author    = {Box, George E. P.},
+  title     = {Robustness in the Strategy of Scientific Model Building},
+  booktitle = {Robustness in Statistics},
+  editor    = {Launer, Robert L. and Wilkinson, Graham N.},
+  pages     = {201--236},
+  publisher = {Academic Press},
+  address   = {New York},
+  year      = {1979},
+  doi       = {10.1016/B978-0-12-438150-6.50018-2},
+  note      = {Libraries. Source of "all models are wrong but some are useful" (p. 202)}
+}
+
+@article{dyson2004,
+  author  = {Dyson, Freeman},
+  title   = {A Meeting with {E}nrico {F}ermi},
+  journal = {Nature},
+  volume  = {427},
+  pages   = {297},
+  year    = {2004},
+  doi     = {10.1038/427297a},
+  note    = {One page. Fermi quoting von Neumann on fitting an elephant with four parameters}
+}
+
+@article{tukey1962,
+  author  = {Tukey, John W.},
+  title   = {The Future of Data Analysis},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {33},
+  number  = {1},
+  pages   = {1--67},
+  year    = {1962},
+  doi     = {10.1214/aoms/1177704711},
+  note    = {Open access via Project Euclid. The "right question" remark is on pp. 13--14}
+}
+
+@article{samuel1959,
+  author  = {Samuel, Arthur L.},
+  title   = {Some Studies in Machine Learning Using the Game of Checkers},
+  journal = {IBM Journal of Research and Development},
+  volume  = {3},
+  number  = {3},
+  pages   = {210--229},
+  year    = {1959},
+  doi     = {10.1147/rd.33.0210},
+  note    = {The paper that popularised the term "machine learning"; libraries and IEEE Xplore}
+}
+
+@book{mitchell1997,
+  author    = {Mitchell, Tom M.},
+  title     = {Machine Learning},
+  publisher = {McGraw-Hill},
+  address   = {New York},
+  year      = {1997},
+  isbn      = {978-0-07-042807-2},
+  note      = {Libraries. §1.1 gives the "experience E, task T, performance P" definition}
+}
+
+@inproceedings{vapnik1991,
+  author    = {Vapnik, Vladimir},
+  title     = {Principles of Risk Minimization for Learning Theory},
+  booktitle = {Advances in Neural Information Processing Systems 4},
+  pages     = {831--838},
+  year      = {1991},
+  url       = {https://proceedings.neurips.cc/paper/1991/hash/ff4d5fbbafdf976cfdc032e3bde78de5-Abstract.html},
+  note      = {Open access. Empirical risk minimisation stated as a principle}
+}
+
+@article{hoeffding1963,
+  author  = {Hoeffding, Wassily},
+  title   = {Probability Inequalities for Sums of Bounded Random Variables},
+  journal = {Journal of the American Statistical Association},
+  volume  = {58},
+  number  = {301},
+  pages   = {13--30},
+  year    = {1963},
+  doi     = {10.1080/01621459.1963.10500830},
+  note    = {JSTOR / libraries. Theorem 2 is the inequality used for test-set estimates}
+}
+
+@article{wolpert1996,
+  author  = {Wolpert, David H.},
+  title   = {The Lack of A Priori Distinctions Between Learning Algorithms},
+  journal = {Neural Computation},
+  volume  = {8},
+  number  = {7},
+  pages   = {1341--1390},
+  year    = {1996},
+  doi     = {10.1162/neco.1996.8.7.1341},
+  note    = {The "no free lunch" theorems for supervised learning}
+}
+
+@book{sutton2018,
+  author    = {Sutton, Richard S. and Barto, Andrew G.},
+  title     = {Reinforcement Learning: An Introduction},
+  edition   = {2},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2018},
+  isbn      = {978-0-262-03924-6},
+  note      = {Free online at incompleteideas.net. Ch. 1 for the reinforcement-learning paradigm}
+}
+
+@inproceedings{deng2009,
+  author    = {Deng, Jia and Dong, Wei and Socher, Richard and Li, Li-Jia and Li, Kai and Fei-Fei, Li},
+  title     = {{ImageNet}: A Large-Scale Hierarchical Image Database},
+  booktitle = {2009 IEEE Conference on Computer Vision and Pattern Recognition},
+  pages     = {248--255},
+  year      = {2009},
+  doi       = {10.1109/CVPR.2009.5206848}
+}
+
+@inproceedings{krizhevsky2012,
+  author    = {Krizhevsky, Alex and Sutskever, Ilya and Hinton, Geoffrey E.},
+  title     = {{ImageNet} Classification with Deep Convolutional Neural Networks},
+  booktitle = {Advances in Neural Information Processing Systems 25},
+  pages     = {1097--1105},
+  year      = {2012},
+  url       = {https://papers.nips.cc/paper/4824-imagenet-classification-with-deep-convolutional-neural-networks},
+  note      = {Open access}
+}
+
+@article{lecun2015,
+  author  = {LeCun, Yann and Bengio, Yoshua and Hinton, Geoffrey},
+  title   = {Deep Learning},
+  journal = {Nature},
+  volume  = {521},
+  pages   = {436--444},
+  year    = {2015},
+  doi     = {10.1038/nature14539}
+}
+
+@inproceedings{sevilla2022,
+  author    = {Sevilla, Jaime and Heim, Lennart and Ho, Anson and Besiroglu, Tamay and Hobbhahn, Marius and Villalobos, Pablo},
+  title     = {Compute Trends Across Three Eras of Machine Learning},
+  booktitle = {2022 International Joint Conference on Neural Networks (IJCNN)},
+  pages     = {1--8},
+  year      = {2022},
+  doi       = {10.1109/IJCNN55064.2022.9891914},
+  eprint    = {2202.05924},
+  archiveprefix = {arXiv},
+  note      = {Free on arXiv. Doubling times of training compute before and after 2010}
+}
+
+@article{domingos2012,
+  author  = {Domingos, Pedro},
+  title   = {A Few Useful Things to Know About Machine Learning},
+  journal = {Communications of the ACM},
+  volume  = {55},
+  number  = {10},
+  pages   = {78--87},
+  year    = {2012},
+  doi     = {10.1145/2347736.2347755},
+  note    = {Free author copy widely available. Ten pages of practical wisdom}
+}
+
+@article{breiman2001,
+  author  = {Breiman, Leo},
+  title   = {Statistical Modeling: The Two Cultures},
+  journal = {Statistical Science},
+  volume  = {16},
+  number  = {3},
+  pages   = {199--231},
+  year    = {2001},
+  doi     = {10.1214/ss/1009213726},
+  note    = {Open access via Project Euclid. Prediction versus modelling the data-generating process}
+}
+
+@article{shmueli2010,
+  author  = {Shmueli, Galit},
+  title   = {To Explain or to Predict?},
+  journal = {Statistical Science},
+  volume  = {25},
+  number  = {3},
+  pages   = {289--310},
+  year    = {2010},
+  doi     = {10.1214/10-STS330},
+  note    = {Open access via Project Euclid}
+}
+
+% ---- Datasets and variable types (Chapter 2) --------------------------------
+
+@article{stevens1946,
+  author  = {Stevens, S. S.},
+  title   = {On the Theory of Scales of Measurement},
+  journal = {Science},
+  volume  = {103},
+  number  = {2684},
+  pages   = {677--680},
+  year    = {1946},
+  doi     = {10.1126/science.103.2684.677},
+  note    = {Four pages: nominal, ordinal, interval and ratio scales and their permissible statistics}
+}
+
+@article{wickham2014,
+  author  = {Wickham, Hadley},
+  title   = {Tidy Data},
+  journal = {Journal of Statistical Software},
+  volume  = {59},
+  number  = {10},
+  pages   = {1--23},
+  year    = {2014},
+  doi     = {10.18637/jss.v059.i10},
+  note    = {Open access}
+}
+
+@article{codd1970,
+  author  = {Codd, E. F.},
+  title   = {A Relational Model of Data for Large Shared Data Banks},
+  journal = {Communications of the ACM},
+  volume  = {13},
+  number  = {6},
+  pages   = {377--387},
+  year    = {1970},
+  doi     = {10.1145/362384.362685},
+  note    = {Free from the ACM Digital Library}
+}
+
+@misc{bray2008,
+  author       = {Bray, Tim and Paoli, Jean and Sperberg-McQueen, C. M. and Maler, Eve and Yergeau, Fran{\c{c}}ois},
+  title        = {Extensible Markup Language ({XML}) 1.0 (Fifth Edition)},
+  howpublished = {W3C Recommendation},
+  year         = {2008},
+  url          = {https://www.w3.org/TR/xml/},
+  note         = {Free. §2 (documents, elements, attributes)}
+}
+
+@misc{whatwghtml,
+  author       = {{WHATWG}},
+  title        = {{HTML} Living Standard},
+  howpublished = {Web standard},
+  url          = {https://html.spec.whatwg.org/},
+  note         = {Free. §4.9 (tabular data: the table element)}
+}
+
+@misc{iso29500,
+  author       = {{ISO/IEC}},
+  title        = {{ISO/IEC} 29500-1:2016 -- Information technology -- Document description and processing languages -- Office Open {XML} File Formats -- Part 1: Fundamentals and Markup Language Reference},
+  howpublished = {International standard},
+  year         = {2016},
+  url          = {https://www.iso.org/standard/71691.html},
+  note         = {Paid; the equivalent ECMA-376 is free from ecma-international.org. The format of .xlsx files}
+}
+
+@article{pearson1895,
+  author  = {Pearson, Karl},
+  title   = {Contributions to the Mathematical Theory of Evolution. {II}. Skew Variation in Homogeneous Material},
+  journal = {Philosophical Transactions of the Royal Society of London. A},
+  volume  = {186},
+  pages   = {343--414},
+  year    = {1895},
+  doi     = {10.1098/rsta.1895.0010},
+  note    = {Free from the Royal Society. Where "skewness" enters statistics}
+}
+
+@article{joanes1998,
+  author  = {Joanes, D. N. and Gill, C. A.},
+  title   = {Comparing Measures of Sample Skewness and Kurtosis},
+  journal = {Journal of the Royal Statistical Society: Series D (The Statistician)},
+  volume  = {47},
+  number  = {1},
+  pages   = {183--189},
+  year    = {1998},
+  doi     = {10.1111/1467-9884.00122},
+  note    = {The estimators $g_1$, $G_1$, $b_1$ and their bias; pandas uses $G_1$}
+}
+
+% ---- Preprocessing (Chapter 3) ----------------------------------------------
+
+@article{suits1957,
+  author  = {Suits, Daniel B.},
+  title   = {Use of Dummy Variables in Regression Equations},
+  journal = {Journal of the American Statistical Association},
+  volume  = {52},
+  number  = {280},
+  pages   = {548--551},
+  year    = {1957},
+  doi     = {10.1080/01621459.1957.10501412},
+  note    = {JSTOR. Why one category must be dropped when an intercept is present}
+}
+
+@article{rubin1976,
+  author  = {Rubin, Donald B.},
+  title   = {Inference and Missing Data},
+  journal = {Biometrika},
+  volume  = {63},
+  number  = {3},
+  pages   = {581--592},
+  year    = {1976},
+  doi     = {10.1093/biomet/63.3.581},
+  note    = {The definitions of missing at random and missing completely at random}
+}
+
+@book{little2019,
+  author    = {Little, Roderick J. A. and Rubin, Donald B.},
+  title     = {Statistical Analysis with Missing Data},
+  edition   = {3},
+  publisher = {Wiley},
+  address   = {Hoboken, NJ},
+  year      = {2019},
+  doi       = {10.1002/9781119482260},
+  note      = {Libraries. Ch. 1 (mechanisms), 3 (complete-case analysis), 4 (single imputation)}
+}
+
+@book{vanbuuren2018,
+  author    = {van Buuren, Stef},
+  title     = {Flexible Imputation of Missing Data},
+  edition   = {2},
+  publisher = {Chapman \& Hall/CRC},
+  address   = {Boca Raton, FL},
+  year      = {2018},
+  isbn      = {978-1-138-58831-8},
+  url       = {https://stefvanbuuren.name/fimd/},
+  note      = {Free online. Ch. 1.3 (simple fixes and why they fail), 2 (multiple imputation)}
+}
+
+@incollection{lecun2012,
+  author    = {LeCun, Yann A. and Bottou, L{\'e}on and Orr, Genevieve B. and M{\"u}ller, Klaus-Robert},
+  title     = {Efficient {BackProp}},
+  booktitle = {Neural Networks: Tricks of the Trade},
+  edition   = {2},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {7700},
+  pages     = {9--48},
+  publisher = {Springer},
+  year      = {2012},
+  doi       = {10.1007/978-3-642-35289-8_3},
+  note      = {§4.3: why inputs should be centred and scaled for gradient methods}
+}
+
+@article{kaufman2012,
+  author  = {Kaufman, Shachar and Rosset, Saharon and Perlich, Claudia and Stitelman, Ori},
+  title   = {Leakage in Data Mining: Formulation, Detection, and Avoidance},
+  journal = {ACM Transactions on Knowledge Discovery from Data},
+  volume  = {6},
+  number  = {4},
+  pages   = {15:1--15:21},
+  year    = {2012},
+  doi     = {10.1145/2382577.2382579}
+}
+
+@article{ambroise2002,
+  author  = {Ambroise, Christophe and McLachlan, Geoffrey J.},
+  title   = {Selection Bias in Gene Extraction on the Basis of Microarray Gene-Expression Data},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume  = {99},
+  number  = {10},
+  pages   = {6562--6566},
+  year    = {2002},
+  doi     = {10.1073/pnas.102102699},
+  note    = {Open access. Feature selection outside cross-validation gives near-zero error on noise}
+}
+
+@article{kapoor2023,
+  author  = {Kapoor, Sayash and Narayanan, Arvind},
+  title   = {Leakage and the Reproducibility Crisis in Machine-Learning-Based Science},
+  journal = {Patterns},
+  volume  = {4},
+  number  = {9},
+  pages   = {100804},
+  year    = {2023},
+  doi     = {10.1016/j.patter.2023.100804},
+  note    = {Open access (CC BY). A taxonomy of leakage; 294 papers in 17 fields affected}
+}
+
+% ---- Linear regression (Chapter 4) ------------------------------------------
+
+@book{legendre1805,
+  author    = {Legendre, Adrien-Marie},
+  title     = {Nouvelles m{\'e}thodes pour la d{\'e}termination des orbites des com{\`e}tes},
+  publisher = {Firmin Didot},
+  address   = {Paris},
+  year      = {1805},
+  note      = {Free scans on Gallica and the Internet Archive. The appendix "Sur la méthode des moindres quarrés" (pp. 72--80) is the first published statement of least squares}
+}
+
+@book{gauss1809,
+  author    = {Gauss, Carl Friedrich},
+  title     = {Theoria motus corporum coelestium in sectionibus conicis solem ambientium},
+  publisher = {Perthes et Besser},
+  address   = {Hamburg},
+  year      = {1809},
+  note      = {Free scans on the Internet Archive. Book II, section III (§§175--186): least squares justified by normally distributed errors}
+}
+
+@article{stigler1981,
+  author  = {Stigler, Stephen M.},
+  title   = {Gauss and the Invention of Least Squares},
+  journal = {The Annals of Statistics},
+  volume  = {9},
+  number  = {3},
+  pages   = {465--474},
+  year    = {1981},
+  doi     = {10.1214/aos/1176345451},
+  note    = {Open access via Project Euclid. The priority dispute between Legendre and Gauss}
+}
+
+@article{galton1886,
+  author  = {Galton, Francis},
+  title   = {Regression Towards Mediocrity in Hereditary Stature},
+  journal = {The Journal of the Anthropological Institute of Great Britain and Ireland},
+  volume  = {15},
+  pages   = {246--263},
+  year    = {1886},
+  doi     = {10.2307/2841583},
+  note    = {JSTOR (free early content). The origin of the word "regression"}
+}
+
+@article{pearson1896,
+  author  = {Pearson, Karl},
+  title   = {Mathematical Contributions to the Theory of Evolution. {III}. Regression, Heredity, and Panmixia},
+  journal = {Philosophical Transactions of the Royal Society of London. A},
+  volume  = {187},
+  pages   = {253--318},
+  year    = {1896},
+  doi     = {10.1098/rsta.1896.0007},
+  note    = {Free from the Royal Society. The product-moment correlation coefficient}
+}
+
+@article{wright1921,
+  author  = {Wright, Sewall},
+  title   = {Correlation and Causation},
+  journal = {Journal of Agricultural Research},
+  volume  = {20},
+  number  = {7},
+  pages   = {557--585},
+  year    = {1921},
+  note    = {Free scans (USDA National Agricultural Library). Introduces the "coefficient of determination"}
+}
+
+@article{huber1964,
+  author  = {Huber, Peter J.},
+  title   = {Robust Estimation of a Location Parameter},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {35},
+  number  = {1},
+  pages   = {73--101},
+  year    = {1964},
+  doi     = {10.1214/aoms/1177703732},
+  note    = {Open access via Project Euclid. The Huber loss}
+}
+
+@article{kvalseth1985,
+  author  = {Kv{\aa}lseth, Tarald O.},
+  title   = {Cautionary Note about {$R^2$}},
+  journal = {The American Statistician},
+  volume  = {39},
+  number  = {4},
+  pages   = {279--285},
+  year    = {1985},
+  doi     = {10.1080/00031305.1985.10479448},
+  note    = {Eight definitions of $R^2$ that disagree, and which one to use}
+}
+
+@article{anscombe1973,
+  author  = {Anscombe, F. J.},
+  title   = {Graphs in Statistical Analysis},
+  journal = {The American Statistician},
+  volume  = {27},
+  number  = {1},
+  pages   = {17--21},
+  year    = {1973},
+  doi     = {10.1080/00031305.1973.10478966},
+  note    = {Four data sets with the same regression line and correlation}
+}
+
+@article{frisch1933,
+  author  = {Frisch, Ragnar and Waugh, Frederick V.},
+  title   = {Partial Time Regressions as Compared with Individual Trends},
+  journal = {Econometrica},
+  volume  = {1},
+  number  = {4},
+  pages   = {387--401},
+  year    = {1933},
+  doi     = {10.2307/1907330},
+  note    = {JSTOR}
+}
+
+@article{lovell1963,
+  author  = {Lovell, Michael C.},
+  title   = {Seasonal Adjustment of Economic Time Series and Multiple Regression Analysis},
+  journal = {Journal of the American Statistical Association},
+  volume  = {58},
+  number  = {304},
+  pages   = {993--1010},
+  year    = {1963},
+  doi     = {10.1080/01621459.1963.10480682},
+  note    = {JSTOR. The general form of the Frisch--Waugh--Lovell theorem}
+}
+
+@article{marquardt1970,
+  author  = {Marquardt, Donald W.},
+  title   = {Generalized Inverses, Ridge Regression, Biased Linear Estimation, and Nonlinear Estimation},
+  journal = {Technometrics},
+  volume  = {12},
+  number  = {3},
+  pages   = {591--612},
+  year    = {1970},
+  doi     = {10.1080/00401706.1970.10488699},
+  note    = {Where the term "variance inflation factor" is introduced}
+}
+
+@book{seber2003,
+  author    = {Seber, George A. F. and Lee, Alan J.},
+  title     = {Linear Regression Analysis},
+  edition   = {2},
+  publisher = {Wiley},
+  address   = {Hoboken, NJ},
+  year      = {2003},
+  doi       = {10.1002/9780471722199},
+  note      = {Libraries. Ch. 3 (least squares, Gauss--Markov theorem), 10 (diagnostics, leverage)}
+}
+
+@article{cauchy1847,
+  author  = {Cauchy, Augustin-Louis},
+  title   = {M{\'e}thode g{\'e}n{\'e}rale pour la r{\'e}solution des syst{\`e}mes d'{\'e}quations simultan{\'e}es},
+  journal = {Comptes rendus hebdomadaires des s{\'e}ances de l'Acad{\'e}mie des sciences},
+  volume  = {25},
+  pages   = {536--538},
+  year    = {1847},
+  note    = {Free on Gallica. The first description of gradient descent}
+}
+
+@book{nesterov2018,
+  author    = {Nesterov, Yurii},
+  title     = {Lectures on Convex Optimization},
+  edition   = {2},
+  publisher = {Springer},
+  address   = {Cham},
+  year      = {2018},
+  doi       = {10.1007/978-3-319-91578-4},
+  note      = {Libraries. §2.1 (smooth convex functions, the descent lemma, gradient method)}
+}
+
+@book{boyd2004,
+  author    = {Boyd, Stephen and Vandenberghe, Lieven},
+  title     = {Convex Optimization},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2004},
+  isbn      = {978-0-521-83378-3},
+  note      = {Free PDF on the authors' site. §3.1 (convexity, second-order condition), §9.3 (gradient descent)}
+}
+
+@book{golub2013,
+  author    = {Golub, Gene H. and Van Loan, Charles F.},
+  title     = {Matrix Computations},
+  edition   = {4},
+  publisher = {Johns Hopkins University Press},
+  address   = {Baltimore},
+  year      = {2013},
+  isbn      = {978-1-4214-0794-4},
+  note      = {Libraries. §5.3 (least squares by QR and the normal equations), §2.4 (SVD)}
+}
+
+@book{stigler1986,
+  author    = {Stigler, Stephen M.},
+  title     = {The History of Statistics: The Measurement of Uncertainty before 1900},
+  publisher = {Belknap Press of Harvard University Press},
+  address   = {Cambridge, MA},
+  year      = {1986},
+  isbn      = {978-0-674-40341-3},
+  note      = {Libraries. Ch. 1 (Legendre, Gauss and least squares), ch. 8--10 (Galton, Pearson, regression and correlation)}
+}
+
+% ---- Overfitting and regularisation (Chapter 5) -----------------------------
+
+@article{geman1992,
+  author  = {Geman, Stuart and Bienenstock, Elie and Doursat, Ren{\'e}},
+  title   = {Neural Networks and the Bias/Variance Dilemma},
+  journal = {Neural Computation},
+  volume  = {4},
+  number  = {1},
+  pages   = {1--58},
+  year    = {1992},
+  doi     = {10.1162/neco.1992.4.1.1},
+  note    = {§2 derives the bias-variance decomposition of the squared error}
+}
+
+@article{stone1974,
+  author  = {Stone, M.},
+  title   = {Cross-Validatory Choice and Assessment of Statistical Predictions},
+  journal = {Journal of the Royal Statistical Society: Series B (Methodological)},
+  volume  = {36},
+  number  = {2},
+  pages   = {111--147},
+  year    = {1974},
+  doi     = {10.1111/j.2517-6161.1974.tb00994.x},
+  note    = {JSTOR. Cross-validation for both choosing and assessing a predictor}
+}
+
+@article{geisser1975,
+  author  = {Geisser, Seymour},
+  title   = {The Predictive Sample Reuse Method with Applications},
+  journal = {Journal of the American Statistical Association},
+  volume  = {70},
+  number  = {350},
+  pages   = {320--328},
+  year    = {1975},
+  doi     = {10.1080/01621459.1975.10479865},
+  note    = {JSTOR. K-fold splitting}
+}
+
+@article{allen1974,
+  author  = {Allen, David M.},
+  title   = {The Relationship Between Variable Selection and Data Augmentation and a Method for Prediction},
+  journal = {Technometrics},
+  volume  = {16},
+  number  = {1},
+  pages   = {125--127},
+  year    = {1974},
+  doi     = {10.1080/00401706.1974.10489157},
+  note    = {The PRESS statistic (leave-one-out error of least squares)}
+}
+
+@article{sherman1950,
+  author  = {Sherman, Jack and Morrison, Winifred J.},
+  title   = {Adjustment of an Inverse Matrix Corresponding to a Change in One Element of a Given Matrix},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {21},
+  number  = {1},
+  pages   = {124--127},
+  year    = {1950},
+  doi     = {10.1214/aoms/1177729893},
+  note    = {Open access via Project Euclid}
+}
+
+@inproceedings{kohavi1995,
+  author    = {Kohavi, Ron},
+  title     = {A Study of Cross-Validation and Bootstrap for Accuracy Estimation and Model Selection},
+  booktitle = {Proceedings of the 14th International Joint Conference on Artificial Intelligence (IJCAI)},
+  volume    = {2},
+  pages     = {1137--1143},
+  year      = {1995},
+  note      = {Free author copy. Recommends 10-fold stratified cross-validation}
+}
+
+@article{bengio2004,
+  author  = {Bengio, Yoshua and Grandvalet, Yves},
+  title   = {No Unbiased Estimator of the Variance of {K}-Fold Cross-Validation},
+  journal = {Journal of Machine Learning Research},
+  volume  = {5},
+  pages   = {1089--1105},
+  year    = {2004},
+  url     = {https://www.jmlr.org/papers/v5/grandvalet04a.html},
+  note    = {Open access}
+}
+
+@article{varma2006,
+  author  = {Varma, Sudhir and Simon, Richard},
+  title   = {Bias in Error Estimation When Using Cross-Validation for Model Selection},
+  journal = {BMC Bioinformatics},
+  volume  = {7},
+  pages   = {91},
+  year    = {2006},
+  doi     = {10.1186/1471-2105-7-91},
+  note    = {Open access. Why the tuned cross-validation score is optimistic; nested cross-validation}
+}
+
+@article{cawley2010,
+  author  = {Cawley, Gavin C. and Talbot, Nicola L. C.},
+  title   = {On Over-fitting in Model Selection and Subsequent Selection Bias in Performance Evaluation},
+  journal = {Journal of Machine Learning Research},
+  volume  = {11},
+  pages   = {2079--2107},
+  year    = {2010},
+  url     = {https://www.jmlr.org/papers/v11/cawley10a.html},
+  note    = {Open access}
+}
+
+@article{perlich2003,
+  author  = {Perlich, Claudia and Provost, Foster and Simonoff, Jeffrey S.},
+  title   = {Tree Induction vs. Logistic Regression: A Learning-Curve Analysis},
+  journal = {Journal of Machine Learning Research},
+  volume  = {4},
+  pages   = {211--255},
+  year    = {2003},
+  url     = {https://www.jmlr.org/papers/v4/perlich03a.html},
+  note    = {Open access. Learning curves cross: the better model depends on the amount of data}
+}
+
+@article{hoerl1970,
+  author  = {Hoerl, Arthur E. and Kennard, Robert W.},
+  title   = {Ridge Regression: Biased Estimation for Nonorthogonal Problems},
+  journal = {Technometrics},
+  volume  = {12},
+  number  = {1},
+  pages   = {55--67},
+  year    = {1970},
+  doi     = {10.1080/00401706.1970.10488634},
+  note    = {The ridge estimator and the existence of a ridge constant that beats least squares}
+}
+
+@article{tikhonov1963,
+  author  = {Tikhonov, A. N.},
+  title   = {Solution of Incorrectly Formulated Problems and the Regularization Method},
+  journal = {Soviet Mathematics Doklady},
+  volume  = {4},
+  pages   = {1035--1038},
+  year    = {1963},
+  note    = {English translation of Dokl. Akad. Nauk SSSR 151 (1963). Libraries}
+}
+
+@article{tibshirani1996,
+  author  = {Tibshirani, Robert},
+  title   = {Regression Shrinkage and Selection via the Lasso},
+  journal = {Journal of the Royal Statistical Society: Series B (Methodological)},
+  volume  = {58},
+  number  = {1},
+  pages   = {267--288},
+  year    = {1996},
+  doi     = {10.1111/j.2517-6161.1996.tb02080.x},
+  note    = {Free author copy. The lasso, its geometry and the orthonormal-design solution}
+}
+
+@article{zou2005,
+  author  = {Zou, Hui and Hastie, Trevor},
+  title   = {Regularization and Variable Selection via the Elastic Net},
+  journal = {Journal of the Royal Statistical Society: Series B (Statistical Methodology)},
+  volume  = {67},
+  number  = {2},
+  pages   = {301--320},
+  year    = {2005},
+  doi     = {10.1111/j.1467-9868.2005.00503.x},
+  note    = {Free author copy. The elastic net and its grouping effect}
+}
+
+@article{friedman2010,
+  author  = {Friedman, Jerome and Hastie, Trevor and Tibshirani, Robert},
+  title   = {Regularization Paths for Generalized Linear Models via Coordinate Descent},
+  journal = {Journal of Statistical Software},
+  volume  = {33},
+  number  = {1},
+  pages   = {1--22},
+  year    = {2010},
+  doi     = {10.18637/jss.v033.i01},
+  note    = {Open access. The coordinate-descent algorithm used by glmnet and, in essence, by scikit-learn}
+}
+
+@book{hastie2015,
+  author    = {Hastie, Trevor and Tibshirani, Robert and Wainwright, Martin},
+  title     = {Statistical Learning with Sparsity: The Lasso and Generalizations},
+  publisher = {Chapman \& Hall/CRC},
+  address   = {Boca Raton, FL},
+  year      = {2015},
+  isbn      = {978-1-4987-1216-3},
+  note      = {Free PDF on the authors' site. Ch. 2 (the lasso, soft thresholding, $\lambda_{\max}$), 4.2 (elastic net), 5.4 (coordinate descent)}
+}
+
+@article{belkin2019,
+  author  = {Belkin, Mikhail and Hsu, Daniel and Ma, Siyuan and Mandal, Soumik},
+  title   = {Reconciling Modern Machine-Learning Practice and the Classical Bias--Variance Trade-off},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume  = {116},
+  number  = {32},
+  pages   = {15849--15854},
+  year    = {2019},
+  doi     = {10.1073/pnas.1903070116},
+  note    = {Open access. "Double descent" beyond the interpolation threshold}
+}
+
+% ---- Classification (Chapter 6) ---------------------------------------------
+
+@article{berkson1944,
+  author  = {Berkson, Joseph},
+  title   = {Application of the Logistic Function to Bio-Assay},
+  journal = {Journal of the American Statistical Association},
+  volume  = {39},
+  number  = {227},
+  pages   = {357--365},
+  year    = {1944},
+  doi     = {10.1080/01621459.1944.10500699},
+  note    = {JSTOR. Coins the word "logit"}
+}
+
+@article{cox1958,
+  author  = {Cox, D. R.},
+  title   = {The Regression Analysis of Binary Sequences},
+  journal = {Journal of the Royal Statistical Society: Series B (Methodological)},
+  volume  = {20},
+  number  = {2},
+  pages   = {215--242},
+  year    = {1958},
+  doi     = {10.1111/j.2517-6161.1958.tb00292.x},
+  note    = {JSTOR. Logistic regression as a general regression model for binary outcomes}
+}
+
+@article{albert1984,
+  author  = {Albert, A. and Anderson, J. A.},
+  title   = {On the Existence of Maximum Likelihood Estimates in Logistic Regression Models},
+  journal = {Biometrika},
+  volume  = {71},
+  number  = {1},
+  pages   = {1--10},
+  year    = {1984},
+  doi     = {10.1093/biomet/71.1.1},
+  note    = {Separable data: the maximum-likelihood estimate does not exist}
+}
+
+@incollection{bridle1990,
+  author    = {Bridle, John S.},
+  title     = {Probabilistic Interpretation of Feedforward Classification Network Outputs, with Relationships to Statistical Pattern Recognition},
+  booktitle = {Neurocomputing: Algorithms, Architectures and Applications},
+  editor    = {Souli{\'e}, Fran{\c{c}}oise Fogelman and H{\'e}rault, Jeanny},
+  series    = {NATO ASI Series F},
+  volume    = {68},
+  pages     = {227--236},
+  publisher = {Springer},
+  year      = {1990},
+  doi       = {10.1007/978-3-642-76153-9_28},
+  note      = {Names the "softmax"}
+}
+
+@article{rifkin2004,
+  author  = {Rifkin, Ryan and Klautau, Aldebaro},
+  title   = {In Defense of One-Vs-All Classification},
+  journal = {Journal of Machine Learning Research},
+  volume  = {5},
+  pages   = {101--141},
+  year    = {2004},
+  url     = {https://www.jmlr.org/papers/v5/rifkin04a.html},
+  note    = {Open access}
+}
+
+@article{fawcett2006,
+  author  = {Fawcett, Tom},
+  title   = {An Introduction to {ROC} Analysis},
+  journal = {Pattern Recognition Letters},
+  volume  = {27},
+  number  = {8},
+  pages   = {861--874},
+  year    = {2006},
+  doi     = {10.1016/j.patrec.2005.10.010},
+  note    = {The standard tutorial: ROC space, the threshold sweep, AUC (§§2--7)}
+}
+
+@article{hanley1982,
+  author  = {Hanley, James A. and McNeil, Barbara J.},
+  title   = {The Meaning and Use of the Area under a Receiver Operating Characteristic ({ROC}) Curve},
+  journal = {Radiology},
+  volume  = {143},
+  number  = {1},
+  pages   = {29--36},
+  year    = {1982},
+  doi     = {10.1148/radiology.143.1.7063747},
+  note    = {AUC equals the probability that a random positive outranks a random negative}
+}
+
+@book{vanrijsbergen1979,
+  author    = {van Rijsbergen, C. J.},
+  title     = {Information Retrieval},
+  edition   = {2},
+  publisher = {Butterworths},
+  address   = {London},
+  year      = {1979},
+  isbn      = {978-0-408-70929-3},
+  note      = {Free online on the author's former site and the Internet Archive. Ch. 7: the effectiveness measure from which $F_1$ derives}
+}
+
+@inproceedings{elkan2001,
+  author    = {Elkan, Charles},
+  title     = {The Foundations of Cost-Sensitive Learning},
+  booktitle = {Proceedings of the 17th International Joint Conference on Artificial Intelligence (IJCAI)},
+  pages     = {973--978},
+  year      = {2001},
+  note      = {Free author copy. The optimal threshold for given misclassification costs}
+}
+
+@article{saito2015,
+  author  = {Saito, Takaya and Rehmsmeier, Marc},
+  title   = {The Precision-Recall Plot Is More Informative than the {ROC} Plot When Evaluating Binary Classifiers on Imbalanced Datasets},
+  journal = {PLoS ONE},
+  volume  = {10},
+  number  = {3},
+  pages   = {e0118432},
+  year    = {2015},
+  doi     = {10.1371/journal.pone.0118432},
+  note    = {Open access}
+}
+
+@inproceedings{street1993,
+  author    = {Street, W. Nick and Wolberg, William H. and Mangasarian, Olvi L.},
+  title     = {Nuclear Feature Extraction for Breast Tumor Diagnosis},
+  booktitle = {Biomedical Image Processing and Biomedical Visualization},
+  series    = {Proceedings of SPIE},
+  volume    = {1905},
+  pages     = {861--870},
+  year      = {1993},
+  doi       = {10.1117/12.148698},
+  note      = {How the features of the Wisconsin diagnostic data set were measured}
+}
+
+@misc{wolberg1993,
+  author       = {Wolberg, William and Mangasarian, Olvi and Street, Nick and Street, W.},
+  title        = {Breast Cancer {W}isconsin ({D}iagnostic)},
+  howpublished = {UCI Machine Learning Repository, data set},
+  year         = {1993},
+  doi          = {10.24432/C5DW2B},
+  note         = {CC BY 4.0. 569 tumours, 30 features; shipped with scikit-learn as load\_breast\_cancer}
+}
+
+% ---- Clustering (Chapter 7) -------------------------------------------------
+
+@article{steinhaus1956,
+  author  = {Steinhaus, Hugo},
+  title   = {Sur la division des corps mat{\'e}riels en parties},
+  journal = {Bulletin de l'Acad{\'e}mie Polonaise des Sciences, Classe III},
+  volume  = {4},
+  number  = {12},
+  pages   = {801--804},
+  year    = {1956},
+  note    = {Libraries. The k-means objective, before the name}
+}
+
+@inproceedings{macqueen1967,
+  author    = {MacQueen, J.},
+  title     = {Some Methods for Classification and Analysis of Multivariate Observations},
+  booktitle = {Proceedings of the Fifth Berkeley Symposium on Mathematical Statistics and Probability},
+  volume    = {1},
+  pages     = {281--297},
+  publisher = {University of California Press},
+  year      = {1967},
+  note      = {Open access via Project Euclid. Coins "k-means"}
+}
+
+@article{lloyd1982,
+  author  = {Lloyd, Stuart P.},
+  title   = {Least Squares Quantization in {PCM}},
+  journal = {IEEE Transactions on Information Theory},
+  volume  = {28},
+  number  = {2},
+  pages   = {129--137},
+  year    = {1982},
+  doi     = {10.1109/TIT.1982.1056489},
+  note    = {Written at Bell Labs in 1957, published in 1982. The alternating algorithm}
+}
+
+@inproceedings{arthur2007,
+  author    = {Arthur, David and Vassilvitskii, Sergei},
+  title     = {k-means++: The Advantages of Careful Seeding},
+  booktitle = {Proceedings of the 18th Annual ACM-SIAM Symposium on Discrete Algorithms (SODA)},
+  pages     = {1027--1035},
+  year      = {2007},
+  note      = {Free author copy. Seeding with probability proportional to squared distance; $O(\log k)$ guarantee}
+}
+
+@article{aloise2009,
+  author  = {Aloise, Daniel and Deshpande, Amit and Hansen, Pierre and Popat, Preyas},
+  title   = {{NP}-hardness of {E}uclidean Sum-of-Squares Clustering},
+  journal = {Machine Learning},
+  volume  = {75},
+  number  = {2},
+  pages   = {245--248},
+  year    = {2009},
+  doi     = {10.1007/s10994-009-5103-0}
+}
+
+@article{vattani2011,
+  author  = {Vattani, Andrea},
+  title   = {k-means Requires Exponentially Many Iterations Even in the Plane},
+  journal = {Discrete \& Computational Geometry},
+  volume  = {45},
+  number  = {4},
+  pages   = {596--616},
+  year    = {2011},
+  doi     = {10.1007/s00454-011-9340-1}
+}
+
+@article{thorndike1953,
+  author  = {Thorndike, Robert L.},
+  title   = {Who Belongs in the Family?},
+  journal = {Psychometrika},
+  volume  = {18},
+  number  = {4},
+  pages   = {267--276},
+  year    = {1953},
+  doi     = {10.1007/BF02289263},
+  note    = {The "elbow" in the within-cluster distance as the number of groups grows}
+}
+
+@article{rousseeuw1987,
+  author  = {Rousseeuw, Peter J.},
+  title   = {Silhouettes: A Graphical Aid to the Interpretation and Validation of Cluster Analysis},
+  journal = {Journal of Computational and Applied Mathematics},
+  volume  = {20},
+  pages   = {53--65},
+  year    = {1987},
+  doi     = {10.1016/0377-0427(87)90125-7},
+  note    = {Open archive (Elsevier)}
+}
+
+@article{calinski1974,
+  author  = {Cali{\'n}ski, T. and Harabasz, J.},
+  title   = {A Dendrite Method for Cluster Analysis},
+  journal = {Communications in Statistics},
+  volume  = {3},
+  number  = {1},
+  pages   = {1--27},
+  year    = {1974},
+  doi     = {10.1080/03610927408827101}
+}
+
+@article{davies1979,
+  author  = {Davies, David L. and Bouldin, Donald W.},
+  title   = {A Cluster Separation Measure},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume  = {PAMI-1},
+  number  = {2},
+  pages   = {224--227},
+  year    = {1979},
+  doi     = {10.1109/TPAMI.1979.4766909}
+}
+
+@article{tibshirani2001,
+  author  = {Tibshirani, Robert and Walther, Guenther and Hastie, Trevor},
+  title   = {Estimating the Number of Clusters in a Data Set via the Gap Statistic},
+  journal = {Journal of the Royal Statistical Society: Series B (Statistical Methodology)},
+  volume  = {63},
+  number  = {2},
+  pages   = {411--423},
+  year    = {2001},
+  doi     = {10.1111/1467-9868.00293}
+}
+
+@article{hubert1985,
+  author  = {Hubert, Lawrence and Arabie, Phipps},
+  title   = {Comparing Partitions},
+  journal = {Journal of Classification},
+  volume  = {2},
+  number  = {1},
+  pages   = {193--218},
+  year    = {1985},
+  doi     = {10.1007/BF01908075},
+  note    = {The adjusted Rand index}
+}
+
+@inproceedings{kleinberg2002,
+  author    = {Kleinberg, Jon},
+  title     = {An Impossibility Theorem for Clustering},
+  booktitle = {Advances in Neural Information Processing Systems 15},
+  pages     = {463--470},
+  year      = {2002},
+  note      = {Open access (NeurIPS proceedings)}
+}
+
+@article{jain2010,
+  author  = {Jain, Anil K.},
+  title   = {Data Clustering: 50 Years Beyond {K}-means},
+  journal = {Pattern Recognition Letters},
+  volume  = {31},
+  number  = {8},
+  pages   = {651--666},
+  year    = {2010},
+  doi     = {10.1016/j.patrec.2009.09.011},
+  note    = {A survey of clustering, from k-means to its successors}
+}
+
+@misc{aeberhard1992,
+  author       = {Aeberhard, Stefan and Forina, M.},
+  title        = {Wine},
+  howpublished = {UCI Machine Learning Repository, data set},
+  year         = {1992},
+  doi          = {10.24432/C5PC7J},
+  note         = {CC BY 4.0. 178 wines from three cultivars, 13 chemical measurements; shipped with scikit-learn as load\_wine}
+}
+
+% ---- Project (Chapter 8) ----------------------------------------------------
+
+@article{anglin1996,
+  author  = {Anglin, Paul M. and Gen{\c{c}}ay, Ramazan},
+  title   = {Semiparametric Estimation of a Hedonic Price Function},
+  journal = {Journal of Applied Econometrics},
+  volume  = {11},
+  number  = {6},
+  pages   = {633--648},
+  year    = {1996},
+  doi     = {10.1002/(SICI)1099-1255(199611)11:6<633::AID-JAE414>3.0.CO;2-T},
+  note    = {Libraries / JSTOR. The original study of the 546 Windsor house sales of 1987}
+}
+
+@misc{anglin1996data,
+  author       = {Anglin, Paul M. and Gen{\c{c}}ay, Ramazan},
+  title        = {Semiparametric Estimation of a Hedonic Price Function (Replication Data)},
+  howpublished = {Journal of Applied Econometrics Data Archive (ZBW Journal Data Archive)},
+  year         = {1996},
+  doi          = {10.15456/jae.2022313.1255545048},
+  note         = {Free download. The primary copy of the data}
+}
+
+@misc{croissant2025,
+  author       = {Croissant, Yves and Graves, Spencer},
+  title        = {Ecdat: Data Sets for Econometrics},
+  howpublished = {R package version 0.4.7, CRAN},
+  year         = {2025},
+  doi          = {10.32614/CRAN.package.Ecdat},
+  note         = {GPL (>= 2). The data set Housing is the Anglin--Gençay sample}
+}
+
+@misc{rdatasets,
+  author       = {Arel-Bundock, Vincent},
+  title        = {Rdatasets: An Archive of Datasets Distributed with {R}},
+  howpublished = {Web archive},
+  url          = {https://vincentarelbundock.github.io/Rdatasets/},
+  note         = {CSV copies of the data sets of R packages; used to fetch Ecdat's Housing (accessed November 2026)}
+}
+
+@misc{yasser2021,
+  author       = {H, M Yasser},
+  title        = {Housing Prices Dataset},
+  howpublished = {Kaggle data set, version 1},
+  year         = {2021},
+  url          = {https://www.kaggle.com/datasets/yasserh/housing-prices-dataset},
+  note         = {CC0: Public Domain (as declared on Kaggle). 545 rows, 13 columns; the copy used by the project of Part III}
+}
+
+@article{rosen1974,
+  author  = {Rosen, Sherwin},
+  title   = {Hedonic Prices and Implicit Markets: Product Differentiation in Pure Competition},
+  journal = {Journal of Political Economy},
+  volume  = {82},
+  number  = {1},
+  pages   = {34--55},
+  year    = {1974},
+  doi     = {10.1086/260169},
+  note    = {JSTOR. The economic theory behind regressing prices on characteristics}
+}
+
+@article{box1964,
+  author  = {Box, G. E. P. and Cox, D. R.},
+  title   = {An Analysis of Transformations},
+  journal = {Journal of the Royal Statistical Society: Series B (Methodological)},
+  volume  = {26},
+  number  = {2},
+  pages   = {211--252},
+  year    = {1964},
+  doi     = {10.1111/j.2517-6161.1964.tb00553.x},
+  note    = {JSTOR. The family of power transformations that contains the logarithm}
+}
+
+@article{duan1983,
+  author  = {Duan, Naihua},
+  title   = {Smearing Estimate: A Nonparametric Retransformation Method},
+  journal = {Journal of the American Statistical Association},
+  volume  = {78},
+  number  = {383},
+  pages   = {605--610},
+  year    = {1983},
+  doi     = {10.1080/01621459.1983.10478017},
+  note    = {JSTOR. How to predict the mean of $y$ from a model of $\log y$}
+}
+
+@inproceedings{pimentel2019,
+  author    = {Pimentel, Jo{\~a}o Felipe and Murta, Leonardo and Braganholo, Vanessa and Freire, Juliana},
+  title     = {A Large-Scale Study about Quality and Reproducibility of {J}upyter Notebooks},
+  booktitle = {Proceedings of the 16th International Conference on Mining Software Repositories (MSR)},
+  pages     = {507--517},
+  year      = {2019},
+  doi       = {10.1109/MSR.2019.00077},
+  note      = {Free author copy. Of 863 878 re-executed notebooks, 24.11\% ran without errors and 4.03\% reproduced their stored results}
+}
+
+@inproceedings{mitchell2019,
+  author    = {Mitchell, Margaret and Wu, Simone and Zaldivar, Andrew and Barnes, Parker and Vasserman, Lucy and Hutchinson, Ben and Spitzer, Elena and Raji, Inioluwa Deborah and Gebru, Timnit},
+  title     = {Model Cards for Model Reporting},
+  booktitle = {Proceedings of the Conference on Fairness, Accountability, and Transparency (FAT*)},
+  pages     = {220--229},
+  year      = {2019},
+  doi       = {10.1145/3287560.3287596},
+  note      = {Free on arXiv (1810.03993). A template to document what a model is for and how it was evaluated}
+}
+
 % ---- Appendix: finding sources -------------------------------------------------
 
 @misc{pep1,

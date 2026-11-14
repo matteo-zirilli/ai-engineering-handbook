@@ -98,3 +98,65 @@ for style, depth and structure**: read one chapter (e.g.
   map `cdn.jsdelivr.net/npm/<pkg>@<version>/...` to local npm installs of the
   exact versions requested (mathjax@3, @observablehq/plot, @observablehq/inputs,
   d3, htl).
+
+## Notes for Part III (Foundations of machine learning, `ml/`)
+
+- Structure: `ml/index.qmd` + `01-what-is-ml` … `07-clustering` (one per
+  module) + `08-project-real-estate`. Chapter ids: `sec-ch-ml-intro`,
+  `sec-ch-ml-data`, `sec-ch-ml-preprocessing`, `sec-ch-ml-regression`,
+  `sec-ch-ml-regularization`, `sec-ch-ml-classification`,
+  `sec-ch-ml-clustering`, `sec-ch-project-housing`. Later parts should link
+  back to them for risk/ERM, train/test, cross-validation, bias–variance,
+  regularisation, classification metrics (e.g. `@thm-bias-variance`,
+  `@sec-cross-validation`, `@sec-classification-metrics`, `@thm-auc`,
+  `@sec-leakage`, `@sec-gradient-descent`).
+- Ordinary Python cells (`ml/_metadata.yml`: `jupyter: python3`, code shown).
+  Every chapter starts with a hidden cell `import mlbook; mlbook.setup()`.
+  `ml/mlbook.py` holds the figure style (light surface `#fcfcfb`, recessive
+  grid, the fixed categorical order `mlbook.COLORS` — never cycle more than 8
+  hues; for many lines draw them grey and highlight ≤ 3), and
+  `load_housing(encoded=...)`. Matplotlib figures use `#| label: fig-…` and
+  `#| fig-cap:`. Inline values use `` `{python} expr` ``.
+- Data: only public data with a clear licence or data generated in code.
+  `ml/_data/housing.csv` is a byte-identical CC0 copy of the Kaggle "Housing
+  Prices Dataset" (provenance and the link to Anglin & Gençay 1996 in
+  `ml/_data/README.md`); `load_breast_cancer` and `load_wine` ship with
+  scikit-learn (UCI, CC BY 4.0). Folders starting with `_` are not rendered.
+- Versions used: Python 3.13, scikit-learn 1.9.1, NumPy 2.5, pandas 3.0
+  (text columns have dtype `str`; `df.drop(columns=..., axis=1)` raises),
+  Matplotlib 3.11. `ml/index.qmd` prints the versions at build time.
+- The project chapter **downloads** two files at render time, both pinned to a
+  commit: the author's notebook from `ai-projects` (commit `2e2c86d…`) and the
+  Ecdat `Housing.csv` from Rdatasets (commit `1dcc2bf…`). Re-rendering it needs
+  network access to `raw.githubusercontent.com` (and `seaborn`, imported by the
+  replayed notebook). If the author updates the notebook, update the pinned
+  commit and re-check the review table.
+- Pattern established for project chapters with the author's notebook:
+  re-execute it (top to bottom **and** in the order of the stored
+  `execution_count`s) before reviewing; Part III found a doubly-applied
+  `log1p` and metrics computed on a CV fold that way. Do not name the course's
+  fictional company.
+- Render times: full book ≈ 6–7 min when Part III re-executes (ch. 5 ≈ 1 min,
+  ch. 8 ≈ 2–3 min). Single-file renders show crossref WARNs for other chapters;
+  only the full render must be WARN-free.
+- Screenshots (playwright with `/usr/bin/google-chrome`): the OJS runtime
+  requests exactly `@observablehq/inputs@0.10.6`, `@observablehq/plot@0.6.11`,
+  `d3@7.9.2` (and 7.8.5), `htl@0.3.1`, `marked@0.3.12`, `mathjax@3`; install
+  those versions with npm and map `cdn.jsdelivr.net/npm/<pkg>@<ver>/<path>`
+  to `node_modules/<pkg>/<path>`. Polyfill and Google-fonts failures are
+  harmless.
+- CI installs `scikit-learn scipy seaborn openpyxl lxml` as a safety net, but
+  still relies on `_freeze/`.
+
+## Notes for Part IV and later
+
+- Before writing, read `ml/05-overfitting-regularization.qmd` and
+  `ml/08-project-real-estate.qmd` (latest reference for depth, proofs in
+  context, widgets, walkthrough + forensic review + reference implementation).
+- Bibliography: Part III has its own block in `references.bib`, grouped by
+  chapter; general ML textbooks (`hastie2009`, `james2023`, `bishop2006`,
+  `murphy2022`, `shalevshwartz2014`, `pedregosa2011`) are already there — reuse
+  them instead of adding duplicates (`grep -n "^@" references.bib`).
+- Keep every numeric claim in the text consistent with the executed output:
+  after the last render, re-read the outputs (e.g. from
+  `_freeze/<part>/<chapter>/execute-results/html.json`) and fix the prose.

@@ -1,0 +1,4 @@
+jupyter: python3
+# Part III: ordinary Python cells (scikit-learn, NumPy, pandas, Matplotlib),
+# shown with their outputs. Every chapter starts with a hidden setup cell that
+# imports mlbook.py (seed, display options, figure style, data loader).

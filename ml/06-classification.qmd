@@ -1,0 +1,723 @@
+# Classification {#sec-ch-ml-classification}
+
+```{python}
+#| echo: false
+import mlbook
+mlbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain why linear regression is a poor classifier, and define **logistic
+  regression** through the sigmoid and the **log-odds**;
+- **prove** that its decision boundary is a hyperplane, that maximum
+  likelihood gives the **cross-entropy** loss, what its gradient is, and that
+  the loss is **convex** — and why the estimate does not exist for separable
+  data;
+- implement logistic regression from scratch and with scikit-learn, and read
+  its coefficients as **odds ratios**;
+- extend it to several classes with **one-vs-rest** and **multinomial**
+  (softmax) regression;
+- evaluate a classifier with the **confusion matrix**, accuracy, precision,
+  recall, specificity and $F_1$; choose the **decision threshold** from the
+  costs of the errors (proved); draw the **ROC curve** and prove what its
+  **area** means.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Models that assign a class to each example — binary and multiclass
+classification with logistic regression — and the evaluation of their errors
+in the light of what each kind of error costs; in practice, decision
+boundaries, the confusion matrix, the classification report, the ROC curve and
+multiclass strategies.
+:::
+
+## Intuition: scores and thresholds
+
+A triage nurse does not simply sort patients into "urgent" and "not urgent".
+She forms an impression of *how likely* each patient is to need urgent care,
+and then applies a threshold — and the threshold depends on the stakes: in
+doubt, she sends the patient with chest pain to the doctor, because missing a
+heart attack costs far more than an unnecessary visit.
+
+Good classifiers work the same way, in two steps. A **score** — ideally a
+probability $P(y = 1 \mid x)$ — summarises the evidence; a **threshold**
+turns it into a decision. @thm-bayes-classifier already told us that, with
+equal costs, the best decision is the most probable class; this chapter builds
+a model that estimates the probability, and then shows how to choose the
+threshold when the costs are not equal and how to measure the result.
+
+## Binary classification {#sec-binary-classification}
+
+The data are pairs $(x_i, y_i)$ with $y_i \in \{0, 1\}$; by convention $1$ is
+the **positive** class — the one we are looking for (a disease, a fraud, a
+defect), whatever its pleasantness. Our running example is the Wisconsin
+diagnostic breast-cancer data [@street1993; @wolberg1993]: 569 tumours, each
+described by 30 measurements of cell nuclei computed from a digitised image of
+a fine-needle aspirate, labelled benign or malignant after diagnosis. It ships
+with scikit-learn.
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_breast_cancer
+
+bc = load_breast_cancer(as_frame=True)
+X_bc = bc.data
+y_bc = (bc.target == 0).astype(int)              # scikit-learn codes malignant as 0; we make malignant the positive class 1
+print(X_bc.shape, "| malignant:", y_bc.sum(), "benign:", (1 - y_bc).sum())
+print(list(X_bc.columns[:10]))
+```
+
+Why not fit a linear regression to the 0/1 labels and threshold at 0.5? Its
+predictions are not probabilities — they leave $[0, 1]$ — and, because the
+squared error punishes points that are "too correct", a few examples far from
+the boundary can drag the line and move the threshold where it misclassifies
+ordinary cases. We need a model whose output stays in $(0, 1)$.
+
+## Logistic regression {#sec-logistic}
+
+### The model
+
+The **sigmoid** (logistic) function maps any real number to $(0, 1)$:
+$$
+\sigma(t) = \frac{1}{1 + e^{-t}} .
+$$ {#eq-sigmoid}
+**Logistic regression** models the probability of the positive class as the
+sigmoid of a linear score:
+$$
+P(y = 1 \mid x) = \sigma(w^\top x + b) .
+$$ {#eq-logistic-model}
+Equivalently, the **log-odds** are linear:
+$\ln\frac{p}{1-p} = w^\top x + b$, where $p = P(y = 1 \mid x)$ — the inverse
+of the sigmoid is the **logit**, a word coined by Berkson in 1944 for
+bio-assay [@berkson1944]; Cox established logistic regression as a general
+regression model for binary outcomes [@cox1958].
+
+::: {#prp-sigmoid}
+## Properties of the sigmoid and the boundary
+1. $\sigma(-t) = 1 - \sigma(t)$, and $\sigma'(t) = \sigma(t)\big(1 - \sigma(t)\big)$.
+2. $\sigma$ is strictly increasing with inverse $\sigma^{-1}(p) = \ln\frac{p}{1-p}$.
+3. For every threshold $\tau \in (0, 1)$, the set where $\sigma(w^\top x + b)
+   \ge \tau$ is the half-space $w^\top x + b \ge \ln\frac{\tau}{1-\tau}$; for
+   $\tau = 0.5$ the **decision boundary** is the hyperplane $w^\top x + b = 0$.
+4. Increasing $x_j$ by one unit, others fixed, multiplies the **odds**
+   $p/(1-p)$ by $e^{w_j}$ (the **odds ratio**).
+:::
+
+*In one line:* logistic regression is a linear classifier — a straight
+boundary — whose distance from the boundary is translated into a probability.
+
+::: {.deep kind="proof"}
+## Proof of @prp-sigmoid
+1. $\sigma(-t) = \frac{1}{1+e^t} = \frac{e^{-t}}{e^{-t}+1} = 1 - \sigma(t)$.
+   Differentiating $(1+e^{-t})^{-1}$: $\sigma'(t) = \frac{e^{-t}}{(1+e^{-t})^2} =
+   \sigma(t)\cdot\frac{e^{-t}}{1+e^{-t}} = \sigma(t)(1-\sigma(t))$.
+2. $\sigma' > 0$. Solving $p = 1/(1+e^{-t})$ for $t$: $e^{-t} = (1-p)/p$, so
+   $t = \ln\frac{p}{1-p}$.
+3. Apply the increasing $\sigma^{-1}$ to both sides of $\sigma(w^\top x + b)
+   \ge \tau$; for $\tau = 0.5$, $\ln 1 = 0$.
+4. The odds are $p/(1-p) = e^{w^\top x + b}$; replacing $x_j$ by $x_j + 1$
+   multiplies this by $e^{w_j}$. $\blacksquare$
+:::
+
+### Fitting: maximum likelihood and cross-entropy
+
+Treat each label as a coin flip with probability $p_i = \sigma(w^\top x_i +
+b)$. The likelihood of the observed labels is $\prod_i p_i^{y_i}(1 -
+p_i)^{1-y_i}$, and maximising it is the same as minimising the average
+negative log-likelihood.
+
+::: {#thm-logistic-loss}
+## Cross-entropy: gradient and convexity
+Let $\theta = (b, w)$, $\tilde x_i = (1, x_i)$, $p_i = \sigma(\theta^\top\tilde
+x_i)$ and
+$$
+J(\theta) = -\frac1n\sum_{i=1}^n \Big[y_i\ln p_i + (1 - y_i)\ln(1 - p_i)\Big]
+$$ {#eq-cross-entropy}
+(the **binary cross-entropy** or **log loss**). Then
+$$
+\nabla J(\theta) = \frac1n\sum_i (p_i - y_i)\,\tilde x_i = \frac1n\tilde X^\top(p - y),
+\qquad
+\nabla^2 J(\theta) = \frac1n\tilde X^\top S\tilde X,\; S = \operatorname{diag}\big(p_i(1-p_i)\big),
+$$ {#eq-logistic-gradient}
+and $J$ is convex. There is no closed-form minimiser.
+:::
+
+*In one line:* the gradient is "prediction minus label, times input" — the
+same form as least squares — and the loss is a bowl, so gradient methods
+find the global minimum.
+
+::: {.deep kind="proof"}
+## Proof of @thm-logistic-loss
+Write $t_i = \theta^\top\tilde x_i$. By @prp-sigmoid, $\ln p_i = -\ln(1 +
+e^{-t_i})$ and $\ln(1 - p_i) = \ln\sigma(-t_i) = -\ln(1 + e^{t_i})$; so the
+$i$-th term of $nJ$ is $\ell_i(t_i) = y_i\ln(1 + e^{-t_i}) + (1 - y_i)\ln(1 +
+e^{t_i})$. Then $\ell_i'(t) = -y_i(1 - \sigma(t)) + (1 - y_i)\sigma(t) =
+\sigma(t) - y_i$, and $\ell_i''(t) = \sigma(t)(1-\sigma(t)) > 0$. By the chain
+rule $\nabla_\theta\ell_i = (p_i - y_i)\tilde x_i$ and $\nabla^2_\theta\ell_i =
+p_i(1-p_i)\tilde x_i\tilde x_i^\top$; averaging gives @eq-logistic-gradient.
+For every $v$, $v^\top\nabla^2J\,v = \frac1n\sum_i p_i(1-p_i)(v^\top\tilde
+x_i)^2 \ge 0$: the Hessian is positive semidefinite everywhere, so $J$ is
+convex [@boyd2004, §3.1.4]. Setting the gradient to zero gives equations
+$\sum_i(\sigma(\theta^\top\tilde x_i) - y_i)\tilde x_i = 0$, non-linear in
+$\theta$, which in general have no closed-form solution. $\blacksquare$
+:::
+
+Convexity guarantees that gradient descent (@sec-gradient-descent) — or the
+faster quasi-Newton methods scikit-learn uses by default (L-BFGS) — reaches
+the global minimum, *if one exists*. It may not:
+
+::: {#prp-separable}
+## Separable data have no maximum-likelihood estimate
+If some $\theta_0$ classifies every training example correctly with a margin,
+i.e. $\theta_0^\top\tilde x_i > 0$ when $y_i = 1$ and $< 0$ when $y_i = 0$,
+then $J(c\,\theta_0) \to 0$ as $c \to \infty$, while $J(\theta) > 0$ for every
+$\theta$: the infimum is not attained.
+:::
+
+*In one line:* when a line separates the classes perfectly, making the
+weights larger always makes the probabilities more confident and the loss
+smaller, forever.
+
+::: {.deep kind="proof"}
+## Proof of @prp-separable
+Each term of $J(c\theta_0)$ is $\ln(1 + e^{-c\,s_i})$ with $s_i = (2y_i -
+1)\theta_0^\top\tilde x_i > 0$ (by the formula for $\ell_i$ in the proof above),
+which tends to $0$ as $c \to \infty$. And every term of $J(\theta)$ is
+$\ln(1 + e^{\pm t}) > 0$. This is the situation analysed by Albert and
+Anderson [@albert1984]. $\blacksquare$
+:::
+
+With 30 features and 569 examples, separability is not unusual, and the
+weights would grow without bound. The remedy is the regularisation of
+@sec-regularization: scikit-learn's `LogisticRegression` adds by default an
+$L_2$ penalty $\frac{1}{2}\lVert w\rVert^2$, weighted against the summed
+(not averaged) log loss by the parameter `C` — the **inverse** of the penalty
+strength: small `C`, strong regularisation. As with ridge, the features must be
+standardised for the penalty to be fair.
+
+### From scratch, then with scikit-learn
+
+```{python}
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+
+X_tr, X_te, y_tr, y_te = train_test_split(X_bc, y_bc, test_size=0.25, stratify=y_bc, random_state=0)
+scaler = StandardScaler().fit(X_tr)
+Z_tr, Z_te = scaler.transform(X_tr), scaler.transform(X_te)
+
+def sigmoid(t):
+    return 1 / (1 + np.exp(-t))
+
+def logistic_gd(Z, y, lam, steps=5000):
+    """Minimise cross-entropy + (lam/2)||w||^2 (intercept not penalised) by gradient descent."""
+    Z1 = np.column_stack([np.ones(len(Z)), Z])
+    L = np.linalg.eigvalsh(Z1.T @ Z1 / len(y)).max() / 4 + lam      # p(1-p) <= 1/4 bounds the Hessian
+    theta = np.zeros(Z1.shape[1])
+    for _ in range(steps):
+        grad = Z1.T @ (sigmoid(Z1 @ theta) - y) / len(y)
+        grad[1:] += lam * theta[1:]
+        theta -= grad / L
+    return theta
+
+C = 1.0
+theta = logistic_gd(Z_tr, y_tr.to_numpy(), lam=1 / (C * len(y_tr)))     # scikit-learn's C, rescaled to an average loss
+sk = LogisticRegression(C=C).fit(Z_tr, y_tr)
+print("max |difference| from scikit-learn:", np.abs(np.r_[sk.intercept_, sk.coef_.ravel()] - theta).max().round(4))
+print(f"test accuracy: from scratch {np.mean((sigmoid(np.c_[np.ones(len(Z_te)), Z_te] @ theta) >= 0.5) == y_te):.3f}"
+      f"   scikit-learn {sk.score(Z_te, y_te):.3f}")
+```
+
+The two agree (to the precision of 5 000 gradient steps). `stratify=y` keeps
+the proportion of malignant cases equal in the training and test sets — the
+classification counterpart of shuffling.
+
+To *see* the decision boundary we need two features. With the mean radius
+and the mean texture of the nuclei:
+
+```{python}
+#| label: fig-decision-boundary
+#| fig-cap: "Logistic regression on two features of the breast-cancer data. Shading: predicted probability of malignancy; the solid line is the boundary at probability 0.5 (a straight line, @prp-sigmoid), the dashed lines are the 0.1 and 0.9 contours."
+two = ["mean radius", "mean texture"]
+clf2 = make_pipeline(StandardScaler(), LogisticRegression()).fit(X_tr[two], y_tr)
+gx, gy = np.meshgrid(np.linspace(6, 29, 300), np.linspace(9, 40, 300))
+grid = pd.DataFrame(np.c_[gx.ravel(), gy.ravel()], columns=two)
+prob = clf2.predict_proba(grid)[:, 1].reshape(gx.shape)
+
+from matplotlib.colors import LinearSegmentedColormap
+cmap = LinearSegmentedColormap.from_list("seq", ["#fcfcfb", "#e8b7a3", "#eb6834"])
+fig, ax = plt.subplots(figsize=(6.5, 4))
+ax.contourf(gx, gy, prob, levels=20, cmap=cmap, alpha=0.8)
+ax.contour(gx, gy, prob, levels=[0.1, 0.5, 0.9], colors=mlbook.INK2, linestyles=["--", "-", "--"], linewidths=1)
+for label, c, name in [(0, mlbook.COLORS[0], "benign"), (1, mlbook.COLORS[1], "malignant")]:
+    m = y_tr == label
+    ax.scatter(X_tr.loc[m, two[0]], X_tr.loc[m, two[1]], s=14, color=c, label=name, edgecolor="#fcfcfb", linewidth=0.4)
+ax.set_xlabel(two[0]); ax.set_ylabel(two[1]); ax.legend(loc="upper right")
+plt.show()
+print(f"accuracy with 2 features: {clf2.score(X_te[two], y_te):.3f}")
+w = clf2[-1].coef_.ravel()
+print("odds ratios per standard deviation:", {k: round(float(v), 2) for k, v in zip(two, np.exp(w))})
+```
+
+Each standard deviation of mean radius multiplies the odds of malignancy by
+the first odds ratio, other things equal (@prp-sigmoid). Two features already
+classify most tumours; the full model uses all thirty.
+
+## More than two classes {#sec-multiclass}
+
+With $K > 2$ classes, two strategies extend a binary classifier.
+
+- **One-vs-rest** (OvR): train $K$ binary classifiers, the $k$-th separating
+  class $k$ from all others, and predict the class whose classifier gives the
+  highest score. Simple and often competitive [@rifkin2004], but the $K$
+  scores are not a probability distribution.
+- **Multinomial** (softmax) regression: one linear score per class,
+  $t_k = w_k^\top x + b_k$, turned into probabilities by the **softmax**
+  $P(y = k \mid x) = e^{t_k}/\sum_j e^{t_j}$ (@thm-softmax; the name is
+  Bridle's [@bridle1990]). With $K = 2$ it reduces to logistic regression,
+  because $e^{t_1}/(e^{t_0} + e^{t_1}) = \sigma(t_1 - t_0)$.
+
+::: {#prp-softmax-gradient}
+## Gradient of the multinomial cross-entropy
+For one example with one-hot label $y \in \{0,1\}^K$, scores $t = Wx$ (rows
+$w_k^\top$) and probabilities $p = \operatorname{softmax}(t)$, the loss
+$\ell = -\sum_k y_k\ln p_k$ has $\partial\ell/\partial t_k = p_k - y_k$, hence
+$\nabla_W\ell = (p - y)\,x^\top$.
+:::
+
+*In one line:* the same "prediction minus label, times input" as in the binary
+case, one row per class.
+
+::: {.deep kind="proof"}
+## Proof of @prp-softmax-gradient
+$\ln p_k = t_k - \ln\sum_j e^{t_j}$, so $\partial\ln p_k/\partial t_m =
+[k = m] - p_m$. Then $\partial\ell/\partial t_m = -\sum_k y_k([k = m] - p_m) =
+-y_m + p_m\sum_k y_k = p_m - y_m$ because $\sum_k y_k = 1$. Since $t_m =
+w_m^\top x$, $\partial\ell/\partial w_m = (p_m - y_m)x$. $\blacksquare$
+:::
+
+scikit-learn's `LogisticRegression` uses the multinomial formulation for
+more than two classes (with its default solver); `OneVsRestClassifier` wraps
+any binary classifier into OvR. On the wine data — 178 wines from three
+cultivars, 13 chemical measurements [@aeberhard1992]:
+
+```{python}
+from sklearn.datasets import load_wine
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.multiclass import OneVsRestClassifier
+
+wine = load_wine(as_frame=True)
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+multinomial = make_pipeline(StandardScaler(), LogisticRegression(C=0.1))
+ovr = make_pipeline(StandardScaler(), OneVsRestClassifier(LogisticRegression(C=0.1)))
+for name, model in [("multinomial", multinomial), ("one-vs-rest", ovr)]:
+    acc = cross_val_score(model, wine.data, wine.target, cv=cv)
+    print(f"{name:12s} 5-fold accuracy {acc.mean():.3f} ± {acc.std(ddof=1) / np.sqrt(5):.3f}")
+p = multinomial.fit(wine.data, wine.target).predict_proba(wine.data.iloc[:2])
+print("multinomial probabilities of the first two wines:", p.round(3), "row sums:", p.sum(1))
+```
+
+Both reach high accuracy on this easy problem; the multinomial model's
+outputs sum to one by construction.
+
+## Evaluating a classifier {#sec-classification-metrics}
+
+### The confusion matrix
+
+At a fixed threshold, every prediction falls in one of four cells:
+
+|  | predicted positive | predicted negative |
+|---|---|---|
+| **actually positive** | true positive (TP) | false negative (FN) |
+| **actually negative** | false positive (FP) | true negative (TN) |
+
+: The confusion matrix of a binary classifier {#tbl-confusion}
+
+and the usual metrics are ratios of these counts:
+
+| Metric | Formula | Question it answers |
+|---|---|---|
+| accuracy | $(TP + TN)/n$ | what fraction of predictions is right? |
+| **precision** | $TP/(TP + FP)$ | when it says "positive", how often is it right? |
+| **recall** (sensitivity, TPR) | $TP/(TP + FN)$ | what fraction of the positives does it find? |
+| specificity (TNR) | $TN/(TN + FP)$ | what fraction of the negatives does it clear? |
+| false-positive rate (FPR) | $FP/(FP + TN) = 1 -$ specificity | how often does it raise a false alarm? |
+| $F_1$ | $\dfrac{2\,\text{precision}\cdot\text{recall}}{\text{precision} + \text{recall}} = \dfrac{2TP}{2TP + FP + FN}$ | a single balance of precision and recall |
+
+: Metrics derived from the confusion matrix {#tbl-class-metrics}
+
+$F_1$ is the **harmonic mean** of precision and recall, derived from van
+Rijsbergen's effectiveness measure for information retrieval
+[@vanrijsbergen1979]. The harmonic mean punishes imbalance: it is never larger
+than the arithmetic mean, and is close to the smaller of the two.
+
+::: {#prp-f1}
+## $F_1$ and the two means
+For precision $P > 0$ and recall $R > 0$:
+$\min(P, R) \le F_1 \le \frac{P + R}{2}$, with equality on the right iff
+$P = R$. Moreover $F_1 = 2TP/(2TP + FP + FN)$.
+:::
+
+*In one line:* a classifier cannot buy a good $F_1$ with excellent precision
+and poor recall, or vice versa.
+
+::: {.deep kind="proof"}
+## Proof of @prp-f1
+$\frac{P+R}{2} - F_1 = \frac{(P+R)^2 - 4PR}{2(P+R)} = \frac{(P-R)^2}{2(P+R)}
+\ge 0$, zero iff $P = R$. For the left inequality, assume $P \le R$: then
+$F_1 = \frac{2PR}{P+R} \ge \frac{2PR}{2R} = P$. Finally, substituting
+$P = TP/(TP+FP)$, $R = TP/(TP+FN)$:
+$F_1 = \frac{2TP^2}{TP(TP+FN) + TP(TP+FP)} = \frac{2TP}{2TP + FP + FN}$.
+$\blacksquare$
+:::
+
+Accuracy alone can be badly misleading when the classes are **imbalanced**:
+if 1% of transactions are fraudulent, a "classifier" that always answers "not
+fraud" is 99% accurate and useless — its recall is zero. Precision and recall
+look at the positive class, which is usually the one we care about.
+
+```{python}
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, precision_score, recall_score, f1_score
+
+full = make_pipeline(StandardScaler(), LogisticRegression(C=1.0)).fit(X_tr, y_tr)
+pred = full.predict(X_te)
+tn, fp, fn, tp = confusion_matrix(y_te, pred).ravel()
+print(f"TP {tp}  FN {fn}  FP {fp}  TN {tn}")
+print(f"accuracy {accuracy_score(y_te, pred):.3f}  precision {precision_score(y_te, pred):.3f}  "
+      f"recall {recall_score(y_te, pred):.3f}  F1 {f1_score(y_te, pred):.3f}")
+print(classification_report(y_te, pred, target_names=["benign", "malignant"], digits=3))
+```
+
+The report gives the metrics for each class taken in turn as "positive",
+their **macro average** (plain mean over classes, every class counts the same)
+and **weighted average** (weighted by the number of true examples of each
+class). For multiclass problems the confusion matrix is $K \times K$ and the
+same report applies.
+
+### Choosing the threshold from the costs
+
+The default threshold 0.5 is optimal only when both errors cost the same
+(@thm-bayes-classifier). In screening, a missed malignancy (FN) costs far more
+than a false alarm (FP), which leads only to further tests.
+
+::: {#thm-cost-threshold}
+## The cost-optimal threshold
+Let a false positive cost $c_{FP} > 0$, a false negative $c_{FN} > 0$, and
+correct decisions nothing. If $p = P(y = 1 \mid x)$ is known, the decision that
+minimises the expected cost is "positive" if and only if
+$$
+p \ge \tau^* = \frac{c_{FP}}{c_{FP} + c_{FN}} .
+$$ {#eq-cost-threshold}
+:::
+
+*In one line:* if missing a positive costs nine times more than a false alarm,
+act on a 10% probability.
+
+::: {.deep kind="proof"}
+## Proof of @thm-cost-threshold
+Deciding "positive" costs $c_{FP}$ with probability $1 - p$ (if the truth is
+negative): expected cost $(1-p)c_{FP}$. Deciding "negative" costs $c_{FN}$
+with probability $p$: expected cost $p\,c_{FN}$. "Positive" is no worse iff
+$(1-p)c_{FP} \le p\,c_{FN}$, i.e. $p\,(c_{FP} + c_{FN}) \ge c_{FP}$. Applying
+the best decision for each $x$ minimises the overall expected cost (the
+argument of @thm-bayes-classifier). This is the basis of cost-sensitive
+learning [@elkan2001]. $\blacksquare$
+:::
+
+The theorem needs **calibrated** probabilities — predicted probabilities
+that match observed frequencies. Logistic regression is often reasonably
+calibrated; many other models are not, and their scores must be calibrated
+before @eq-cost-threshold is applied.
+
+### The ROC curve and its area
+
+Lowering the threshold finds more positives (higher recall) at the price of
+more false alarms. The **receiver operating characteristic** (ROC) curve,
+inherited from signal detection theory and popularised in machine learning by
+Fawcett's tutorial [@fawcett2006], shows the whole trade-off: for every
+threshold, plot the true-positive rate (recall) against the false-positive
+rate. A useless classifier lies on the diagonal; a perfect one passes through
+the top-left corner. The **area under the curve** (AUC) summarises it in one
+number with a remarkable meaning.
+
+::: {#thm-auc}
+## The area under the ROC curve is a ranking probability
+Let a classifier give scores $s$ to $n_+$ positive and $n_-$ negative test
+examples, and let the ROC curve be the step curve obtained by sweeping the
+threshold over all scores. Then
+$$
+\mathrm{AUC} = \frac{1}{n_+ n_-}\sum_{i \in +}\sum_{j \in -}\Big([s_i > s_j] + \tfrac12[s_i = s_j]\Big),
+$$ {#eq-auc}
+the probability that a randomly chosen positive is scored higher than a
+randomly chosen negative (ties counted as one half).
+:::
+
+*In one line:* AUC = 0.9 means that in 90% of (malignant, benign) pairs the
+model gives the malignant tumour the higher score.
+
+::: {.deep kind="proof"}
+## Proof of @thm-auc
+Sort the distinct scores in decreasing order and lower the threshold through
+them. Each time the threshold passes a score value shared by $a$ positives and
+$b$ negatives, the curve moves from $(\mathrm{FPR}, \mathrm{TPR})$ by
+$(b/n_-, a/n_+)$ — a straight segment (horizontal if $a = 0$, vertical if
+$b = 0$). The area under that segment is a trapezoid of width $b/n_-$ and
+heights $\mathrm{TPR}_{\text{before}}$ and $\mathrm{TPR}_{\text{before}} +
+a/n_+$:
+$$
+\frac{b}{n_-}\Big(\mathrm{TPR}_{\text{before}} + \frac{a}{2n_+}\Big) = \frac{1}{n_+n_-}\Big(b \cdot \#\{\text{positives with higher score}\} + \tfrac12 ab\Big).
+$$
+The first term counts the pairs (positive, negative) in which the negative has
+this score and the positive a strictly higher one; the second counts the tied
+pairs with weight $\frac12$. Summing over all score values counts every pair
+exactly once, which is @eq-auc. Hanley and McNeil connected the AUC with this
+probability, the Mann–Whitney statistic [@hanley1982]. $\blacksquare$
+:::
+
+```{python}
+#| label: fig-roc
+#| fig-cap: "ROC curve of logistic regression on the breast-cancer test set (all 30 features, and the two features of @fig-decision-boundary). The marked points are the default threshold 0.5 and the cost-based threshold 0.1."
+from sklearn.metrics import roc_curve, roc_auc_score
+
+scores = full.predict_proba(X_te)[:, 1]
+pos, neg = scores[y_te == 1], scores[y_te == 0]
+auc_pairs = (np.mean(pos[:, None] > neg[None, :]) + 0.5 * np.mean(pos[:, None] == neg[None, :]))
+print(f"AUC by counting pairs {auc_pairs:.4f}   roc_auc_score {roc_auc_score(y_te, scores):.4f}")
+
+fig, ax = plt.subplots(figsize=(4.8, 4.2))
+for name, s, c in [("30 features", scores, mlbook.COLORS[0]),
+                   ("2 features", clf2.predict_proba(X_te[two])[:, 1], mlbook.COLORS[1])]:
+    fpr, tpr, thr = roc_curve(y_te, s)
+    ax.plot(fpr, tpr, color=c, label=f"{name} (AUC {roc_auc_score(y_te, s):.3f})")
+for t, marker in [(0.5, "o"), (0.1, "s")]:
+    p_ = scores >= t
+    ax.plot(np.mean(p_[y_te == 0]), np.mean(p_[y_te == 1]), marker, color=mlbook.INK, ms=7, mfc="none", label=f"threshold {t}")
+ax.plot([0, 1], [0, 1], ls="--", color=mlbook.MUTED, lw=1)
+ax.set_xlabel("false-positive rate"); ax.set_ylabel("true-positive rate (recall)"); ax.legend(loc="lower right")
+plt.show()
+for t in (0.5, 0.1):
+    p_ = (scores >= t).astype(int)
+    print(f"threshold {t}: recall {recall_score(y_te, p_):.3f}  precision {precision_score(y_te, p_):.3f}  FP {np.sum((p_ == 1) & (y_te == 0))}  FN {np.sum((p_ == 0) & (y_te == 1))}")
+```
+
+Lowering the threshold to 0.1 — appropriate if a missed cancer is judged nine
+times as costly as an unnecessary biopsy (@eq-cost-threshold) — trades a few
+more false alarms for fewer missed malignancies. The AUC does not depend on
+the threshold at all: it measures how well the scores **rank** the cases, and
+is the right summary when the threshold will be chosen later. When positives
+are rare, the **precision–recall curve** is more informative than the ROC
+curve, because the false-positive rate stays small even when false alarms
+outnumber the true positives [@saito2015].
+
+The widget lets you move the threshold between two overlapping score
+distributions and watch the confusion matrix and the ROC point move.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof rocSep = Inputs.range([0, 4], {step: 0.1, value: 1.8, label: "separation of the classes"})
+```
+
+```{ojs}
+//| echo: false
+viewof rocThr = Inputs.range([-4, 6], {step: 0.05, value: 1, label: "threshold on the score"})
+```
+
+```{ojs}
+//| echo: false
+rocModel = {
+  // Scores: negatives ~ N(0,1), positives ~ N(sep,1); 1000 of each in expectation
+  const Phi = z => 0.5 * (1 + erf(z / Math.SQRT2));
+  function erf(x) { // Abramowitz-Stegun 7.1.26, |error| < 1.5e-7
+    const s = Math.sign(x); x = Math.abs(x);
+    const t = 1 / (1 + 0.3275911 * x);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return s * y;
+  }
+  const curve = d3.range(-6, 10.01, 0.05).map(c => ({fpr: 1 - Phi(c), tpr: 1 - Phi(c - rocSep)}));
+  const fpr = 1 - Phi(rocThr), tpr = 1 - Phi(rocThr - rocSep);
+  const dens = d3.range(-4, 6.01, 0.05).flatMap(s => [
+    {s, d: Math.exp(-s * s / 2) / Math.sqrt(2 * Math.PI), cls: "negative"},
+    {s, d: Math.exp(-((s - rocSep) ** 2) / 2) / Math.sqrt(2 * Math.PI), cls: "positive"}]);
+  return {curve, fpr, tpr, dens, auc: Phi(rocSep / Math.SQRT2)};
+}
+```
+
+```{ojs}
+//| echo: false
+md`Per 1 000 positives and 1 000 negatives: **TP** ${Math.round(1000 * rocModel.tpr)} · **FN** ${Math.round(1000 * (1 - rocModel.tpr))} · **FP** ${Math.round(1000 * rocModel.fpr)} · **TN** ${Math.round(1000 * (1 - rocModel.fpr))} · AUC = ${rocModel.auc.toFixed(3)}`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-roc-widget
+//| fig-cap: "Threshold, confusion matrix and ROC curve. Left: score distributions of negatives and positives (normal, unit variance) and the threshold. Right: the ROC curve, with the point of the current threshold. Increasing the separation raises the AUC; moving the threshold slides the point along the curve."
+html`<div style="display:flex;flex-wrap:wrap;gap:12px">${
+  Plot.plot({width: 340, height: 240, x: {label: "score"}, y: {label: "density"},
+    color: {legend: true, domain: ["negative", "positive"], range: ["#2a78d6", "#eb6834"]},
+    marks: [Plot.line(rocModel.dens, {x: "s", y: "d", stroke: "cls", strokeWidth: 2}),
+            Plot.ruleX([rocThr], {stroke: "#0b0b0b", strokeDasharray: "4,3"})]})
+}${
+  Plot.plot({width: 260, height: 240, x: {label: "false-positive rate", domain: [0, 1]}, y: {label: "true-positive rate", domain: [0, 1]},
+    marks: [Plot.line([[0, 0], [1, 1]], {stroke: "#8a8984", strokeDasharray: "4,4"}),
+            Plot.line(rocModel.curve, {x: "fpr", y: "tpr", stroke: "#2a78d6", strokeWidth: 2}),
+            Plot.dot([rocModel], {x: "fpr", y: "tpr", r: 6, fill: "#0b0b0b"})]})
+}</div>`
+```
+:::
+
+(For two normal score distributions with unit variance at distance $d$, the
+AUC is $\Phi(d/\sqrt2)$, where $\Phi$ is the standard normal distribution
+function: the difference of a positive and a negative score is normal with
+mean $d$ and variance 2, and the AUC is the probability that it is positive
+(@thm-auc).)
+
+::: {.project-link}
+**In the project.** The project is a regression problem, so its metrics are
+those of @sec-regression-metrics; but two ideas of this chapter carry over.
+First, the **cost of errors decides the metric**: for a valuation engine
+an error of 10% on a cheap house and on an expensive one may matter equally,
+which argues for measuring errors on the log scale, as the reference
+implementation does. Second, the brief asks to check whether the model "errs
+systematically" on some price bands — the regression analogue of reading the
+confusion matrix row by row instead of trusting a single global number.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Accuracy on imbalanced data.** Always look at the confusion matrix, and at
+  precision and recall of the class you care about.
+- **The 0.5 threshold by default.** Choose it from the costs
+  (@thm-cost-threshold), on validation data, never on the test set.
+- **Unscaled features with a penalised model** — `LogisticRegression` is
+  penalised by default (`C=1.0`).
+- **Reading `C` as the penalty strength.** It is its inverse.
+- **Positive-class confusion**: scikit-learn's metrics treat label 1 as
+  positive (`pos_label`); check which class is 1 (in `load_breast_cancer`,
+  1 means benign).
+- **Comparing AUCs of models evaluated on different test sets**, or reporting
+  AUC when the decision threshold is what matters.
+- **Unstratified splits** with small or imbalanced classes: the test set may
+  contain almost no positives.
+:::
+
+## Summary
+
+- **Logistic regression**: $P(y=1\mid x) = \sigma(w^\top x + b)$, linear
+  log-odds, a hyperplane as decision boundary, coefficients as log odds ratios.
+- Maximum likelihood = minimising the **cross-entropy**, whose gradient is
+  $\frac1n X^\top(p - y)$ and which is convex; separable data need
+  regularisation (`C` in scikit-learn).
+- **Multiclass**: one-vs-rest, or multinomial regression with the softmax and
+  the same gradient form.
+- **Confusion matrix** → accuracy, precision, recall, specificity, $F_1$
+  (harmonic mean). Accuracy misleads under imbalance.
+- The **cost-optimal threshold** is $c_{FP}/(c_{FP} + c_{FN})$ for calibrated
+  probabilities. The **ROC curve** shows all thresholds; its **AUC** is the
+  probability that a positive outranks a negative.
+
+## Exercises
+
+::: {#exr-ml6-confusion}
+A screening test is applied to 1 000 people, 50 of whom are ill. It flags 60
+people, 45 of whom are ill. Compute TP, FP, FN, TN, accuracy, precision,
+recall, specificity and $F_1$. Then compute the accuracy of a "test" that flags
+nobody.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+TP = 45, FP = 15, FN = 5, TN = 935. Accuracy $980/1000 = 0.98$; precision
+$45/60 = 0.75$; recall $45/50 = 0.9$; specificity $935/950 \approx 0.984$;
+$F_1 = 90/(90 + 15 + 5) \approx 0.818$. Flagging nobody: accuracy $950/1000 =
+0.95$, recall 0 — nearly as "accurate" and worthless.
+:::
+
+::: {#exr-ml6-threshold}
+In the screening of @exr-ml6-confusion, suppose a missed illness costs 20
+times as much as a false alarm. What threshold on a calibrated probability
+should be used? Apply it to the breast-cancer model and report recall and
+precision.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$\tau^* = 1/(1 + 20) \approx 0.048$.
+```{python}
+p_ = (scores >= 1 / 21).astype(int)
+print(f"recall {recall_score(y_te, p_):.3f}  precision {precision_score(y_te, p_):.3f}")
+```
+Recall rises (fewer missed malignancies) and precision falls (more biopsies on
+benign tumours), as the costs require.
+:::
+
+::: {#exr-ml6-auc-hand}
+Scores of three positives: 0.9, 0.6, 0.4; of three negatives: 0.7, 0.4, 0.2.
+Compute the AUC by counting pairs, and check with `roc_auc_score`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Pairs (positive > negative): 0.9 beats all three (3); 0.6 beats 0.4 and 0.2
+(2); 0.4 beats 0.2 (1) and ties with 0.4 (½). Total 6.5 out of 9:
+$\mathrm{AUC} = 6.5/9 \approx 0.722$.
+```{python}
+print(roc_auc_score([1, 1, 1, 0, 0, 0], [0.9, 0.6, 0.4, 0.7, 0.4, 0.2]))
+```
+:::
+
+::: {#exr-ml6-separable}
+Fit `LogisticRegression(C=C)` on the standardised breast-cancer training data
+for `C` = 0.01, 1, 100, 10 000 and print the largest absolute coefficient and
+the test accuracy. Explain the trend with @prp-separable.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+for Cv in (0.01, 1, 100, 10_000):
+    m = LogisticRegression(C=Cv, max_iter=100_000).fit(Z_tr, y_tr)
+    print(f"C = {Cv:>6}: max |w| = {np.abs(m.coef_).max():7.2f}   test accuracy {m.score(Z_te, y_te):.3f}")
+```
+As `C` grows (weaker penalty) the weights grow, because the training data are
+(nearly) separable and the unpenalised loss keeps decreasing as the weights
+are scaled up. Larger weights mean more confident probabilities, not better
+classification: test accuracy does not improve and can worsen. The penalty
+keeps the problem well posed.
+:::
+
+::: {#exr-ml6-f1-bound}
+A classifier has precision 0.95 and recall 0.10. Compute its $F_1$ and the
+arithmetic mean of the two. Which better describes a classifier that finds one
+positive in ten?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$F_1 = 2 \cdot 0.95 \cdot 0.10/1.05 \approx 0.181$; arithmetic mean $0.525$.
+$F_1$, close to the smaller value (@prp-f1), reflects that the classifier
+misses 90% of the positives.
+:::
+
+## Further reading {.unnumbered}
+
+- @james2023, ch. 4 — logistic regression and classification with Python
+  labs; @hastie2009, §4.4 — logistic regression, fitting by Newton's method.
+- @bishop2006, §4.3 — probabilistic discriminative models, softmax, the
+  Hessian and iterative reweighted least squares.
+- @cox1958 — the paper that made logistic regression a standard tool.
+- @fawcett2006 — the reference introduction to ROC analysis; @hanley1982 —
+  the meaning of the AUC.
+- @elkan2001 — cost-sensitive decisions and thresholds.
+- @saito2015 — precision–recall curves for imbalanced data.
+- @murphy2022, ch. 10 — logistic regression from the probabilistic point of
+  view.

@@ -1,0 +1,621 @@
+# Datasets: structure, variable types, file formats {#sec-ch-ml-data}
+
+> *"Tidy datasets are all alike, but every messy dataset is messy in its own
+> way."* — Hadley Wickham [@wickham2014].
+
+```{python}
+#| echo: false
+import mlbook
+mlbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- tell **structured**, **semi-structured** and **unstructured** data apart,
+  and explain how images, text and sound are turned into tables of numbers;
+- organise data as a **tidy** table — one row per observation, one column per
+  variable — and reshape a messy table with pandas;
+- classify every variable by **type** (nominal, ordinal, interval, ratio;
+  discrete or continuous) and **prove** which summaries are meaningful for
+  each type;
+- describe a variable by location, spread and **skewness**, and prove how
+  skewness behaves under changes of unit;
+- read **CSV/TSV, JSON, XML, HTML and Excel** files into a `DataFrame`,
+  handling separators, decimal marks, encodings, nesting and missing markers;
+- take a disciplined **first look** at a new data set.
+:::
+
+::: {.callout-tip}
+## Topics covered
+The kinds of data a machine-learning project meets — structured and
+unstructured — and the types of variables they contain; in practice, how to
+build a table suitable for analysis from files in heterogeneous formats.
+:::
+
+## Intuition: a ledger and a shoebox
+
+Imagine two archives about the same houses. The first is an estate agent's
+**ledger**: one line per sale, with the same columns on every line — date,
+price, surface, rooms, garden yes/no. The second is a **shoebox** of photos,
+handwritten notes and recorded phone calls about the same sales.
+
+Both contain information, but only the ledger can be fed to a learning
+algorithm as it is: every algorithm in this part expects a **table of numbers**
+(the design matrix of @sec-ml-definitions). The shoebox must first be
+turned into a ledger — photos into pixel arrays or detected features, notes
+into word counts, calls into transcripts. And even a ledger needs care: is
+"rooms" a quantity you can average? Is "zone" a number just because the
+agency wrote it as 1, 2, 3? This chapter is about getting from files to a
+trustworthy table.
+
+## Structured and unstructured data {#sec-structured-data}
+
+::: {#def-structured}
+## Structured, semi-structured, unstructured
+- **Structured** data follow a fixed **schema** known in advance: a set of
+  named fields with a type each, the same for every record (a database table,
+  a CSV file).
+- **Semi-structured** data carry their structure *inside* the data, as tags or
+  keys, and records may differ (JSON, XML, HTML).
+- **Unstructured** data have no record/field organisation that a program can
+  rely on: images, audio, video, free text.
+:::
+
+*In one line:* structured data come as a table; semi-structured data come as
+a tree that can usually be flattened into a table; unstructured data must be
+**measured** before they become a table.
+
+| Kind | Typical formats | How it becomes a table |
+|---|---|---|
+| structured | CSV/TSV, spreadsheets, SQL tables | it already is one (one row per record) |
+| semi-structured | JSON, XML, HTML | flatten nested fields into columns (@sec-reading-files) |
+| images | PNG, JPEG | an array of pixel intensities ($h \times w \times 3$ numbers per image), or features extracted from it |
+| text | plain text, documents | counts of words (bag of words), or learned numerical vectors (embeddings) |
+| audio | WAV, MP3 | the amplitude sampled thousands of times per second, or its frequency content |
+
+: Kinds of data and how they reach a learning algorithm {#tbl-data-kinds}
+
+The relational model of Codd [@codd1970] made the structured table the
+standard way to store business data, and it is still where most tabular
+machine learning starts. The two snippets below show the other two routes on
+toy data: a small grey-scale image *is* an array, and a set of sentences can be
+turned into a table of word counts.
+
+```{python}
+import numpy as np
+import pandas as pd
+
+# An 8x8 grey-scale "image" of a diagonal stroke: one number (0 = black ... 255 = white) per pixel
+image = np.full((8, 8), 255, dtype=np.uint8)
+for i in range(8):
+    image[i, max(0, i - 1):i + 1] = 0
+print(image.shape, image.dtype, "-> as one feature row:", image.reshape(1, -1).shape)
+print(image[:3])
+```
+
+```{python}
+from sklearn.feature_extraction.text import CountVectorizer
+
+notes = ["bright flat with a large terrace",
+         "dark flat, no terrace, no lift",
+         "large villa with garden and terrace"]
+vectorizer = CountVectorizer()                       # one column per word, one row per note
+counts = vectorizer.fit_transform(notes)
+pd.DataFrame(counts.toarray(), columns=vectorizer.get_feature_names_out())
+```
+
+The word-count table forgets word order ("no lift" and "lift, no" give the
+same counts) — a deliberate simplification; the language models of later parts
+keep the order. For the rest of this part, data are tables.
+
+## Tidy tables {#sec-tidy}
+
+Even a table can be organised badly for analysis. Wickham's **tidy data**
+principles [@wickham2014] — the statistical counterpart of Codd's normal forms
+— state what a table for analysis should look like:
+
+1. each **variable** is a column;
+2. each **observation** is a row;
+3. each **type of observational unit** is a table.
+
+A common violation is a table whose column *names* contain values. Below, the
+yearly average price per zone is stored with one column per year; the
+variable "year" is hidden in the header. `melt` makes the table tidy.
+
+```{python}
+wide = pd.DataFrame({"zone": ["centre", "suburbs"],
+                     "2024": [4100, 2300], "2025": [4300, 2350]})
+tidy = wide.melt(id_vars="zone", var_name="year", value_name="price_per_m2")
+tidy["year"] = tidy["year"].astype(int)
+print(wide, "\n")
+print(tidy)
+```
+
+The tidy version can be filtered by year, plotted against time, and joined
+with other tables by `(zone, year)`; the wide one cannot without first being
+reshaped. `pivot` is the inverse operation, useful for *presenting* results.
+
+## Types of variables {#sec-variable-types}
+
+The first decision about every column is its **type**, because it determines
+which operations make sense — and, in @sec-ch-ml-preprocessing, how it must be
+encoded.
+
+- A **quantitative** variable is a measured quantity: surface in m², price,
+  temperature. It is **discrete** if it takes isolated values (number of
+  rooms: 1, 2, 3, …) and **continuous** if any value in an interval is possible
+  (surface).
+- A **qualitative** (categorical) variable records membership of a category:
+  heating type, city. It is **nominal** if the categories have no order
+  (city), **ordinal** if they do (energy class A > B > C; "unfurnished <
+  semi-furnished < furnished"). A **binary** variable has two categories
+  (garden: yes/no).
+
+The psychologist S. S. Stevens refined this into four **levels of
+measurement** [@stevens1946], classified by which transformations of the
+numbers leave their meaning unchanged:
+
+| Level | What the numbers mean | Permissible transformations | Meaningful summaries | Examples |
+|---|---|---|---|---|
+| **nominal** | labels | any one-to-one relabelling | counts, mode | city, postcode, customer ID |
+| **ordinal** | order only | any strictly increasing map | + median, percentiles | energy class, star rating |
+| **interval** | order and differences; arbitrary zero | $x \mapsto a x + b$, $a > 0$ | + mean, standard deviation | temperature in °C, calendar year |
+| **ratio** | differences and ratios; true zero | $x \mapsto a x$, $a > 0$ | + ratios, geometric mean | price, surface, count of rooms |
+
+: Stevens' levels of measurement {#tbl-stevens}
+
+A statement about data is **meaningful** at a level if its truth does not
+depend on which permissible transformation was used to record the numbers.
+"House A is twice as expensive as house B" is meaningful for prices (euros or
+dollars, the ratio is the same) but "Monday was twice as warm as Sunday" is
+not for temperatures in °C (convert to °F and the ratio changes). The next
+result explains the "meaningful summaries" column.
+
+::: {#prp-meaningful-summaries}
+## Which comparisons survive a change of scale
+Let $x_1, \dots, x_n$ and $y_1, \dots, y_m$ be two groups of values and $g$ a
+transformation applied to all of them.
+
+1. If $g(t) = a t + b$ with $a > 0$, then $\bar x < \bar y \iff \overline{g(x)} < \overline{g(y)}$:
+   comparisons of **means** are meaningful on interval scales.
+2. If $g$ is strictly increasing, then $\operatorname{med}(g(x)) = g(\operatorname{med}(x))$
+   (for odd $n$), so comparisons of **medians** are meaningful on ordinal
+   scales.
+3. There are strictly increasing $g$ for which $\bar x < \bar y$ but
+   $\overline{g(x)} > \overline{g(y)}$: comparisons of means are **not**
+   meaningful on ordinal scales.
+:::
+
+*In one line:* you may average quantities measured in units, but you may not
+average labels that only express an order — the result depends on the
+arbitrary numbers you chose for the labels.
+
+::: {.deep kind="proof"}
+## Proof of @prp-meaningful-summaries
+1. $\overline{g(x)} = \frac1n\sum_i (a x_i + b) = a\bar x + b$, and the map
+   $t \mapsto a t + b$ with $a > 0$ preserves order.
+2. A strictly increasing $g$ preserves the sorted order of the values, so the
+   middle value of $g(x_1), \dots, g(x_n)$ is $g$ of the middle value of the
+   $x_i$. (For even $n$ the median is an average of two middle values and the
+   identity holds only up to that average; percentiles defined as order
+   statistics are preserved exactly.)
+3. Counterexample: energy classes coded $1 < 2 < 3$. Group $x = (1, 1, 3)$
+   has mean $5/3$; group $y = (2, 2, 2)$ has mean $2$, so $\bar x < \bar y$.
+   Recode with the increasing map $g(1) = 1, g(2) = 2, g(3) = 10$: now
+   $\overline{g(x)} = 4 > 2 = \overline{g(y)}$. $\blacksquare$
+:::
+
+Stevens' scheme is a guide, not a law: many statisticians treat a 1–5 rating
+as roughly interval when the categories are evenly spaced in people's minds.
+What it reliably flags are the gross errors: averaging postcodes or customer
+IDs, or feeding a column of zone codes 1, 2, 3 to a regression as if zone 3
+were "three times" zone 1. **A variable stored as a number is not
+necessarily a quantity.** We return to this when we encode variables
+(@sec-ch-ml-preprocessing) and in the project, whose furnishing column is a
+case in point.
+
+## Describing a variable: location, spread, shape {#sec-describing}
+
+For a quantitative variable with values $x_1, \dots, x_n$:
+
+- **location**: the mean $\bar x = \frac1n\sum_i x_i$ and the median;
+- **spread**: the standard deviation
+  $s = \sqrt{\frac{1}{n-1}\sum_i (x_i - \bar x)^2}$ and the **interquartile
+  range** (IQR, the distance between the 25th and 75th percentiles);
+- **shape**: is the distribution symmetric, or does it have a long tail on one
+  side?
+
+Prices, incomes and surfaces typically have a long **right tail**: most
+houses are ordinary, a few are very expensive. The mean is pulled towards the
+tail and exceeds the median. The standard summary of this asymmetry is the
+**skewness**, introduced into statistics by Karl Pearson [@pearson1895].
+
+::: {#def-skewness}
+## Sample skewness
+With $m_k = \frac1n\sum_i (x_i - \bar x)^k$ the $k$-th central moment,
+$$
+g_1 = \frac{m_3}{m_2^{3/2}}, \qquad
+G_1 = \frac{\sqrt{n(n-1)}}{n-2}\, g_1 .
+$$ {#eq-skewness}
+$G_1$ is the adjusted version reported by pandas' `Series.skew()` and by most
+spreadsheets [@joanes1998]. Positive values indicate a long right tail,
+negative values a long left tail, $0$ symmetry.
+:::
+
+*In one line:* skewness is the average cubed standardised deviation — cubes
+keep the sign, so large deviations on one side dominate.
+
+::: {#prp-skewness-invariance}
+## Skewness does not depend on the unit of measure
+For $a \neq 0$ and any $b$, the values $y_i = a x_i + b$ have
+$g_1(y) = \operatorname{sign}(a)\, g_1(x)$ (and the same for $G_1$).
+:::
+
+*In one line:* changing euros into dollars or metres into feet leaves the
+skewness unchanged; flipping the sign flips it.
+
+::: {.deep kind="proof"}
+## Proof of @prp-skewness-invariance
+$\bar y = a\bar x + b$, so $y_i - \bar y = a(x_i - \bar x)$ and
+$m_k(y) = a^k m_k(x)$. Then
+$g_1(y) = a^3 m_3(x) / (a^2 m_2(x))^{3/2} = a^3 m_3(x)/(|a|^3 m_2(x)^{3/2})
+= \operatorname{sign}(a)\,g_1(x)$. The factor relating $G_1$ to $g_1$ depends
+only on $n$. $\blacksquare$
+:::
+
+::: {#exm-skewness-hand}
+## Skewness by hand
+Take $x = (1, 2, 3, 10)$. Mean $4$; deviations $-3, -2, -1, 6$; $m_2 =
+(9+4+1+36)/4 = 12.5$; $m_3 = (-27-8-1+216)/4 = 45$. So
+$g_1 = 45/12.5^{1.5} = 45/44.19 \approx 1.018$ and
+$G_1 = \frac{\sqrt{12}}{2} \cdot 1.018 \approx 1.764$. The single large value
+creates a strong right skew; the median ($2.5$) is well below the mean ($4$).
+:::
+
+```{python}
+x = pd.Series([1, 2, 3, 10])
+m = x - x.mean()
+g1 = (m**3).mean() / (m**2).mean() ** 1.5
+n = len(x)
+G1 = np.sqrt(n * (n - 1)) / (n - 2) * g1
+print(f"g1 = {g1:.3f}   G1 = {G1:.3f}   pandas skew() = {x.skew():.3f}")
+print(f"after the change of unit 0.3048*x + 5: {(0.3048 * x + 5).skew():.3f};  after -x: {(-x).skew():.3f}")
+```
+
+The **logarithm** is the standard remedy for a long right tail: being
+concave, it compresses large values much more than small ones
+($\ln 10 - \ln 1 \approx 2.30$ but $\ln 1000 - \ln 100$ is also $2.30$), so a
+tail of values spanning orders of magnitude becomes a tail of a few units. We
+will see it at work on house prices below and decide in
+@sec-ch-ml-regression and the project *why* it is useful — the reason is about
+the errors of the model, not about making a histogram look pretty.
+
+## Reading files into a table {#sec-reading-files}
+
+pandas [@mckinney2010] reads every common format into a `DataFrame`
+(@sec-pandas). We write a small file in each format to a temporary folder and
+read it back, meeting the typical problems along the way.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+tmp = Path(tempfile.mkdtemp())          # a private scratch folder for the examples
+```
+
+### CSV and TSV
+
+Comma-separated values (@sec-csv, RFC 4180 [@rfc4180]) is the lingua franca
+of tabular data, but "comma-separated" is a family of dialects. A file
+exported by an Italian spreadsheet typically uses **semicolons** as
+separators and **commas** as decimal marks, may encode text in Windows-1252
+rather than UTF-8 (@sec-strings), and marks missing values in its own way.
+
+```{python}
+(tmp / "sales_it.csv").write_bytes(
+    "città;prezzo;superficie;data\n"
+    "Torino;245.000,50;85,5;03/02/2025\n"
+    "Milano;n.d.;60;15/03/2025\n"
+    "Napoli;189.900,00;102;28/04/2025\n".encode("cp1252"))
+
+sales = pd.read_csv(tmp / "sales_it.csv", sep=";", decimal=",", thousands=".",
+                    encoding="cp1252", na_values=["n.d."],
+                    parse_dates=["data"], dayfirst=True)
+print(sales)
+print(sales.dtypes)
+```
+
+Every keyword fixed one dialect problem: without `sep=";"` pandas would see a
+single column; without `decimal`/`thousands` the prices would be text;
+without `encoding` the "à" of *città* would be garbled or raise an error;
+without `na_values` the string `n.d.` would turn the whole price column into
+text; without `parse_dates`/`dayfirst` the dates would be strings, or worse,
+read month-first. **Tab-separated values** (TSV, [@ianatsv]) are the same with
+`sep="\t"`; tabs rarely occur inside fields, which makes TSV more robust than
+CSV.
+
+### JSON
+
+JSON (@sec-json, [@rfc8259]) is the usual format of web APIs. Records are
+often **nested**: here each listing contains an `address` object and a list of
+`features`. `pd.json_normalize` flattens nested objects into dotted column
+names.
+
+```{python}
+import json
+
+listings = [
+    {"id": 101, "price": 245000, "address": {"city": "Torino", "zip": "10121"}, "features": ["lift", "balcony"]},
+    {"id": 102, "price": None,   "address": {"city": "Milano", "zip": "20121"}, "features": []},
+]
+(tmp / "listings.json").write_text(json.dumps(listings), encoding="utf-8")
+
+raw = json.loads((tmp / "listings.json").read_text(encoding="utf-8"))
+flat = pd.json_normalize(raw)
+flat["n_features"] = flat["features"].str.len()       # a list is not a feature: summarise it
+print(flat)
+```
+
+A list-valued field cannot be a column of a design matrix; it must be
+summarised (its length) or expanded into indicator columns ("has lift",
+"has balcony") — the one-hot encoding of @sec-ch-ml-preprocessing.
+
+### XML
+
+XML [@bray2008] stores the same tree structure with tags. `pd.read_xml`
+turns repeated elements into rows; the `xpath` argument selects which ones.
+
+```{python}
+(tmp / "listings.xml").write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<listings>
+  <listing id="101"><city>Torino</city><price currency="EUR">245000</price><rooms>3</rooms></listing>
+  <listing id="102"><city>Milano</city><price currency="EUR">310000</price><rooms>2</rooms></listing>
+</listings>""", encoding="utf-8")
+
+print(pd.read_xml(tmp / "listings.xml", xpath="//listing"))
+```
+
+Attributes (`id`) and child elements (`city`, `price`) both become columns;
+the `currency` attribute of the nested `price` element is lost, a reminder to
+check what a flattening keeps.
+
+### HTML tables
+
+Web pages publish tables in HTML (`<table>`, [@whatwghtml]).
+`pd.read_html` returns a **list** of all the tables it finds, because a page
+may contain several. (It needs a parser such as `lxml`.)
+
+```{python}
+from io import StringIO
+
+page = """<html><body><h1>Average prices</h1>
+<table><tr><th>Zone</th><th>€/m²</th></tr>
+<tr><td>Centre</td><td>4100</td></tr><tr><td>Suburbs</td><td>2300</td></tr></table>
+</body></html>"""
+tables = pd.read_html(StringIO(page))
+print(len(tables), "table(s) found"); print(tables[0])
+```
+
+Reading a page you do not control is fragile — the layout may change any
+day — and its terms of use may forbid automated copying; prefer an official
+download or API when one exists.
+
+### Excel
+
+Excel workbooks (`.xlsx`, the Office Open XML format [@iso29500]) contain
+several **sheets**, and humans put titles, notes and merged cells above the
+data. `skiprows`, `header` and `sheet_name` tell pandas where the table
+starts. (Reading and writing `.xlsx` needs the `openpyxl` package.)
+
+```{python}
+with pd.ExcelWriter(tmp / "report.xlsx") as writer:
+    pd.DataFrame({"note": ["Quarterly report", "Source: agency archive"]}).to_excel(
+        writer, sheet_name="Q1", index=False, header=False)
+    sales.drop(columns="data").to_excel(writer, sheet_name="Q1", startrow=3, index=False)
+
+q1 = pd.read_excel(tmp / "report.xlsx", sheet_name="Q1", skiprows=3)
+print(q1)
+```
+
+Excel stores numbers as numbers, so the decimal-comma problem of CSV
+disappears; its own traps are dates stored as day counts, numbers stored as
+text, and hidden rows or columns.
+
+## A disciplined first look {#sec-first-look}
+
+Before modelling, look. A short, fixed routine catches most surprises; here
+it is on the house-sales data used in the project of this part — 545 sales,
+whose provenance is examined in @sec-ch-project-housing.
+
+```{python}
+houses = mlbook.load_housing()
+print(houses.shape)
+houses.head()
+```
+
+```{python}
+houses.info()
+```
+
+`info()` reports, for each column, the count of non-missing values (all 545:
+no missing data here) and the **dtype**. Integer columns (`int64`) are the
+quantitative ones; text columns (`str`, pandas' text type — older versions
+show `object`) hold the yes/no indicators and the furnishing status. Next,
+the summaries of the quantitative columns, and the categories of the others.
+
+```{python}
+houses.describe().T.style.format(precision=1, thousands=",")
+```
+
+```{python}
+for col in houses.select_dtypes(exclude="number").columns:
+    print(f"{col:17s}", houses[col].value_counts().to_dict())
+```
+
+Now classify the columns (@tbl-stevens). `price` and `area` are ratio-scale
+continuous quantities; `bedrooms`, `bathrooms`, `stories` and `parking` are
+discrete counts (ratio scale); six columns are **binary**; and
+`furnishingstatus` has three categories with a natural order
+(unfurnished < semi-furnished < furnished) — **ordinal**. Finally, the shape
+of the target:
+
+```{python}
+#| label: fig-price-skew
+#| fig-cap: "Distribution of the 545 sale prices (left) and of their natural logarithm (right). The price has a long right tail; its logarithm is nearly symmetric."
+import matplotlib.pyplot as plt
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.2))
+ax1.hist(houses["price"] / 1e6, bins=30, color=mlbook.COLORS[0], edgecolor="#fcfcfb")
+ax1.set_xlabel("price (millions of the data set's units)"); ax1.set_ylabel("number of sales")
+ax1.set_title(f"price: skewness {houses['price'].skew():.2f}")
+ax2.hist(np.log(houses["price"]), bins=30, color=mlbook.COLORS[2], edgecolor="#fcfcfb")
+ax2.set_xlabel("ln(price)")
+ax2.set_title(f"ln(price): skewness {np.log(houses['price']).skew():.2f}")
+fig.tight_layout()
+plt.show()
+print(f"mean {houses['price'].mean():,.0f}  >  median {houses['price'].median():,.0f}")
+```
+
+The price is right-skewed (the mean exceeds the median by about 10%), and its
+logarithm is almost symmetric. This first look already gives three decisions
+for later chapters: the yes/no columns need encoding, the furnishing column
+needs an encoding that respects its type, and the target may be better
+modelled on a logarithmic scale.
+
+::: {.project-link}
+**In the project.** The project's data come as a single CSV file, so the
+reading step is one line; the work is in the **first look**. Classifying the
+columns (@tbl-stevens) shows that `furnishingstatus` is ordinal, not a
+quantity; @fig-price-skew shows the right skew of the price. The copy of the
+file distributed with the course stores furnishing as the integers 0, 1, 2 —
+and, as we will find in @sec-ch-project-housing, the codes are not even in the
+natural order. A number is not always a quantity.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Trusting the default CSV dialect.** Check separator, decimal mark,
+  thousands separator, encoding and missing-value markers on the first rows of
+  the raw file before reading it.
+- **Treating codes as quantities**: postcodes, IDs, zone numbers, ordinal
+  codes. Averaging or regressing on them is meaningless
+  (@prp-meaningful-summaries).
+- **A numeric column read as text** because of one stray value (`n.d.`,
+  `-`, `1.234,5`): every later computation silently fails or errors.
+- **Dates read as strings**, or day and month swapped (`03/02` is 3 February
+  in Italy, 2 March in the USA).
+- **Losing information when flattening** JSON/XML (attributes, lists).
+- **Scraping web pages** that change layout or forbid it; prefer official
+  downloads or APIs.
+- **Skipping the first look.** Shape, dtypes, missing counts, summaries,
+  category counts and one histogram take two minutes and save hours.
+:::
+
+## Summary
+
+- **Structured** data have a fixed schema; **semi-structured** data (JSON,
+  XML, HTML) carry it in tags; **unstructured** data (images, text, audio) must
+  be turned into numbers — pixels, word counts, embeddings.
+- A **tidy** table has one variable per column and one observation per row;
+  `melt` and `pivot` reshape between wide and long forms.
+- Variable **types** — nominal, ordinal, interval, ratio; discrete or
+  continuous — decide which summaries are meaningful: means need at least an
+  interval scale, medians an ordinal one.
+- **Skewness** $g_1 = m_3/m_2^{3/2}$ (pandas reports the adjusted $G_1$) is
+  unit-free; a long right tail is often tamed by a logarithm.
+- pandas reads CSV/TSV (`sep`, `decimal`, `thousands`, `encoding`,
+  `na_values`, `parse_dates`), JSON (`json_normalize`), XML (`read_xml`), HTML
+  (`read_html`) and Excel (`read_excel`, `sheet_name`, `skiprows`).
+- A **first look** — shape, `info`, `describe`, category counts, a histogram
+  of the target — precedes any model.
+
+## Exercises
+
+::: {#exr-ml2-types}
+Classify each variable by Stevens' level and say whether it is discrete or
+continuous: (a) the floor number of a flat (ground floor = 0); (b) the energy
+class A4…G; (c) the year of construction; (d) the condominium fee in €/month;
+(e) the ISTAT code of the municipality; (f) the number of bathrooms.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) interval, discrete: differences are meaningful (three floors up), but
+the zero is a convention (basements are $-1$), so "twice as high" is not;
+(b) ordinal, discrete;
+(c) interval (year 0 is arbitrary; "built twice as late" is meaningless),
+discrete; (d) ratio, continuous; (e) **nominal** despite being a number,
+discrete; (f) ratio, discrete.
+:::
+
+::: {#exr-ml2-skew}
+Compute $g_1$ and $G_1$ by hand for $x = (2, 4, 4, 4, 6)$ and for
+$x = (1, 1, 1, 1, 6)$, then check with pandas. Which is skewed, and in which
+direction?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The first sample is symmetric around 4: $m_3 = 0$, so $g_1 = G_1 = 0$. The
+second has mean 2, deviations $(-1,-1,-1,-1,4)$, $m_2 = 20/5 = 4$,
+$m_3 = (-4 + 64)/5 = 12$, $g_1 = 12/8 = 1.5$,
+$G_1 = \frac{\sqrt{20}}{3}\cdot 1.5 \approx 2.236$: right-skewed.
+```{python}
+print(pd.Series([2, 4, 4, 4, 6]).skew(), pd.Series([1, 1, 1, 1, 6]).skew())
+```
+:::
+
+::: {#exr-ml2-median-ordinal}
+A hotel chain codes reviews as poor = 1, fair = 2, good = 3, excellent = 4.
+Hotel A has reviews (1, 4, 4) and hotel B (3, 3, 3). Which has the higher
+mean? Find an order-preserving recoding that reverses the comparison. Does the
+comparison of medians change?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Means: A $= (1+4+4)/3 = 3$ and B $= 3$ — tied. Recode excellent $= 3.5$
+(still above good $= 3$): A $= (1 + 7)/3 \approx 2.67 <$ B $= 3$. Recode
+excellent $= 10$ instead: A $= (1 + 20)/3 = 7 >$ B $= 3$. Two legitimate,
+order-preserving codings give opposite answers, so the comparison of means is
+not meaningful. The medians are A $=$ excellent and B $=$ good under every
+order-preserving coding, as @prp-meaningful-summaries guarantees.
+:::
+
+::: {#exr-ml2-read}
+Write a TSV file in which the second column contains numbers with a
+thousands separator (`1,250`) and one row uses `?` for a missing value. Read
+it so that the column is numeric. Then save the same data as JSON with
+`DataFrame.to_json(orient="records")` and read it back. Is anything lost?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+(tmp / "t.tsv").write_text("item\tamount\nA\t1,250\nB\t?\nC\t980\n", encoding="utf-8")
+t = pd.read_csv(tmp / "t.tsv", sep="\t", thousands=",", na_values=["?"])
+print(t.dtypes.to_dict())
+t.to_json(tmp / "t.json", orient="records")
+print(pd.read_json(tmp / "t.json"))
+```
+The amount becomes `float64` (a missing value forces floats, because `NaN` is
+a float); JSON stores the missing value as `null` and it comes back as `NaN`.
+Nothing is lost here, but JSON does not store dtypes: integers that were
+floats only because of a `NaN` stay floats, and dates come back as numbers or
+strings unless you say otherwise.
+:::
+
+## Further reading {.unnumbered}
+
+- @wickham2014 — tidy data, with many reshaping examples (in R, but the ideas
+  map one-to-one onto `melt`/`pivot`).
+- @stevens1946 — four pages that still frame how we think about variable
+  types.
+- @mckinney2022, ch. 6 — reading and writing data with pandas, by its author.
+- @codd1970 — the relational model, the ancestor of every structured table.
+- @joanes1998 — the three sample skewness estimators and their bias.
+- @rfc4180, @rfc8259, @bray2008 — the specifications of CSV, JSON and XML.

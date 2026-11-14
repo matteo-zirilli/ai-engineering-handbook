@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install Python dependencies
-        run: python -m pip install jupyter numpy pandas matplotlib pillow packaging
+        run: python -m pip install jupyter numpy pandas matplotlib pillow packaging scikit-learn scipy seaborn openpyxl lxml
 
       - uses: quarto-dev/quarto-actions/setup@v2
         with:

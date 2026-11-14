@@ -1,0 +1,656 @@
+# Clustering {#sec-ch-ml-clustering}
+
+```{python}
+#| echo: false
+import mlbook
+mlbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain how **clustering** differs from classification, and what a
+  clustering is trying to optimise;
+- **prove** that the mean is the point closest (in squared distance) to a group
+  of points, and use it to derive the **k-means** objective;
+- run **Lloyd's algorithm** by hand and in code, and prove that it never
+  increases the objective and always stops — at a local, not necessarily
+  global, optimum;
+- explain **k-means++** seeding and multiple restarts;
+- evaluate a clustering with **inertia**, **distortion** and the
+  **silhouette** (whose range you will prove), and with the adjusted Rand index
+  when labels exist;
+- choose the number of clusters with the **elbow** and **silhouette** methods,
+  and prove why the inertia alone cannot choose it;
+- recognise when k-means fails (scaling, non-convex or unequal clusters).
+:::
+
+::: {.callout-tip}
+## Topics covered
+Clustering techniques for finding and interpreting groups in data without
+labels: how clustering differs from classification, the k-means algorithm, the
+metrics used to judge a clustering and how to determine the number of
+clusters; in practice, k-means, inertia and distortion, visualising the
+clusters and the elbow method.
+:::
+
+## Intuition: sorting without labels
+
+Give someone a box of five hundred holiday photos and ask them to put them in
+piles. Nobody says what the piles should be; they will probably end up with
+"beach", "mountains", "city", "people" — groups of photos that resemble each
+other more than they resemble the others. That is **clustering**: finding
+groups in data that come **without labels**.
+
+The difference from classification (@sec-ch-ml-classification) is
+fundamental. A classifier learns categories that someone defined and
+labelled, and its errors can be counted. A clustering *proposes* categories;
+there is no answer key, so "is this clustering right?" becomes "is it
+compact, well separated, stable, and useful for the purpose?" Typical uses
+are segmenting customers or products, summarising large data sets by a few
+representatives, and exploring data before modelling.
+
+## The k-means objective {#sec-kmeans-objective}
+
+A **clustering** of $n$ points $x_1, \dots, x_n \in \mathbb{R}^p$ into $k$
+groups is a partition $C_1, \dots, C_k$ of the indices. To say what a good
+partition is we need a criterion; the most widely used one rewards **compact**
+clusters, measured by squared Euclidean distances. The first ingredient is a
+fact about one group.
+
+::: {#lem-mean-centre}
+## The mean is the best single representative
+For points $x_1, \dots, x_m$ with mean $\bar x$ and any point $c$,
+$$
+\sum_{i=1}^m \lVert x_i - c\rVert^2 = \sum_{i=1}^m \lVert x_i - \bar x\rVert^2 + m\,\lVert \bar x - c\rVert^2 .
+$$ {#eq-mean-decomposition}
+Hence $\bar x$ is the unique minimiser of $c \mapsto \sum_i\lVert x_i - c\rVert^2$.
+:::
+
+*In one line:* to represent a group by one point with the smallest total
+squared distance, take its average — any other point pays a penalty
+proportional to its distance from the average.
+
+::: {.deep kind="proof"}
+## Proof of @lem-mean-centre
+Write $x_i - c = (x_i - \bar x) + (\bar x - c)$ and expand:
+$\lVert x_i - c\rVert^2 = \lVert x_i - \bar x\rVert^2 + 2(x_i - \bar
+x)^\top(\bar x - c) + \lVert\bar x - c\rVert^2$. Summing over $i$, the middle
+term vanishes because $\sum_i (x_i - \bar x) = 0$ (@prp-variance-identity).
+The last term is $\ge 0$ and is $0$ only for $c = \bar x$. (This is
+@thm-regression-function again, for an empirical distribution in
+$\mathbb{R}^p$.) $\blacksquare$
+:::
+
+::: {#def-inertia}
+## Within-cluster sum of squares (inertia)
+For a partition $C_1, \dots, C_k$ with centroids $\mu_j = $ mean of the points
+in $C_j$,
+$$
+W(C_1, \dots, C_k) = \sum_{j=1}^k \sum_{i \in C_j} \lVert x_i - \mu_j\rVert^2 .
+$$ {#eq-inertia}
+The **k-means problem** is to find the partition into $k$ groups with the
+smallest $W$. scikit-learn calls $W$ the **inertia**.
+:::
+
+By @lem-mean-centre, the problem can be written with free centres:
+$\min_{\text{partition}, c_1..c_k}\sum_j\sum_{i\in C_j}\lVert x_i - c_j\rVert^2$
+— for a fixed partition the best centres are the means, and for fixed centres
+the best partition assigns each point to its **nearest** centre. Hugo
+Steinhaus stated this problem in 1956 [@steinhaus1956]; James MacQueen named
+it "k-means" in 1967 [@macqueen1967]. Finding the exact optimum is
+computationally hard — NP-hard already for two clusters in general dimension
+[@aloise2009] — so in practice we use a heuristic that alternates the two
+easy steps.
+
+## Lloyd's algorithm {#sec-lloyd}
+
+Stuart Lloyd described the alternating algorithm in a 1957 Bell Labs report
+on quantising signals, published in 1982 [@lloyd1982]; it is what "k-means"
+almost always means in software.
+
+1. **Initialise** $k$ centres $c_1, \dots, c_k$ (for example, $k$ data points
+   chosen at random).
+2. **Assignment step**: assign each point to the nearest centre.
+3. **Update step**: move each centre to the mean of the points assigned to it.
+4. Repeat 2–3 until the assignments no longer change.
+
+::: {#thm-lloyd}
+## Lloyd's algorithm decreases the inertia and stops
+Let $F(\text{partition}, c) = \sum_j\sum_{i\in C_j}\lVert x_i - c_j\rVert^2$.
+Neither step of Lloyd's algorithm increases $F$, and the algorithm stops after
+finitely many iterations at a partition in which every point is assigned to
+its nearest centroid and every centre is its cluster's mean. (Ties in the
+assignment are broken by a fixed rule, e.g. the lowest index.)
+:::
+
+*In one line:* each step can only lower the total squared distance; since
+there are finitely many partitions, the descent must end.
+
+::: {.deep kind="proof"}
+## Proof of @thm-lloyd
+*Assignment step.* With the centres fixed, each point's term
+$\lVert x_i - c_{j(i)}\rVert^2$ is replaced by its minimum over $j$, so no
+term increases. *Update step.* With the partition fixed, $F$ is a sum over
+clusters of $\sum_{i\in C_j}\lVert x_i - c_j\rVert^2$, each minimised by the
+cluster mean (@lem-mean-centre); empty clusters keep their centre (or are
+re-seeded) without increasing $F$. So $F$ never increases.
+
+*Termination.* After each update the centres are the means of the current
+partition, so $F$ equals the inertia $W$ of that partition. If an assignment
+step changes the partition, the tie-breaking rule means some point moved to a
+strictly closer centre, so $F$ strictly decreases in that step and therefore
+the new partition has strictly smaller $W$ than the old one. Hence no
+partition can occur twice. There are at most $k^n$ partitions, so the
+assignments must stop changing; at that point both conditions of the statement
+hold. $\blacksquare$
+:::
+
+The theorem guarantees a **local** optimum only — a configuration that
+neither step can improve — and the number of iterations, although usually
+small, can be exponential in the worst case [@vattani2011]. Different
+initialisations lead to different local optima. Two remedies are standard:
+
+- **multiple restarts**: run the algorithm from several initialisations and
+  keep the result with the smallest inertia (scikit-learn's `n_init`);
+- **k-means++ seeding** [@arthur2007]: choose the first centre uniformly at
+  random, and each next centre among the data points with probability
+  proportional to its squared distance from the nearest centre already chosen.
+  Spread-out seeds avoid placing two centres in one cluster; Arthur and
+  Vassilvitskii proved that the seeding alone is, in expectation, within a
+  factor logarithmic in $k$ of the optimal inertia. It is scikit-learn's
+  default (`init="k-means++"`).
+
+### Lloyd's algorithm from scratch
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_blobs
+from sklearn.cluster import KMeans
+
+def lloyd(X, k, seed=0, max_iter=100):
+    """Plain Lloyd's algorithm with random data points as initial centres. Returns labels, centres, history."""
+    rng = np.random.default_rng(seed)
+    centres = X[rng.choice(len(X), k, replace=False)]
+    history = []
+    for _ in range(max_iter):
+        d2 = ((X[:, None, :] - centres[None, :, :]) ** 2).sum(axis=2)   # squared distance of every point to every centre
+        labels = d2.argmin(axis=1)                                       # assignment step (ties -> lowest index)
+        history.append((labels.copy(), centres.copy(), d2[np.arange(len(X)), labels].sum()))
+        new = np.array([X[labels == j].mean(axis=0) if np.any(labels == j) else centres[j] for j in range(k)])
+        if np.allclose(new, centres):
+            break
+        centres = new                                                    # update step
+    return labels, centres, history
+
+X_blob, y_blob = make_blobs(n_samples=300, centers=3, cluster_std=[1.0, 1.5, 0.6], random_state=9)
+labels, centres, history = lloyd(X_blob, 3, seed=1)
+print("inertia at each iteration:", [round(float(h[2]), 1) for h in history])
+sk = KMeans(n_clusters=3, n_init=10, random_state=0).fit(X_blob)
+print(f"scikit-learn inertia: {sk.inertia_:.1f}")
+print("final inertia from ten random initialisations:", [round(float(lloyd(X_blob, 3, seed=s)[2][-1][2]), 1) for s in range(10)])
+```
+
+The inertia decreases at every iteration, as @thm-lloyd says, and this run
+reaches the value found by scikit-learn (which keeps the best of ten k-means++
+initialisations). Not every start is so lucky: two of the ten random
+initialisations end in a local optimum with almost four times the inertia —
+two centres split one group between them while the third centre covers the
+other two groups — which
+is why restarts and careful seeding matter. The figure shows the iterations of
+the good run:
+
+```{python}
+#| label: fig-lloyd-steps
+#| fig-cap: "Lloyd's algorithm on 300 synthetic points: assignments (colours) and centres (crosses) after the first, second and last iteration. The centres move to the means of their groups and the partition stabilises."
+show = [0, 1, len(history) - 1]
+fig, axes = plt.subplots(1, 3, figsize=(10, 3.2), sharex=True, sharey=True)
+for ax, t in zip(axes, show):
+    lab, cen, w = history[t]
+    for j in range(3):
+        ax.scatter(*X_blob[lab == j].T, s=10, color=mlbook.COLORS[j])
+    ax.scatter(*cen.T, marker="x", s=120, color=mlbook.INK, linewidths=2.5)
+    ax.set_title(f"iteration {t + 1}: inertia {w:.0f}", fontsize=10)
+fig.tight_layout(); plt.show()
+```
+
+## Evaluating a clustering {#sec-cluster-metrics}
+
+Without labels there is no error rate. **Internal** metrics judge the
+geometry; **external** metrics compare with labels when, as in an experiment,
+they exist.
+
+### Inertia and distortion
+
+The **inertia** $W$ (@eq-inertia) measures compactness; it is what k-means
+minimises. It grows with the number of points and with the units, so it is
+often normalised to the **distortion**, the average squared distance of a point
+to its centroid, $W/n$. (Some tutorials define the distortion as the average
+*Euclidean* distance, without the square — check which one a tool reports.)
+Both only measure compactness, not separation.
+
+### The silhouette
+
+Peter Rousseeuw's **silhouette** [@rousseeuw1987] compares, for each point,
+how close it is to its own cluster and to the nearest other one.
+
+::: {#def-silhouette}
+## Silhouette
+For point $i$ in cluster $C$ (with at least two points), let $a(i)$ be the
+average distance from $i$ to the other points of $C$, and $b(i)$ the smallest,
+over the other clusters $C'$, of the average distance from $i$ to the points
+of $C'$. The silhouette of $i$ is
+$$
+s(i) = \frac{b(i) - a(i)}{\max\{a(i), b(i)\}},
+$$ {#eq-silhouette}
+and the silhouette of a clustering is the mean of $s(i)$ over all points
+($s(i) = 0$ by convention for points alone in their cluster).
+:::
+
+::: {#prp-silhouette-range}
+## Range of the silhouette
+$-1 \le s(i) \le 1$; $s(i) > 0$ iff the point is on average closer to its own
+cluster than to the nearest other cluster, and $s(i)$ is close to $1$ iff
+$a(i) \ll b(i)$.
+:::
+
+*In one line:* near 1 — well inside its cluster; near 0 — on the border;
+negative — probably in the wrong cluster.
+
+::: {.deep kind="proof"}
+## Proof of @prp-silhouette-range
+Distances are non-negative, so $a, b \ge 0$; assume $\max(a, b) > 0$. If
+$a \le b$, then $s = (b - a)/b = 1 - a/b \in [0, 1]$, with $s = 1$ iff $a = 0$
+and $s$ close to 1 iff $a/b$ is small. If $a > b$, then $s = (b - a)/a = b/a -
+1 \in [-1, 0)$. The sign of $s$ is the sign of $b - a$. $\blacksquare$
+:::
+
+Computing $a(i)$ and $b(i)$ needs all pairwise distances, $O(n^2)$ work: on
+large data sets, evaluate the silhouette on a random sample
+(`silhouette_score(..., sample_size=...)`). Other internal indices — the
+Calinski–Harabasz ratio of between- to within-cluster dispersion
+[@calinski1974] and the Davies–Bouldin index [@davies1979] — are available in
+`sklearn.metrics`.
+
+### External comparison: the adjusted Rand index
+
+When true groups are known (for testing a method), the **adjusted Rand
+index** [@hubert1985] measures the agreement between two partitions,
+regardless of how the clusters are numbered: $1$ for identical partitions,
+about $0$ for a random assignment. It is the right tool for the experiments
+below; in real applications the labels usually do not exist.
+
+## How many clusters? {#sec-choosing-k}
+
+k-means needs $k$. The obvious idea — try several $k$ and keep the one with
+the smallest inertia — fails for a simple reason.
+
+::: {#prp-inertia-monotone}
+## The optimal inertia never increases with $k$
+Let $W^*(k)$ be the smallest inertia over all partitions into at most $k$
+non-empty clusters. Then $W^*(k + 1) \le W^*(k)$ for $k < n$, and $W^*(n) = 0$.
+:::
+
+*In one line:* more clusters always fit at least as well — with one cluster
+per point the inertia is zero — so the inertia cannot choose $k$ on its own.
+
+::: {.deep kind="proof"}
+## Proof of @prp-inertia-monotone
+Take an optimal partition into $k$ clusters. If some cluster contains two
+distinct points, split off one point $x$ into its own cluster: its term
+becomes $0$, and the remaining points of the old cluster, now with their own
+mean, have a sum of squares no larger than before, because by @lem-mean-centre
+their own mean is the best centre for them and the old mean was a candidate.
+The new partition has $k + 1$ clusters and inertia $\le W^*(k)$. (If all
+clusters are single points or contain only identical points, $W^*(k) = 0$
+already.) With $n$ clusters every point is its own centre: $W^*(n) = 0$.
+$\blacksquare$
+:::
+
+Two practical criteria look instead for a **trade-off**:
+
+- the **elbow method**, going back to Thorndike [@thorndike1953]: plot $W$
+  against $k$ and look for the $k$ after which adding clusters brings much
+  smaller improvements — the "elbow" of the curve. It is a visual heuristic;
+  often the elbow is not sharp;
+- the **silhouette method**: choose the $k$ with the largest mean silhouette.
+
+More formal alternatives compare the inertia curve with that expected for
+data with no clusters (the **gap statistic**, [@tibshirani2001]). None is
+definitive: the right number of clusters also depends on what the clusters
+are for.
+
+```{python}
+#| label: fig-elbow
+#| fig-cap: "Choosing k on the synthetic data (3 true groups). Left: inertia against k (elbow method) — it always decreases, with a clear bend at k = 3. Right: mean silhouette against k, highest at k = 3."
+from sklearn.metrics import silhouette_score, adjusted_rand_score
+
+ks = range(1, 9)
+inertias, sils = [], []
+for k in ks:
+    km = KMeans(n_clusters=k, n_init=10, random_state=0).fit(X_blob)
+    inertias.append(km.inertia_)
+    sils.append(silhouette_score(X_blob, km.labels_) if k > 1 else np.nan)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.1))
+ax1.plot(ks, inertias, marker="o", ms=5); ax1.set_xlabel("k"); ax1.set_ylabel("inertia W")
+ax2.plot(ks, sils, marker="o", ms=5, color=mlbook.COLORS[1]); ax2.set_xlabel("k"); ax2.set_ylabel("mean silhouette")
+for ax in (ax1, ax2):
+    ax.axvline(3, color=mlbook.MUTED, ls="--", lw=1)
+fig.tight_layout(); plt.show()
+print("inertia:", [round(w) for w in inertias])
+print("silhouette:", [None if np.isnan(s) else round(float(s), 3) for s in sils])
+print(f"adjusted Rand index of k = 3 with the true groups: {adjusted_rand_score(y_blob, KMeans(3, n_init=10, random_state=0).fit_predict(X_blob)):.3f}")
+```
+
+## Practice: wines without labels {#sec-wine-clusters}
+
+The wine data of @sec-multiclass contain 13 chemical measurements of wines
+from three cultivars [@aeberhard1992]. Suppose we did not know the cultivars:
+would k-means find them? The answer depends heavily on **scaling**
+(@sec-scaling). The proline content is in the hundreds to over a thousand,
+the hue around 1; Euclidean distance on raw values is essentially distance in
+proline.
+
+```{python}
+from sklearn.datasets import load_wine
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
+wine = load_wine(as_frame=True)
+Xw, yw = wine.data, wine.target
+print(Xw[["proline", "magnesium", "alcohol", "hue"]].describe().loc[["mean", "std"]].round(2))
+for name, model in [("raw features", KMeans(3, n_init=10, random_state=0)),
+                    ("standardised", make_pipeline(StandardScaler(), KMeans(3, n_init=10, random_state=0)))]:
+    lab = model.fit_predict(Xw)
+    print(f"{name:13s} adjusted Rand index with the cultivars: {adjusted_rand_score(yw, lab):.3f}")
+```
+
+On raw features the clusters follow proline and only partly match the
+cultivars; after standardisation they recover the cultivars almost exactly —
+without ever seeing a label. To **interpret** clusters, describe their
+centroids in the original units, and look at them in a picture. With 13
+dimensions we choose two informative ones (any 2-D view of 13-D clusters is a
+projection, and some separation is hidden):
+
+```{python}
+#| label: fig-wine-clusters
+#| fig-cap: "k-means (k = 3, standardised features) on the wine data, shown on two of the thirteen measurements. Colours: clusters found without labels; crosses: centroids mapped back to the original units."
+km_pipe = make_pipeline(StandardScaler(), KMeans(3, n_init=10, random_state=0)).fit(Xw)
+lab = km_pipe[-1].labels_
+centroids = pd.DataFrame(km_pipe[0].inverse_transform(km_pipe[-1].cluster_centers_), columns=Xw.columns)
+fig, ax = plt.subplots(figsize=(6, 3.8))
+for j in range(3):
+    ax.scatter(Xw.loc[lab == j, "flavanoids"], Xw.loc[lab == j, "proline"], s=16, color=mlbook.COLORS[j], label=f"cluster {j}")
+ax.scatter(centroids["flavanoids"], centroids["proline"], marker="x", s=140, color=mlbook.INK, linewidths=2.5)
+ax.set_xlabel("flavanoids"); ax.set_ylabel("proline"); ax.legend()
+plt.show()
+print(centroids[["alcohol", "flavanoids", "color_intensity", "proline"]].round(2))
+print(pd.crosstab(pd.Series(lab, name="cluster"), pd.Series(yw.map(dict(enumerate(wine.target_names))), name="cultivar")))
+```
+
+The cross-tabulation shows each cluster is essentially one cultivar; the
+centroid table is the "profile" a domain expert would read (one cluster high
+in proline and alcohol, one low in flavanoids and high in colour intensity, one
+low in both proline and colour).
+
+## When k-means fails {#sec-kmeans-limits}
+
+k-means looks for **compact, roughly spherical** groups of similar spread,
+because it assigns each point to the nearest centre: the boundary between two
+clusters is always the hyperplane equidistant from their centres. It fails
+when the groups are elongated, nested or of very different sizes and
+densities.
+
+```{python}
+#| label: fig-kmeans-fails
+#| fig-cap: "k-means (k = 2) on two interleaving half-moons. The algorithm cuts the data with a straight line between the two centres and cannot follow the curved shapes."
+from sklearn.datasets import make_moons
+
+X_moon, y_moon = make_moons(n_samples=300, noise=0.06, random_state=0)
+lab_moon = KMeans(2, n_init=10, random_state=0).fit_predict(X_moon)
+fig, ax = plt.subplots(figsize=(5.5, 3))
+for j in range(2):
+    ax.scatter(*X_moon[lab_moon == j].T, s=12, color=mlbook.COLORS[j])
+plt.show()
+print(f"adjusted Rand index: {adjusted_rand_score(y_moon, lab_moon):.3f}")
+```
+
+Other families handle such shapes — density-based methods (DBSCAN),
+hierarchical clustering, Gaussian mixtures — and Jain's survey is a good map
+[@jain2010]. A deeper limit holds for all of them: Kleinberg proved that no
+clustering function can satisfy three natural requirements (scale invariance,
+richness, consistency) at once [@kleinberg2002]. Every clustering method
+embodies a choice of what "similar" means, and the result must be judged
+against the purpose.
+
+The widget runs Lloyd's algorithm step by step on random data; change $k$ and
+the seed and watch different local optima appear.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof kmK = Inputs.range([1, 4], {step: 1, value: 3, label: "number of clusters k"})
+```
+
+```{ojs}
+//| echo: false
+viewof kmSeed = Inputs.range([1, 20], {step: 1, value: 4, label: "initialisation seed"})
+```
+
+```{ojs}
+//| echo: false
+viewof kmIter = Inputs.range([0, 10], {step: 1, value: 0, label: "iterations of Lloyd's algorithm"})
+```
+
+```{ojs}
+//| echo: false
+kmRun = {
+  // deterministic pseudo-random numbers (mulberry32)
+  function rng(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const r = rng(12345), gauss = () => Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r());
+  const blobs = [[-4, 2, 0.9], [3, 3, 1.4], [0, -3, 0.7]];
+  const pts = blobs.flatMap(([cx, cy, s]) => d3.range(60).map(() => ({x: cx + s * gauss(), y: cy + s * gauss()})));
+  const pick = rng(kmSeed * 7919);
+  let centres = d3.range(kmK).map(() => ({...pts[Math.floor(pick() * pts.length)]}));
+  let labels = pts.map(() => 0);
+  const assign = () => { labels = pts.map(p => d3.minIndex(centres, c => (p.x - c.x) ** 2 + (p.y - c.y) ** 2)); };
+  assign();
+  for (let it = 0; it < kmIter; it++) {
+    centres = centres.map((c, j) => { const m = pts.filter((p, i) => labels[i] === j);
+      return m.length ? {x: d3.mean(m, p => p.x), y: d3.mean(m, p => p.y)} : c; });
+    assign();
+  }
+  const inertia = d3.sum(pts, (p, i) => (p.x - centres[labels[i]].x) ** 2 + (p.y - centres[labels[i]].y) ** 2);
+  return {pts: pts.map((p, i) => ({...p, cluster: `cluster ${labels[i] + 1}`})), centres, inertia};
+}
+```
+
+```{ojs}
+//| echo: false
+md`Inertia after ${kmIter} update step(s): **${kmRun.inertia.toFixed(1)}**`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-kmeans-widget
+//| fig-cap: "Lloyd's algorithm step by step on 180 points from three groups. Iteration 0 shows the assignment to the random initial centres (crosses); each further iteration moves the centres to the means and reassigns. Some seeds converge to a poor local optimum with two centres in one group."
+Plot.plot({height: 320, x: {label: null, domain: [-8, 8]}, y: {label: null, domain: [-6, 7]},
+  color: {domain: ["cluster 1", "cluster 2", "cluster 3", "cluster 4"], range: ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6"], legend: true},
+  marks: [Plot.dot(kmRun.pts, {x: "x", y: "y", fill: "cluster", r: 3}),
+          Plot.dot(kmRun.centres, {x: "x", y: "y", symbol: "times", r: 9, stroke: "#0b0b0b", strokeWidth: 3})]})
+```
+:::
+
+::: {.project-link}
+**In the project.** The project's task is supervised — predicting prices —
+but clustering is a natural extension (@sec-ch-project-housing): grouping the
+houses into **market segments** by their characteristics (standardised, as in
+@sec-wine-clusters) and checking whether the regression errs systematically
+in some segments. If cluster labels are later used as a *feature* of the price
+model, the clustering must be fitted inside the cross-validation pipeline,
+like every other learned preprocessing step (@sec-leakage).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Clustering unscaled features**: the variable with the largest units
+  decides everything (@sec-wine-clusters).
+- **Choosing $k$ by the smallest inertia**: it always prefers more clusters
+  (@prp-inertia-monotone).
+- **Trusting one run**: k-means finds a local optimum; use several restarts
+  (`n_init`) and k-means++ seeding.
+- **Assuming the clusters are "real"**: k-means always returns $k$ groups,
+  even in data with no group structure. Check stability (rerun on subsamples)
+  and usefulness.
+- **Non-spherical or unequal clusters**: k-means cuts them with straight
+  boundaries; consider other methods.
+- **Interpreting cluster numbers**: they are arbitrary labels; compare
+  partitions with the adjusted Rand index, not by matching numbers.
+- **Silhouette on huge data** without sampling: quadratic cost.
+:::
+
+## Summary
+
+- **Clustering** finds groups without labels; it proposes categories rather
+  than learning given ones, and is judged by geometry and usefulness.
+- The **mean** minimises the sum of squared distances
+  (@lem-mean-centre); k-means minimises the **inertia** $W = \sum_j\sum_{i\in
+  C_j}\lVert x_i - \mu_j\rVert^2$.
+- **Lloyd's algorithm** alternates assignment and update; it never increases
+  $W$ and stops in finitely many steps at a **local** optimum. Use **k-means++**
+  and restarts.
+- **Inertia/distortion** measure compactness; the **silhouette** $s(i) =
+  (b - a)/\max(a, b) \in [-1, 1]$ also measures separation; the **adjusted Rand
+  index** compares with known labels.
+- The optimal inertia never increases with $k$: choose $k$ by the **elbow**,
+  the **silhouette**, or the purpose — never by the inertia alone.
+- **Scale** the features; expect failure on elongated, nested or unequal
+  clusters.
+
+## Exercises
+
+::: {#exr-ml7-hand}
+Run Lloyd's algorithm by hand on the one-dimensional points $1, 2, 3, 8, 9,
+10, 25$ with $k = 2$ and initial centres $1$ and $2$. Report the assignments
+and centres after each iteration and the final inertia. Then start from
+centres $1$ and $25$. Do you reach the same result?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Start $(1, 2)$. Iteration 1: every point except $1$ is closer to $2$, so the
+clusters are $\{1\}$ and $\{2,3,8,9,10,25\}$, with new centres $1$ and
+$57/6 = 9.5$. Iteration 2: $2$ and $3$ are now closer to $1$, while $8$ (at
+distance 1.5 from 9.5) stays: clusters $\{1,2,3\}$ and $\{8,9,10,25\}$,
+centres $2$ and $13$. Iteration 3: $8$ is at distance 6 from 2 and 5 from 13,
+$10$ at 8 and 3 — nothing moves; stop. Inertia $(1 + 0 + 1) + (25 + 16 + 9 +
+144) = 196$.
+
+Start $(1, 25)$: $8$, $9$, $10$ are all closer to $1$ than to $25$, so the
+clusters are $\{1,2,3,8,9,10\}$ and $\{25\}$, centres $5.5$ and $25$, and
+nothing moves afterwards. Inertia $20.25 + 12.25 + 6.25 + 6.25 + 12.25 +
+20.25 = 77.5$. Different initialisations, different local optima — and the
+second is much better.
+```{python}
+pts = np.array([1, 2, 3, 8, 9, 10, 25], float)[:, None]
+for init in ([[1], [2]], [[1], [25]]):
+    km = KMeans(2, init=np.array(init, float), n_init=1).fit(pts)
+    print(init, "->", km.cluster_centers_.ravel(), "inertia", km.inertia_)
+```
+:::
+
+::: {#exr-ml7-silhouette-hand}
+For the final clustering $\{1,2,3,8,9,10\}$, $\{25\}$ of @exr-ml7-hand,
+compute the silhouette of the point $10$ and of the point $1$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Point 10: $a = (9 + 8 + 7 + 2 + 1)/5 = 5.4$; $b = 15$ (distance to the only
+point of the other cluster); $s = (15 - 5.4)/15 = 0.64$. Point 1: $a = (1 + 2
++ 7 + 8 + 9)/5 = 5.4$; $b = 24$; $s = 18.6/24 = 0.775$.
+```{python}
+from sklearn.metrics import silhouette_samples
+s = silhouette_samples(pts, [0, 0, 0, 0, 0, 0, 1])
+print({float(p): round(float(v), 3) for p, v in zip(pts.ravel(), s)})
+```
+:::
+
+::: {#exr-ml7-noise}
+Generate 300 points uniformly at random in a square (no clusters at all), run
+k-means with $k = 2, \dots, 6$ and report inertia and silhouette. What would an
+analyst who trusted the elbow conclude? How could you detect that there is no
+structure?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+U = np.random.default_rng(0).uniform(size=(300, 2))
+for k in range(2, 7):
+    km = KMeans(k, n_init=10, random_state=0).fit(U)
+    print(f"k = {k}: inertia {km.inertia_:6.2f}  silhouette {silhouette_score(U, km.labels_):.3f}")
+```
+k-means happily returns $k$ groups; the inertia decreases smoothly without a
+clear elbow and the silhouette stays moderate (around 0.3–0.4) for every $k$.
+Signs of no structure: no elbow, flat silhouette, and clusters that change
+completely when the data are resampled. The gap statistic [@tibshirani2001]
+formalises the comparison with structureless data.
+:::
+
+::: {#exr-ml7-houses}
+Cluster the house data of @sec-first-look into market segments: encode and
+standardise the features (not the price), choose $k$ between 2 and 6 with the
+silhouette, and describe the segments by their median price and the share of
+houses with air conditioning and in the preferred area.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
+
+houses = mlbook.load_housing()
+numeric = ["area", "bedrooms", "bathrooms", "stories", "parking"]
+binary = ["mainroad", "guestroom", "basement", "hotwaterheating", "airconditioning", "prefarea"]
+prep = make_pipeline(ColumnTransformer([
+    ("num", "passthrough", numeric),
+    ("bin", OrdinalEncoder(categories=[["no", "yes"]] * len(binary)), binary),
+    ("furn", OneHotEncoder(sparse_output=False), ["furnishingstatus"])]), StandardScaler())
+H = prep.fit_transform(houses.drop(columns="price"))
+for k in range(2, 7):
+    print(k, round(silhouette_score(H, KMeans(k, n_init=10, random_state=0).fit_predict(H)), 3))
+seg = KMeans(2, n_init=10, random_state=0).fit_predict(H)
+print(houses.assign(segment=seg).groupby("segment").agg(
+    houses=("price", "size"), median_price=("price", "median"),
+    air_conditioning=("airconditioning", lambda s: (s == "yes").mean()),
+    preferred_area=("prefarea", lambda s: (s == "yes").mean())).round(2))
+```
+The silhouettes are low for every $k$ (between about 0.15 and 0.19, with no
+clear winner) — the houses form a continuum rather than well-separated groups
+— so segments are a convenient summary, not a discovered structure; the code
+describes $k = 2$, the easiest to read: a larger, cheaper segment and a smaller
+one with a much higher median price, more air conditioning and more houses in
+the preferred area. Whatever $k$ is chosen, the price can be used to
+*describe* the segments, but it must not be used to *build* them if the
+segments will later serve as a feature for predicting the price.
+:::
+
+## Further reading {.unnumbered}
+
+- @james2023, §12.4 — k-means and hierarchical clustering with Python labs;
+  @hastie2009, §14.3 — clustering, k-means, the gap statistic.
+- @bishop2006, §9.1 — k-means as a limit of Gaussian mixtures.
+- @lloyd1982 and @macqueen1967 — the original algorithm and name;
+  @steinhaus1956 — the problem before the name.
+- @arthur2007 — k-means++ and its guarantee.
+- @rousseeuw1987 — silhouettes, with the graphical display.
+- @jain2010 — fifty years of clustering after k-means; @kleinberg2002 — why
+  no clustering method can satisfy every reasonable requirement.

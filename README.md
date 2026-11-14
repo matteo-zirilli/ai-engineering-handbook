@@ -34,7 +34,8 @@ repository [`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-p
 |---|---|---|---|
 | I | Programming with Python | Terminal phone-book prototype | ✅ |
 | II | High-performance programming with C and C++ | Command-line CRM for an insurance company | ✅ |
-| III–XII | remaining courses of the master | — | 🛠 in preparation |
+| III | Foundations of machine learning | Regularised models for house-price prediction | ✅ |
+| IV–XII | remaining courses of the master | — | 🛠 in preparation |
 
 ## Repository layout
 
@@ -46,6 +47,9 @@ python/                Part I — Programming with Python (one .qmd per module +
 cpp/                   Part II — C and C++ (one .qmd per module + project)
 cpp/cppbook.py         helper that compiles and runs the C/C++ examples (used by the cells)
 cpp/_crm/              reference implementation of the Part II project (CMake project)
+ml/                    Part III — Foundations of machine learning (one .qmd per module + project)
+ml/mlbook.py           helper for Part III (figure style, data loader)
+ml/_data/              data used by Part III (CC0 house sales, with provenance notes)
 appendices/            finding and reading the sources
 references.qmd         the bibliography page
 references.bib         all sources (BibTeX), with DOI/arXiv/ISBN/URL and access notes
@@ -59,7 +63,11 @@ _freeze/               stored results of the executed Python cells (do not edit 
 
 Requirements: [Quarto](https://quarto.org/docs/get-started/) ≥ 1.6 and, to
 re-execute the code, Python 3.13 with `jupyter`, `numpy`, `pandas`,
-`matplotlib`, `pillow`, `packaging`. Re-executing Part II also needs GCC
+`matplotlib`, `pillow`, `packaging`; Part III also needs `scikit-learn`,
+`scipy`, `openpyxl` and `lxml` (and `seaborn` to re-execute the reviewed
+project notebook), plus network access to `raw.githubusercontent.com` for the
+two cells of the project chapter that download the published notebook and the
+original data. Re-executing Part II also needs GCC
 (`g++`/`gcc` with C++20 support), GDB, Make, CMake, Ninja, `strace` and the
 binutils (`nm`, `objdump`, `readelf`), on Linux.
 

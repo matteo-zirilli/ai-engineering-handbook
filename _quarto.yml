@@ -54,6 +54,16 @@ book:
         - cpp/07-oop-in-cpp.qmd
         - cpp/08-cpp-and-python.qmd
         - cpp/09-project-crm.qmd
+    - part: ml/index.qmd
+      chapters:
+        - ml/01-what-is-ml.qmd
+        - ml/02-datasets.qmd
+        - ml/03-preprocessing.qmd
+        - ml/04-linear-regression.qmd
+        - ml/05-overfitting-regularization.qmd
+        - ml/06-classification.qmd
+        - ml/07-clustering.qmd
+        - ml/08-project-real-estate.qmd
   appendices:
     - appendices/finding-sources.qmd
     - references.qmd

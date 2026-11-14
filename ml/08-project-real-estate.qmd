@@ -1,0 +1,908 @@
+# Project: regularised models for house-price prediction {#sec-ch-project-housing}
+
+```{python}
+#| echo: false
+import mlbook
+mlbook.setup()
+```
+
+::: {.callout-note}
+## What this chapter contains
+1. The **problem statement**, written in my own words.
+2. The **data** and their provenance, verified in code.
+3. A **requirements matrix** that maps every requirement to the chapters of
+   this part.
+4. A **walkthrough and code review** of the implementation published in the
+   companion repository,
+   [`Real_Estate_Price_Forecasting.ipynb`](https://github.com/matteo-zirilli/ai-projects/blob/main/Real_Estate_Price_Forecasting.ipynb)
+   ([open in Colab](https://colab.research.google.com/github/matteo-zirilli/ai-projects/blob/main/Real_Estate_Price_Forecasting.ipynb)),
+   including a **forensic re-execution** that reproduces every number it
+   prints — and explains them.
+5. A **reference implementation** that applies the refinements suggested by
+   the review, with its results.
+6. **Extensions** to practise further.
+:::
+
+## The problem {#sec-housing-brief}
+
+::: {.callout-note}
+## About this specification
+This project was the final assignment of the machine-learning course of the
+master I attended. The specification below is **my own restatement** of the
+requirements, written for this handbook; it does not reproduce the course
+material.
+:::
+
+**Context.** A company that estimates residential property prices uses a
+multiple linear regression built in a hurry some time ago. On the sales it was
+fitted on it looks fine, but on properties it has not seen its errors are
+larger than expected. The suspicion is **overfitting**, and the question is
+whether **regularisation** would help — and, along the way, which
+characteristics of a property really drive its estimated price, something the
+company needs in order to explain its valuations to clients.
+
+**What the analysis must do.**
+
+- **R1 — Data.** Start from a public data set of residential sales with the
+  price (the target) and a dozen characteristics: lot area, numbers of
+  bedrooms, bathrooms, storeys and parking places, six yes/no amenities, and
+  a furnishing status with three levels.
+- **R2 — Exploration first.** Inspect types, distributions and missing values,
+  and build the correlation matrix of the numerical features with the price.
+- **R3 — Justified preprocessing.** Decide how to treat missing values
+  (deletion or imputation, and why), encode the categorical variables with the
+  appropriate method (ordinal where an order exists, one-hot where it does
+  not), and scale the numerical features — essential with penalised models.
+- **R4 — A baseline.** Fit an unregularised multiple linear regression and
+  measure it on training and test data (hold-out); a large gap would be
+  concrete evidence of overfitting.
+- **R5 — Three regularised models**: ridge, lasso and elastic net.
+- **R6 — One comparison protocol.** Compare the models with **k-fold
+  cross-validation**, not a single split; for each model, try several values
+  of the penalty and report how the error and the coefficients change.
+- **R7 — Comparable metrics.** Mean squared error for every model on the same
+  validation scheme, with the coefficient of determination alongside;
+  comment on the order of magnitude of the MSE, which depends on the units of
+  the price.
+- **R8 — Coefficients, not only errors.** For each model, count the
+  coefficients that remain non-zero and list the largest in absolute value;
+  explain how the three methods differ and what that means for interpreting
+  the market.
+- **R9 — Charts that support decisions**: the errors of the models side by
+  side, the error as a function of the penalty, a learning curve, and the
+  residuals (against predicted values, and their distribution) — checking
+  whether the model errs systematically on some price bands.
+- **R10 — Readable by non-programmers.** A notebook alternating code and
+  explanation (what was done, why, what was observed), ending with
+  conclusions and an operational recommendation: which model, under which
+  conditions.
+- **R11 — Method with AI assistants.** If an assistant is used, give it
+  specific prompts (data, goal, output format) and verify its code — in
+  particular that preprocessing does not leak into validation and that the
+  metrics are the requested ones.
+
+**What counts as quality.** Not the final error figure, but a fair,
+documented comparison: motivated preprocessing, sound validation, and careful
+reading of coefficients and residuals.
+
+## The data and their provenance {#sec-housing-data}
+
+The brief points to a CSV file of 545 sales. Before using — and citing — a
+data set, find out where it comes from. Three facts, all checked in code
+below:
+
+1. The course's file is a re-encoding of the Kaggle **"Housing Prices
+   Dataset"** by M Yasser H [@yasser2021], released on Kaggle under **CC0**
+   (public domain). The Kaggle file stores the yes/no columns as text; the
+   course's copy stores them as 1/0 and the furnishing status as integers. The
+   handbook uses an identical copy of the Kaggle file (`ml/_data/housing.csv`).
+2. The Kaggle file is in turn derived from the sample of **546 houses sold in
+   Windsor, Ontario (Canada), in 1987** studied by Anglin and Gençay
+   [@anglin1996], whose data are in the *Journal of Applied Econometrics* data
+   archive [@anglin1996data] and in the R package Ecdat [@croissant2025]. Every
+   one of the 545 Kaggle rows matches one of the 546 original sales exactly,
+   once the Kaggle price is divided by **70**; one sale is missing; the
+   columns were **renamed**; and a `furnishingstatus` column that does **not**
+   exist in the original study was added, with no documentation of its origin.
+3. The course's integer coding of furnishing is furnished = 1,
+   semi-furnished = 2, unfurnished = 0 — not the natural order. This is the
+   only coding that reproduces the correlations and results printed in the
+   reviewed notebook (@sec-housing-replay).
+
+The renaming matters for interpretation, because some new names say more than
+the original variables did:
+
+| Kaggle / course name | Original variable [@anglin1996; @croissant2025] |
+|---|---|
+| `price` | sale price in Canadian dollars of 1987 (× 70 in the Kaggle file) |
+| `area` | **lot size** in square feet — not the floor area of the house |
+| `bedrooms`, `bathrooms`, `stories` | numbers of bedrooms, full bathrooms, storeys (excluding the basement) |
+| `mainroad` | the house has a **driveway** |
+| `guestroom` | the house has a **recreational room** |
+| `basement` | the house has a **full finished** basement |
+| `hotwaterheating` | the house uses **gas for hot-water heating** |
+| `airconditioning` | central air conditioning |
+| `parking` | number of **garage** places |
+| `prefarea` | located in the preferred neighbourhood of the city |
+| `furnishingstatus` | *not in the original data; origin undocumented* |
+
+: What the columns of the house data really measure {#tbl-housing-columns}
+
+```{python}
+#| code-fold: true
+#| code-summary: "Show the provenance check"
+import hashlib
+import numpy as np
+import pandas as pd
+from collections import Counter
+
+kaggle = mlbook.load_housing()
+print("MD5 of the handbook's copy:", hashlib.md5((mlbook.DATA / "housing.csv").read_bytes()).hexdigest())
+
+# The Anglin–Gençay sample as distributed by the R package Ecdat (CSV copy from Rdatasets, pinned commit)
+ECDAT = ("https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/"
+         "1dcc2bf5f955cc1224a3e1307256e1fe86b68dae/csv/Ecdat/Housing.csv")
+windsor = pd.read_csv(ECDAT).drop(columns="rownames")
+rename = {"lotsize": "area", "bathrms": "bathrooms", "driveway": "mainroad", "recroom": "guestroom",
+          "fullbase": "basement", "gashw": "hotwaterheating", "airco": "airconditioning", "garagepl": "parking"}
+windsor = windsor.rename(columns=rename)
+cols = ["price", "area", "bedrooms", "bathrooms", "stories", "mainroad", "guestroom", "basement",
+        "hotwaterheating", "airconditioning", "parking", "prefarea"]
+print("original sample:", windsor.shape, "| Kaggle file:", kaggle.shape)
+print("every Kaggle price divisible by 70:", bool((kaggle["price"] % 70 == 0).all()))
+
+k_rows = Counter(map(tuple, kaggle[cols].assign(price=kaggle["price"] // 70).astype(str).to_numpy()))
+w_rows = Counter(map(tuple, windsor[cols].astype(str).to_numpy()))
+print("Kaggle rows found in the original (price / 70):", sum((k_rows & w_rows).values()), "of", len(kaggle))
+print("original sale missing from the Kaggle file:", list(w_rows - k_rows))
+print("furnishingstatus in the original data:", "furnishingstatus" in windsor.columns)
+```
+
+Two consequences for the project. The data describe **one city in one year,
+1987**: a model fitted on them says nothing about prices today, and the
+brief's "larger errors on new properties" could come from a changed market as
+much as from overfitting. And the `furnishingstatus` column has no documented
+origin; the reference implementation therefore also checks how much the
+results depend on it (@sec-housing-sensitivity).
+
+## Requirements matrix {#sec-housing-requirements}
+
+| # | Requirement | Skills needed | Chapters |
+|---|---|---|---|
+| R1 | Public data set of sales | reading CSV, provenance | @sec-reading-files, @sec-housing-data |
+| R2 | Exploration: types, distributions, missing values, correlations | variable types, skewness, correlation matrix | @sec-variable-types, @sec-describing, @sec-correlation |
+| R3 | Justified preprocessing: missing values, encoding, scaling | MCAR/MAR, one-hot vs ordinal, standardisation, pipelines | @sec-missing, @sec-encoding, @sec-scaling, @sec-leakage |
+| R4 | Unregularised baseline on train and test | least squares, metrics, overfitting gap | @sec-multiple-regression, @sec-regression-metrics, @sec-seeing-overfitting |
+| R5 | Ridge, lasso, elastic net | penalised least squares, scikit-learn's penalties | @sec-regularization |
+| R6 | k-fold CV, same protocol, several penalties | cross-validation, validation curves, nested CV | @sec-cross-validation, @sec-selection |
+| R7 | MSE and $R^2$ on the same scheme, units | MSE/RMSE/$R^2$, log scale | @sec-regression-metrics, @sec-loss-functions |
+| R8 | Non-zero and largest coefficients; differences between methods | shrinkage, soft thresholding, $\lambda_{\max}$, Frisch–Waugh–Lovell | @thm-lasso-orthonormal, @prp-lambda-max, @thm-fwl |
+| R9 | Error bars, error vs penalty, learning curve, residuals by price band | learning curves, residual analysis | @fig-learning-curves, @fig-validation-curve, @sec-housing-residuals |
+| R10 | Narrative for non-programmers, conclusions, recommendation | notebooks, documentation | @sec-dev-environment, @sec-housing-conclusions |
+| R11 | Disciplined use of AI assistants | structured prompting, verification | @sec-structured-prompting, @sec-verification |
+
+: Requirements and where the book teaches them {#tbl-housing-requirements}
+
+## Walkthrough of the published implementation {#sec-housing-walkthrough}
+
+The notebook in `ai-projects` (English version; the Italian original is in the
+`it/` folder) has 24 cells — 19 of code — organised as follows.
+
+**Setup and data.** After a short introduction to the business problem, the
+imports (pandas, NumPy, scikit-learn, seaborn, Matplotlib, SciPy) and the
+data are loaded from the course's URL. `df.shape` gives 545 × 13 and
+`df.isna().sum()` shows **no missing values**; a comment notes that the
+categorical variables are already encoded as integers. The full correlation
+matrix is printed.
+
+**Preparation.** A seed (`random_seed = 42`) is fixed. The furnishing status is
+**one-hot encoded** with `pd.get_dummies(..., drop_first=True)`, with the
+comment that its codes 0, 1, 2 should not be treated as weights. The price
+distribution is examined: skewness 1.21, reduced to 0.14 by
+`np.log1p`, with two histograms; the comment motivates the log transform with
+the need for "normal distributions" for these models. The target is then
+transformed (`y = np.log1p(y)`), the data split 70/30, and a `StandardScaler`
+**fitted on the training part only** and applied to both parts.
+
+**Models.** Two helper functions print the MSE, the $R^2$ and the number of
+non-zero coefficients of a fitted model. A loop over
+`alpha_params = (0.001, 0.01, 0.1, 1, 10)` fits `Ridge`, `Lasso` and
+`ElasticNet(l1_ratio=0.5)` and prints their metrics on training and test
+data. The comments observe that ridge is stable across $\alpha$, while lasso
+and elastic net "drop sharply" from $\alpha = 0.01$ and start zeroing features,
+and that there is no overfitting because train and test $R^2$ are close. A
+**5-fold cross-validation** is then written by hand for ridge — re-fitting the
+scaler inside each fold — and prints mean train and test $R^2$ for each
+$\alpha$ (0.699 and 0.666–0.667). Two figures show the test $R^2$ of the three
+models against $\alpha$ and the coefficient paths.
+
+**Diagnostics and conclusions.** For `Ridge(alpha=0.1)` the residuals are
+plotted against the predicted values and as a histogram; the three largest
+coefficients (area, air conditioning, bathrooms) are printed. The concluding
+text cell reports a ceiling of $R^2 \approx 0.65$, no overfitting but
+"structural underfitting", lasso useful for identifying strong features,
+ridge stable, elastic net similar, and recommends to the agency to focus on
+amenities such as air conditioning.
+
+**What it does well.** A fixed seed; an explicit missing-value check;
+**one-hot encoding of the furnishing status** instead of trusting its integer
+codes (the right call: @sec-housing-sensitivity shows that the natural-order
+ordinal coding fits worse); a skewness check before transforming the target;
+a scaler fitted on training data only — also **inside each fold** of the
+hand-written cross-validation, which many published analyses get wrong
+(@sec-leakage); the count of non-zero coefficients the brief asks for;
+coefficient-path plots; residuals plotted against **predicted** values (the
+correct diagnostic, @sec-housing-residuals); and a conclusion that correctly
+identifies the key fact — the train/test gap is small, so overfitting is not
+the problem.
+
+### Re-executing the notebook {#sec-housing-replay}
+
+Several printed numbers looked surprising: test MSEs of order $10^{-4}$, when
+the variance of $\ln(\text{price})$ is about $0.14$; and a lasso that loses
+all but two features at $\alpha = 0.01$, although @prp-lambda-max predicts
+that on log-prices nothing should vanish before $\alpha \approx 0.2$. The only
+way to settle such questions is to **run the code again**. The cell below
+downloads the notebook from `ai-projects` (pinned to a commit), rebuilds the
+course's CSV from the Kaggle copy (coding furnishing as in fact 3 of
+@sec-housing-data), and executes the notebook's code cells in a fresh
+namespace — first **from top to bottom**, then in the order recorded by the
+execution counters that Jupyter stores in the notebook file.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Show the replay code"
+import io, re, json, contextlib, tempfile, urllib.request
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+NB_URL = ("https://raw.githubusercontent.com/matteo-zirilli/ai-projects/"
+          "2e2c86df3608ff91868a3688c5d3a1d6437a0843/Real_Estate_Price_Forecasting.ipynb")
+nb = json.loads(urllib.request.urlopen(NB_URL, timeout=60).read())
+cells = {i: c for i, c in enumerate(nb["cells"]) if c["cell_type"] == "code"}
+code = {i: "".join(c["source"]) for i, c in cells.items()}
+published = {i: "".join("".join(o.get("text", "")) for o in c.get("outputs", [])) for i, c in cells.items()}
+counts = {i: c.get("execution_count") for i, c in cells.items()}
+
+course_csv = Path(tempfile.mkdtemp()) / "housing_course.csv"
+mlbook.load_housing(encoded=True).to_csv(course_csv, index=False)
+
+def replay(order):
+    """Execute the notebook's code cells in the given order; return each cell's printed output and the namespace."""
+    ns, out = {}, {}
+    for i in order:
+        src = (code[i].replace("https://proai-datasets.s3.eu-west-3.amazonaws.com/housing.csv", str(course_csv))
+                      .replace("drop(columns= 'price', axis = 1)", "drop(columns='price')")   # pandas 3 (review item 12)
+                      .replace("plt.show()", "plt.close('all')"))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                exec(src, ns)
+        except Exception as err:
+            buf.write(f"[{type(err).__name__}: {err}]")
+        out[i] = buf.getvalue()
+    return out, ns
+
+def parse_models(text):
+    """The table printed by the notebook's model loop (cell 16)."""
+    pat = (r"(RIDGE|LASSO|ELASTIC NET) MODEL with alpha =([\d.]+)\nTRAIN\nMSE: ([\d.e-]+)\nR2: ([-\d.e]+)\n"
+           r"Model with: (\d+) active.*?\nTEST\nMSE: ([\d.e-]+)\nR2: ([-\d.e]+)")
+    df = pd.DataFrame(re.findall(pat, text), columns=["model", "alpha", "train MSE", "train R2", "active", "test MSE", "test R2"])
+    return df.astype({"alpha": float, "train MSE": float, "train R2": float, "active": int, "test MSE": float, "test R2": float})
+
+top_down, ns_top = replay(sorted(code))
+print("execution counters stored in the notebook (cell: counter):",
+      {i: counts[i] for i in sorted(counts, key=lambda i: counts[i])})
+```
+
+The counters show that the cells were **not** run from top to bottom: the
+seed (cell 8) got counter 12, after the cells around it; the model loop
+(cell 16) got 46, after the cross-validation (39) and the plots (34, 38);
+counters 10 and 11 are missing — runs of cells whose counters were later
+overwritten by re-runs. One hypothesis explains everything: the cell that
+transforms the target and splits the data (cell 11) was first run **before**
+the seed existed. It executed `y = np.log1p(y)` and then failed on the
+undefined `random_seed`; after the seed cell was run, cell 11 was run again —
+applying the logarithm a **second** time. Replaying in counter order with
+that one extra run:
+
+```{python}
+order = [i for i in sorted(counts, key=lambda i: counts[i])]
+hypothesis = order.copy()
+hypothesis.insert(hypothesis.index(8), 11)          # cell 11 once before the seed: log applied, then NameError
+by_counter, ns_hyp = replay(hypothesis)
+
+pub, top, hyp = (parse_models(t[16]) for t in (published, top_down, by_counter))
+nums = ["train MSE", "train R2", "test MSE", "test R2"]
+print("model loop, largest |published - replay| over all 15 rows x 4 metrics:")
+print(f"  replay in counter order + hypothesis: {np.abs(pub[nums].to_numpy() - hyp[nums].to_numpy()).max():.1e}")
+print(f"  replay from top to bottom:            {np.abs(pub[nums].to_numpy() - top[nums].to_numpy()).max():.1e}")
+print("cross-validation cell, published vs hypothesis replay identical:", published[17].strip() == by_counter[17].strip())
+print(f"variance of the target in the published run: {np.var(ns_hyp['y']):.5f} "
+      f"(ln(price): {np.var(np.log(mlbook.load_housing()['price'])):.5f})")
+print("rows in the 'training set' used by the published model loop:", ns_hyp["x_train"].shape[0],
+      "(the 70/30 split has", round(0.7 * 545), "rows)")
+```
+
+Every number printed by the published model loop is reproduced to the last
+digit (differences of order $10^{-16}$, floating-point noise), and so is the
+cross-validation output. The forensic reconstruction yields three findings:
+
+1. **The target was transformed twice**: the published results model
+   $\ln(1 + \ln(1 + \text{price}))$, a variable with variance about $0.0005$.
+   That is why the MSEs are of order $10^{-4}$.
+2. **The lasso and elastic-net "collapse" is an artefact of that scale.** By
+   @prp-lambda-max the lasso keeps any feature only while $\alpha <
+   \operatorname{sd}(y)\max_j|r_j|$; with the doubly logged target this
+   threshold is about $0.0226 \times 0.54 \approx 0.012$, so $\alpha = 0.01$
+   already leaves only two features and larger values none. Ridge's penalty
+   does not scale with the target (@prp-penalty-scale), so ridge looked
+   "stable". On the correctly transformed target nothing collapses (table
+   below).
+3. **The "hold-out" metrics are not hold-out metrics.** The model loop was last
+   run *after* the hand-written cross-validation, which reuses the names
+   `x_train`, `x_test`: the printed TRAIN/TEST figures, the $R^2$-vs-$\alpha$
+   plot, the residual plots and the top-three coefficients all come from the
+   **last fold** of the cross-validation (436/109 rows), not from the 70/30
+   split.
+
+Run from top to bottom, the same code gives the results the analysis was meant
+to produce:
+
+```{python}
+compare = pd.DataFrame({
+    "model": pub["model"], "alpha": pub["alpha"],
+    "active (published)": pub["active"], "test R2 (published)": pub["test R2"].round(3),
+    "active (top to bottom)": top["active"], "test R2 (top to bottom)": top["test R2"].round(3),
+    "test MSE (top to bottom)": top["test MSE"].round(4)})
+compare
+```
+
+On the log-price target, lasso and elastic net keep all 13 coefficients up to
+$\alpha = 0.01$ and perform close to ridge; at $\alpha = 0.1$ they start
+removing features — a penalty already too strong for these data — and at
+$\alpha \ge 1$ (above $\lambda_{\max} \approx 0.2$) they remove all of
+them. The grid simply spans the wrong range for the lasso, whatever the
+scale of the target (review item 2). The conclusions "Ridge
+gave the best results" and "Lasso and Elastic Net collapse" do not survive;
+"no overfitting" does.
+
+::: {.callout-important}
+## The lesson: restart and run all
+A notebook stores the outputs of whatever was executed, in whatever order. A
+large study of notebooks on GitHub re-executed 863 878 of them: about 24% ran
+without errors and about 4% reproduced their stored results
+[@pimentel2019]. Before sharing a notebook: **Kernel → Restart & Run All**,
+then read the outputs again. And write cells that can be re-run safely: never
+overwrite a variable with a function of itself (`y = np.log1p(y)`); create a
+new name (`y_log = np.log(y)`), so that running the cell twice does the same
+thing as running it once.
+:::
+
+### Code review: refinements suggested by this book {#sec-housing-review}
+
+| # | Observation | Why it matters | Suggested change | Chapter |
+|---|---|---|---|---|
+| 1 | Cells executed out of order; the target was log-transformed twice | all published metrics refer to $\ln(1+\ln(1+\text{price}))$ | Restart & Run All before publishing; idempotent cells (`y_log = ...`) | @sec-housing-replay |
+| 2 | One $\alpha$ grid (0.001–10) for ridge, lasso and elastic net | the three penalties are scaled differently; the lasso's useful range depends on the target's scale | a separate grid per model; for lasso/EN anchored at $\lambda_{\max}$ | @tbl-sklearn-penalties, @prp-lambda-max |
+| 3 | No unregularised baseline (`LinearRegression` is imported but never used) | the brief's starting point; without it "does regularisation help?" cannot be answered | fit OLS with the same protocol | @sec-multiple-regression |
+| 4 | Cross-validation only for ridge, and only $R^2$ | lasso and elastic net are compared on one split; the MSE the brief asks for is never cross-validated | the same repeated k-fold for every model, MSE and $R^2$ | @sec-cross-validation |
+| 5 | Conclusions drawn from one split | on these data one split's test $R^2$ ranges from about 0.50 to 0.77 | repeated k-fold; report mean ± standard error | @fig-holdout-variability |
+| 6 | The final model is chosen by its test-set score | selection on the test set makes the reported score optimistic | choose $\alpha$ by CV on the training set; test once; nested CV for the comparison | @sec-selection |
+| 7 | MSE reported on the transformed scale without units | the brief asks to comment on the magnitude; $10^{-4}$ means nothing to a client | report RMSE on the log scale (≈ relative error) and errors in price units after back-transformation | @sec-housing-test |
+| 8 | Log transform justified by "normality" of the target | the Gaussian assumption concerns the errors, not the target; the real reasons are multiplicative effects, relative errors and less heteroscedasticity | justify by relative errors; `np.log` suffices (prices are large) | @thm-ls-mle, @sec-describing |
+| 9 | Correlation matrix includes `furnishingstatus` as an integer | its codes (furnished = 1, semi = 2, unfurnished = 0) are not even ordered | exclude it, or correlate its one-hot columns | @sec-variable-types |
+| 10 | Business conclusion: add air conditioning and amenities to raise the value | a regression coefficient is an association, not the effect of an intervention; and `area` is the **lot**, not the floor area | phrase as associations; read @tbl-housing-columns | @thm-fwl, @sec-correlation |
+| 11 | Conclusion claims both "roughly normal" and "structured" residuals; no learning curve; residuals not examined by price band | the brief asks for both; the claims are not supported by a figure | learning curve; residuals by band of predicted and of actual price | @sec-housing-residuals |
+| 12 | `df.drop(columns='price', axis=1)` | raises an error in pandas 3 | `df.drop(columns="price")` | @sec-pandas |
+| 13 | `random_state` passed to `Ridge`/`Lasso` | has no effect with the default solvers; suggests randomness that is not there | omit it | — |
+| 14 | Manual preprocessing (dummies before the split, scaler per fold by hand) | correct here, but easy to break when the code changes | `ColumnTransformer` + `Pipeline` inside every CV | @sec-leakage |
+| 15 | Narrative mostly in code comments | the brief asks for text cells readable by non-programmers | Markdown cells: what, why, what we observed | @sec-housing-conclusions |
+
+: Code review of the published implementation {#tbl-housing-review}
+
+None of these items reflects a misunderstanding of the method: the
+preprocessing choices and the main conclusion (no overfitting) are right. Most
+of the review — items 1 to 7 — is about the **evaluation protocol**, which is
+exactly where the brief puts the value of the work, and item 1 shows how a
+notebook can silently drift away from its own code.
+
+## Reference implementation {#sec-housing-reference}
+
+The code below follows the brief step by step. In a notebook each block would
+be one cell, preceded by a text cell explaining it (requirement R10); here the
+explanations are the surrounding paragraphs.
+
+### Setup, split and preprocessing
+
+The test set is set aside **first**: 20% of the sales, stratified by price
+quintile so that cheap and expensive houses are represented in both parts. It
+is used **once**, at the end (@sec-housing-test).
+
+```{python}
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import (GridSearchCV, KFold, RepeatedKFold, cross_val_predict,
+                                     cross_val_score, cross_validate, learning_curve, train_test_split)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, OrdinalEncoder, StandardScaler
+
+houses = mlbook.load_housing()
+NUMERIC = ["bedrooms", "bathrooms", "stories", "parking"]
+BINARY = ["mainroad", "guestroom", "basement", "hotwaterheating", "airconditioning", "prefarea"]
+FURNISHING = [["unfurnished", "semi-furnished", "furnished"]]
+
+X = houses.drop(columns="price")
+y_log = np.log(houses["price"])                         # a new name: re-running the cell changes nothing
+price_band = pd.qcut(houses["price"], 5, labels=False)
+X_train, X_test, y_train, y_test = train_test_split(X, y_log, test_size=0.2, stratify=price_band, random_state=42)
+print(f"training {len(X_train)} sales, test {len(X_test)} sales (kept aside until the end)")
+```
+
+The data have no missing values (@sec-first-look), so nothing is deleted or
+imputed for the analysis. The pipeline nevertheless includes median /
+most-frequent **imputers**: a valuation engine will receive incomplete records,
+and the imputers learn their fill values from the training data only. The
+yes/no columns become 0/1; the furnishing status is one-hot encoded with
+"unfurnished" as reference (its three levels are not equally spaced in their
+effect, @sec-housing-sensitivity); every column is standardised so that the
+penalties treat them alike (@sec-scaling). The lot area enters as its
+**logarithm**, so that its coefficient is an elasticity like the target's
+(@fig-simple-fit): this is the specification of the original study
+[@anglin1996] and it fits slightly better (@sec-housing-sensitivity).
+
+```{python}
+def make_preprocessor(log_area=True, furnishing="onehot"):
+    """Imputation, encoding and scaling, learned on the data passed to fit()."""
+    area_steps = [("impute", SimpleImputer(strategy="median"))]
+    if log_area:
+        area_steps.append(("log", FunctionTransformer(np.log, feature_names_out="one-to-one")))
+    parts = [
+        ("area", Pipeline(area_steps + [("scale", StandardScaler())]), ["area"]),
+        ("num", Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())]), NUMERIC),
+        ("bin", Pipeline([("impute", SimpleImputer(strategy="most_frequent")),
+                          ("encode", OrdinalEncoder(categories=[["no", "yes"]] * len(BINARY))),
+                          ("scale", StandardScaler())]), BINARY)]
+    if furnishing == "onehot":
+        enc = OneHotEncoder(categories=FURNISHING, drop="first", sparse_output=False)
+    elif furnishing == "ordinal":                                   # natural order
+        enc = OrdinalEncoder(categories=FURNISHING)
+    elif furnishing == "course codes":                              # furnished = 1, semi-furnished = 2
+        enc = OrdinalEncoder(categories=[["unfurnished", "furnished", "semi-furnished"]])
+    if furnishing != "none":
+        parts.append(("furn", Pipeline([("impute", SimpleImputer(strategy="most_frequent")), ("encode", enc),
+                                        ("scale", StandardScaler())]), ["furnishingstatus"]))
+    return ColumnTransformer(parts, verbose_feature_names_out=False)
+
+def model(regressor, **prep):
+    return Pipeline([("prep", make_preprocessor(**prep)), ("reg", regressor)])
+
+CV = RepeatedKFold(n_splits=5, n_repeats=5, random_state=0)      # 25 fits per evaluation
+FEATURES = make_preprocessor().fit(X_train).get_feature_names_out()
+print(len(FEATURES), "features:", ", ".join(FEATURES))
+```
+
+### The baseline: is there overfitting? {#sec-housing-baseline}
+
+```{python}
+ols = model(LinearRegression())
+cv_ols = cross_validate(ols, X_train, y_train, cv=CV, scoring=("neg_mean_squared_error", "r2"), return_train_score=True)
+ols.fit(X_train, y_train)
+baseline = pd.DataFrame({
+    "MSE (log price)": [-cv_ols["train_neg_mean_squared_error"].mean(), -cv_ols["test_neg_mean_squared_error"].mean()],
+    "R²": [cv_ols["train_r2"].mean(), cv_ols["test_r2"].mean()]},
+    index=["fitted folds (training)", "held-out folds (validation)"])
+print(baseline.round(4))
+gap = baseline.iloc[1, 0] / baseline.iloc[0, 0] - 1
+print(f"validation MSE exceeds training MSE by {100 * gap:.0f}%")
+```
+
+The validation error exceeds the training error by less than 10%, and the
+$R^2$ drops by about three hundredths: the textbook signature of a model with
+**little variance** (@tbl-diagnosis). With 13 coefficients and 436 training
+sales — more than 30 sales per coefficient — and VIFs below 1.5
+(@sec-multicollinearity), least squares has little room to overfit. The
+learning curve confirms it:
+
+```{python}
+#| label: fig-housing-learning-curve
+#| fig-cap: "Learning curve of the baseline (least squares on log-prices, repeated 5-fold CV). The two curves meet at a level well above zero: more data of the same kind would barely help; the remaining error is bias or noise, not variance."
+sizes, tr, va = learning_curve(ols, X_train, y_train, cv=CV, train_sizes=np.linspace(0.1, 1, 10),
+                               scoring="neg_mean_squared_error")
+fig, ax = plt.subplots(figsize=(6.5, 3.2))
+ax.plot(sizes, -tr.mean(1), marker="o", ms=4, label="training")
+ax.plot(sizes, -va.mean(1), marker="o", ms=4, label="cross-validation")
+ax.fill_between(sizes, -va.mean(1) - va.std(1) / 5, -va.mean(1) + va.std(1) / 5, color=mlbook.COLORS[1], alpha=0.2, lw=0)
+ax.set_xlabel("training sales"); ax.set_ylabel("MSE of ln(price)"); ax.legend()
+plt.show()
+```
+
+The brief's hypothesis — overfitting — is **not supported** by the data.
+Regularisation can still be compared, as requested, but we should not expect
+it to reduce the error much (@thm-bias-variance: it trades variance, and there
+is little variance to trade).
+
+### Ridge, lasso and elastic net {#sec-housing-regularised}
+
+Each model gets its own grid of 31 penalty values, wide enough to show the
+whole curve: ridge from $10^{-2}$ to $10^4$; lasso from $\lambda_{\max}$
+(@prp-lambda-max, computed on the training data) down to $10^{-4}\lambda_{\max}$;
+elastic net with mixes 0.1, 0.5 and 0.9 and a grid up to ten times
+$\lambda_{\max}$ (its zero point is $\lambda_{\max}/\text{l1\_ratio}$). Every
+candidate is scored by the same repeated 5-fold cross-validation, inside which
+the whole pipeline is refitted.
+
+```{python}
+Z = make_preprocessor().fit_transform(X_train)
+lam_max = np.max(np.abs(Z.T @ (y_train - y_train.mean()).to_numpy())) / len(y_train)
+grids = {
+    "ridge": (Ridge(), {"reg__alpha": np.logspace(-2, 4, 31)}),
+    "lasso": (Lasso(max_iter=100_000), {"reg__alpha": lam_max * np.logspace(-4, 0, 31)}),
+    "elastic net": (ElasticNet(max_iter=100_000), {"reg__alpha": lam_max * np.logspace(-4, 1, 31),
+                                                   "reg__l1_ratio": [0.1, 0.5, 0.9]}),
+}
+searches = {name: GridSearchCV(model(est), grid, cv=CV, scoring="neg_mean_squared_error").fit(X_train, y_train)
+            for name, (est, grid) in grids.items()}
+print(f"lambda_max on the training data = {lam_max:.3f}")
+for name, gs in searches.items():
+    params = {k.replace("reg__", ""): round(float(v), 5) for k, v in gs.best_params_.items()}
+    print(f"{name:12s} best {params}  CV MSE {-gs.best_score_:.4f}")
+```
+
+```{python}
+#| label: fig-housing-validation
+#| fig-cap: "Error and sparsity as functions of the penalty (training data, repeated 5-fold CV). Top: cross-validated MSE of ln(price) ± 1 standard error; dashed: least squares. Bottom: number of non-zero coefficients of the model fitted on all training data. For the elastic net, the curve of the best mix is shown."
+def curve(gs, l1=None):
+    r = pd.DataFrame(gs.cv_results_)
+    if l1 is not None:
+        r = r[r["param_reg__l1_ratio"] == l1]
+    alphas = r["param_reg__alpha"].astype(float).to_numpy()
+    return alphas, -r["mean_test_score"].to_numpy(), r["std_test_score"].to_numpy() / np.sqrt(CV.get_n_splits())
+
+ols_cv_mse = -cv_ols["test_neg_mean_squared_error"].mean()
+fig, axes = plt.subplots(2, 3, figsize=(10, 4.8), sharex="col", gridspec_kw={"height_ratios": [2, 1]})
+for col, (name, gs) in enumerate(searches.items()):
+    l1 = gs.best_params_.get("reg__l1_ratio")
+    alphas, mse, se = curve(gs, l1)
+    c = mlbook.COLORS[col]
+    axes[0, col].plot(alphas, mse, color=c); axes[0, col].fill_between(alphas, mse - se, mse + se, color=c, alpha=0.2, lw=0)
+    axes[0, col].axhline(ols_cv_mse, color=mlbook.MUTED, ls="--", lw=1)
+    axes[0, col].set_ylim(0.040, 0.075); axes[0, col].set_title(name + (f" (l1_ratio {l1})" if l1 else ""))
+    est = grids[name][0]
+    nz = [np.count_nonzero(model(est.set_params(alpha=a, **({"l1_ratio": l1} if l1 else {}))).fit(X_train, y_train)[-1].coef_)
+          for a in alphas]
+    axes[1, col].step(alphas, nz, where="mid", color=c)
+    axes[1, col].set_xscale("log"); axes[1, col].set_xlabel("alpha (scikit-learn)"); axes[1, col].set_ylim(-0.5, 14)
+axes[0, 0].set_ylabel("CV MSE"); axes[1, 0].set_ylabel("non-zero")
+fig.tight_layout(); plt.show()
+```
+
+The three curves have the same shape: flat — at the level of least squares —
+until the penalty starts to remove real signal, then rising. The lasso keeps
+all 13 coefficients throughout the flat region; it starts dropping features
+only where the error is already increasing. Within one standard error of
+the best score (@sec-selection), no model reaches a sparser solution:
+**every characteristic carries some signal**.
+
+### Comparing the models fairly {#sec-housing-comparison}
+
+The best cross-validation scores above are optimistic (each is the best of
+31–93 candidates, @sec-selection). For an honest comparison, **nested
+cross-validation** repeats the whole tuning procedure inside each of 5 outer
+folds; least squares, which has nothing to tune, is evaluated on the same outer
+folds.
+
+```{python}
+outer = KFold(5, shuffle=True, random_state=1)
+inner = KFold(5, shuffle=True, random_state=2)
+candidates = {"least squares": model(LinearRegression())}
+candidates |= {name: GridSearchCV(model(est), grid, cv=inner, scoring="neg_mean_squared_error")
+               for name, (est, grid) in grids.items()}
+rows = {}
+for name, est in candidates.items():
+    r = cross_validate(est, X_train, y_train, cv=outer, scoring=("neg_mean_squared_error", "r2"))
+    mse = -r["test_neg_mean_squared_error"]
+    est.fit(X_train, y_train)
+    final = est.best_estimator_ if isinstance(est, GridSearchCV) else est
+    rows[name] = {"MSE (log)": mse.mean(), "± s.e.": mse.std(ddof=1) / np.sqrt(len(mse)),
+                  "RMSE (log)": np.sqrt(mse.mean()), "R²": r["test_r2"].mean(),
+                  "non-zero coef.": np.count_nonzero(final[-1].coef_)}
+comparison = pd.DataFrame(rows).T
+print(comparison.round(4).to_string())
+```
+
+```{python}
+#| label: fig-housing-comparison
+#| fig-cap: "Nested cross-validated MSE of ln(price) of the four models (mean over 5 outer folds, bars ±1 standard error; the horizontal axis does not start at zero). The differences between models are far smaller than the uncertainty of each estimate."
+fig, ax = plt.subplots(figsize=(6.2, 2.6))
+pos = np.arange(len(comparison))
+ax.errorbar(comparison["MSE (log)"], pos, xerr=comparison["± s.e."], fmt="o", ms=8, color=mlbook.COLORS[0],
+            ecolor=mlbook.INK2, capsize=4)
+ax.set_yticks(pos, comparison.index); ax.invert_yaxis(); ax.set_ylim(len(pos) - 0.5, -0.5)
+ax.set_xlabel("nested CV MSE of ln(price) (mean ± 1 s.e.)")
+for p, v in zip(pos, comparison["MSE (log)"]):
+    ax.annotate(f"{v:.4f}", (v, p), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8, color=mlbook.INK2)
+plt.show()
+```
+
+The four models are indistinguishable: their errors differ in the fourth
+decimal, while the standard error is in the third. In the units the brief
+cares about, an RMSE of about 0.21 on log-prices means that a typical
+valuation is off by roughly 20% of the price ($e^{0.21} \approx 1.23$ and
+$e^{-0.21} \approx 0.81$).
+
+### What drives the price: the coefficients {#sec-housing-coefficients}
+
+All features are standardised, so the coefficients of the numerical features
+are comparable with one another; those of the 0/1 features measure "having the
+feature" in standard-deviation units of the indicator. The table shows the
+four fitted models side by side, and the ratio $e^{b}$ as a percentage effect
+on the price for a one-standard-deviation increase.
+
+```{python}
+fitted = {"least squares": model(LinearRegression()).fit(X_train, y_train)}
+fitted |= {name: gs.best_estimator_ for name, gs in searches.items()}
+coefs = pd.DataFrame({name: m[-1].coef_ for name, m in fitted.items()}, index=FEATURES)
+coefs["% per s.d. (OLS)"] = 100 * (np.exp(coefs["least squares"]) - 1)
+coefs = coefs.sort_values("least squares", key=np.abs, ascending=False)
+print(coefs.round(3).to_string())
+print("\nnon-zero:", {name: int(np.count_nonzero(m[-1].coef_)) for name, m in fitted.items()})
+```
+
+At their cross-validated penalties, the three regularised models are almost
+indistinguishable from least squares: all keep the 13 coefficients, ridge
+shrinks them all a little, lasso and elastic net barely touch them. The
+difference between the methods shows along their **paths**
+(@fig-reg-paths): increasing the penalty, ridge shrinks every coefficient
+smoothly and never removes one, while the lasso removes them one by one. The
+order in which the lasso keeps features as the penalty grows is a ranking of
+their importance *given the others*:
+
+```{python}
+alphas = lam_max * np.logspace(0, -3, 300)
+entered = {}
+for a in alphas:
+    c = model(Lasso(alpha=a, max_iter=100_000)).fit(X_train, y_train)[-1].coef_
+    for f in FEATURES[c != 0]:
+        entered.setdefault(f, a / lam_max)
+print("order in which features enter the lasso (alpha / lambda_max at entry):")
+print(", ".join(f"{f} ({v:.2f})" for f, v in entered.items()))
+```
+
+The lot area enters first, then bathrooms, storeys and air conditioning,
+then the preferred neighbourhood — the same features that dominate the
+least-squares coefficients and the correlation matrix (@fig-corr-matrix); the
+two furnishing indicators and the recreational room enter last. For explaining
+valuations to clients, the honest statement is: *in this market, larger lots,
+more storeys and bathrooms, central air conditioning, a furnished or
+semi-furnished house, the preferred neighbourhood and a full basement are
+associated with higher prices, other recorded characteristics being equal*; these are associations in 1987 Windsor sales,
+not the effect of renovating a house (@sec-correlation).
+
+### Test set and errors in price units {#sec-housing-test}
+
+The test set is now used, once, for the four models. Errors are reported on
+the log scale and in **price units**. Back-transforming a prediction of
+$\ln y$ by $e^{\hat{\ln y}}$ estimates the *median* rather than the mean price
+(the exponential of a mean of logs is a geometric mean); Duan's **smearing**
+factor $\frac1n\sum_i e^{e_i}$, the average of the exponentiated training
+residuals, corrects the bias without assuming normal errors [@duan1983].
+
+```{python}
+rows = {}
+for name, m in fitted.items():
+    pred_log = m.predict(X_test)
+    smear = np.mean(np.exp(y_train - m.predict(X_train)))           # Duan's smearing factor, from training residuals
+    price, pred_price = np.exp(y_test), np.exp(pred_log) * smear
+    rows[name] = {"MSE (log)": mean_squared_error(y_test, pred_log), "R² (log)": r2_score(y_test, pred_log),
+                  "RMSE (price)": np.sqrt(mean_squared_error(price, pred_price)),
+                  "MAE (price)": mean_absolute_error(price, pred_price),
+                  "median |error| %": 100 * np.median(np.abs(pred_price - price) / price),
+                  "smearing": smear}
+test_results = pd.DataFrame(rows).T
+print(test_results.round(4).to_string())
+```
+
+The test results agree with the cross-validation: the four models are
+equivalent. The MSE on log-prices is about 0.04; in price units the RMSE is
+about a million (the data set's prices are 1987 Canadian dollars multiplied by
+70, so the absolute figures have no meaning for a client — the **relative**
+error does): half of the test houses are valued within about 13% of their
+sale price.
+
+### Residuals: does the model err systematically? {#sec-housing-residuals}
+
+Residuals are examined on **cross-validated predictions** of the training
+data (each house predicted by a model that did not see it), so that the test
+set stays untouched for the figures above.
+
+```{python}
+#| label: fig-housing-residuals
+#| fig-cap: "Residuals of the chosen model (ridge, cross-validated predictions on the training data). Left: residual against predicted ln(price). Centre: distribution of the residuals. Right: mean residual by quintile of the predicted price (blue) and of the actual price (orange); bars are ±1 standard error."
+chosen = searches["ridge"].best_estimator_
+cv_pred = cross_val_predict(chosen, X_train, y_train, cv=KFold(5, shuffle=True, random_state=0))
+resid = y_train - cv_pred
+
+def by_band(values):
+    bands = pd.qcut(values, 5, labels=[f"Q{i}" for i in range(1, 6)])
+    g = pd.Series(resid.to_numpy()).groupby(np.asarray(bands), observed=True)
+    return g.mean(), g.std() / np.sqrt(g.size())
+
+fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.2))
+axes[0].scatter(cv_pred, resid, s=10, alpha=0.6, color=mlbook.COLORS[0]); axes[0].axhline(0, color=mlbook.INK2, lw=1)
+axes[0].set_xlabel("predicted ln(price)"); axes[0].set_ylabel("residual")
+axes[1].hist(resid, bins=30, color=mlbook.COLORS[0], edgecolor="#fcfcfb"); axes[1].set_xlabel("residual")
+for k, (label, values) in enumerate([("by predicted price", cv_pred), ("by actual price", y_train.to_numpy())]):
+    m, s = by_band(values)
+    axes[2].errorbar(np.arange(5) + (k - 0.5) * 0.18, m, yerr=s, fmt="o", color=mlbook.COLORS[k], label=label, capsize=3)
+axes[2].axhline(0, color=mlbook.INK2, lw=1); axes[2].set_xticks(range(5), [f"Q{i}" for i in range(1, 6)])
+axes[2].set_ylabel("mean residual"); axes[2].legend(fontsize=8)
+fig.tight_layout(); plt.show()
+print(f"skewness of the residuals {pd.Series(resid).skew():.2f}; share of |residual| > 0.4: {np.mean(np.abs(resid) > 0.4):.1%}")
+m_pred, _ = by_band(cv_pred); m_act, _ = by_band(y_train.to_numpy())
+print("mean residual by predicted-price quintile:", m_pred.round(3).tolist())
+print("mean residual by actual-price quintile:   ", m_act.round(3).tolist())
+```
+
+Against the **predicted** price the residuals are centred on zero in every
+band: the model does not systematically over- or under-value houses that it
+*predicts* to be cheap or expensive, and their spread is roughly constant
+(the log scale removed the funnel shape that raw prices would show). Their
+distribution is roughly symmetric (skewness close to zero), with a minority of
+sales far from any prediction: 8% of residuals exceed 0.4 in absolute value,
+i.e. the valuation is off by a factor of 1.5 or more.
+
+Against the **actual** price, instead, the pattern is strong: cheap houses
+are over-valued and expensive ones under-valued, by roughly 15–20% in the
+lowest and highest quintiles. This is the answer to the brief's question "does the model err
+systematically on the most expensive houses?" — yes, and it must be read
+correctly, because part of it is a mathematical necessity, not a defect.
+
+::: {#prp-residual-actual}
+## Residuals always correlate with the actual value
+For a least-squares fit with an intercept, on its training data, the
+residuals are uncorrelated with the fitted values but have correlation
+$\sqrt{1 - R^2}$ with the actual values.
+:::
+
+*In one line:* whenever the model explains only part of the price, the
+houses that turned out most expensive are, on average, the ones it
+under-predicted — regression towards the mean, again (@exr-ml4-regression-to-mean).
+
+::: {.deep kind="proof"}
+## Proof of @prp-residual-actual
+The residuals $e$ sum to zero and are orthogonal to the fitted values
+(@thm-normal-equations), so $\sum_i e_i(\hat y_i - \bar y) = 0$: zero
+correlation. With the actual values, $\sum_i e_i(y_i - \bar y) = \sum_i
+e_i(\hat y_i - \bar y + e_i) = \sum_i e_i^2 = \mathrm{SSE}$, so the
+correlation is $\mathrm{SSE}/\sqrt{\mathrm{SSE}\cdot\mathrm{SST}} =
+\sqrt{\mathrm{SSE}/\mathrm{SST}} = \sqrt{1 - R^2}$. $\blacksquare$
+:::
+
+With $R^2 \approx 0.7$ the correlation is about 0.55, whatever the model: the
+pattern by actual price measures how much of the price the features leave
+unexplained. For the business it means that **for the most expensive
+properties, the model's valuation will tend to be too low** (and for the
+cheapest, too high): what makes them exceptional is precisely what the 12
+recorded characteristics do not capture. Reducing it requires better
+features (floor area, location, condition, date of sale), not regularisation.
+
+### Sensitivity: the furnishing column and the lot area {#sec-housing-sensitivity}
+
+The furnishing status has no documented origin (@sec-housing-data), and its
+coding was a decision of the analysis. How much do the results depend on
+these choices?
+
+```{python}
+variants = {
+    "reference (log area, one-hot furnishing)": {},
+    "area instead of log area": {"log_area": False},
+    "furnishing ordinal, natural order": {"furnishing": "ordinal"},
+    "furnishing ordinal, course codes (1, 2, 0)": {"furnishing": "course codes"},
+    "without furnishing": {"furnishing": "none"},
+}
+sens = {}
+for name, prep in variants.items():
+    s = -cross_val_score(model(LinearRegression(), **prep), X_train, y_train, cv=CV, scoring="neg_mean_squared_error")
+    sens[name] = {"CV MSE (log)": s.mean(), "± s.e.": s.std(ddof=1) / np.sqrt(len(s))}
+print(pd.DataFrame(sens).T.round(4).to_string())
+```
+
+The logarithm of the lot area helps a little; one-hot encoding of the
+furnishing status is the best of the codings — slightly better than the
+natural-order ordinal coding, because semi-furnished and furnished houses have
+almost the same coefficient relative to unfurnished ones (equal spacing is
+the wrong assumption); the integer codes of the course's file, which happen to put
+both furnished levels above unfurnished, do almost as well; dropping the
+column costs about two standard errors. The undocumented column carries some signal, but the conclusions of the
+analysis do not depend on it.
+
+### Conclusions and recommendation {#sec-housing-conclusions}
+
+Written as the closing text cell of the notebook, for readers who do not write
+code:
+
+> **What we did.** We compared four ways of estimating the sale price from
+> twelve characteristics of a house: ordinary linear regression and its three
+> regularised versions (ridge, lasso, elastic net). Every model was tuned and
+> evaluated with the same repeated cross-validation on 80% of the sales, and
+> checked once on the remaining 20%.
+>
+> **What we found.** (1) The current model does **not** overfit: its errors
+> on unseen sales are only a few percent larger than on the sales it was
+> fitted on, and adding data of the same kind would hardly help. (2)
+> Consequently, regularisation does not improve accuracy: the four models
+> make the same errors, to within the measurement uncertainty. (3) Half of the
+> valuations are within about 13% of the sale price; about one in twelve is
+> off by a factor of 1.5 or more. (4) The model undervalues the most
+> expensive properties and overvalues the cheapest, by about 15–20% on average;
+> this reflects what the twelve characteristics cannot see, not a technical
+> error. (5) All twelve characteristics contribute; lot size, number of storeys,
+> central air conditioning, bathrooms, furnishing and the preferred
+> neighbourhood are the strongest *associations* with price.
+>
+> **Recommendation.** Keep a linear model on the logarithm of the price, with
+> a light ridge penalty (it costs nothing in accuracy and protects against
+> unstable coefficients if correlated features are added later), deployed as a
+> single pipeline with the preprocessing. Report each valuation with its
+> typical relative uncertainty (±20–25%). The larger errors on new properties
+> are better explained by what the data do not contain — floor area, exact
+> location, condition, and the date of the sale (these data are from 1987) —
+> than by overfitting: improving the **data** is the next step, not tuning
+> the penalty.
+
+### How the reference implementation meets the requirements
+
+| Requirement | Where |
+|---|---|
+| R1 data | @sec-housing-data (provenance verified), `mlbook.load_housing` |
+| R2 exploration | @sec-first-look, @fig-price-skew, @fig-corr-matrix, @tbl-housing-columns |
+| R3 preprocessing | `make_preprocessor`: imputers, 0/1 and one-hot encoding, standardisation, log area |
+| R4 baseline | @sec-housing-baseline, @fig-housing-learning-curve |
+| R5–R6 three models, CV, penalty grids | @sec-housing-regularised, @fig-housing-validation, @sec-housing-comparison |
+| R7 MSE and $R^2$, units | @sec-housing-comparison, @sec-housing-test |
+| R8 coefficients | @sec-housing-coefficients |
+| R9 charts | @fig-housing-comparison, @fig-housing-validation, @fig-housing-learning-curve, @fig-housing-residuals |
+| R10 narrative and recommendation | the text around each block; @sec-housing-conclusions |
+| R11 AI assistants | the checklist of @sec-verification applied in @sec-housing-review (leakage, metrics, re-execution) |
+
+## Extensions {#sec-housing-extensions}
+
+1. **Prediction intervals.** Report each valuation with an interval, using the
+   empirical quantiles of the cross-validated residuals (on the log scale), and
+   check its coverage on the test set.
+2. **Non-linear effects.** Add interactions (for instance, bathrooms ×
+   storeys) or splines of the log area, with ridge to control the extra
+   variance; compare by nested cross-validation (@sec-polynomial).
+3. **Market segments.** Cluster the houses as in @exr-ml7-houses and examine
+   the residuals by segment; if segments are used as a feature, fit the
+   clustering inside the pipeline (@sec-leakage).
+4. **The original data.** Repeat the analysis on the 546 sales of the original
+   study [@anglin1996data] without the undocumented furnishing column, and
+   compare with the semiparametric results of Anglin and Gençay.
+5. **A model card.** Document the final model — intended use, data, metrics,
+   limitations (1987, one city, associations not effects) — following the
+   "model cards" template [@mitchell2019].
+6. **AI-assisted review.** Give an assistant the requirements of
+   @sec-housing-brief and the original notebook with a structured prompt
+   (@sec-structured-prompting), ask for a review, and compare its findings with
+   @tbl-housing-review: did it notice the double logarithm without
+   re-executing the notebook?
+
+## Further reading {.unnumbered}
+
+- The companion notebook:
+  [`Real_Estate_Price_Forecasting.ipynb`](https://github.com/matteo-zirilli/ai-projects/blob/main/Real_Estate_Price_Forecasting.ipynb)
+  (English) and its Italian original in the `it/` folder of
+  [`ai-projects`](https://github.com/matteo-zirilli/ai-projects).
+- @anglin1996 — the original study of the Windsor data, comparing a parametric
+  (Box–Cox, [@box1964]) and a semiparametric hedonic price model.
+- @rosen1974 — the economic theory of hedonic prices: why regressing a price
+  on characteristics makes sense, and what its coefficients mean.
+- @duan1983 — predicting the mean of $y$ from a model of $\ln y$.
+- @pimentel2019 — how often published notebooks fail to reproduce, and the
+  practices that prevent it.
+- @kapoor2023 — leakage and evaluation errors in applied machine learning, with
+  a checklist that applies directly to projects like this one.

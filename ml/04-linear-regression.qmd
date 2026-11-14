@@ -1,0 +1,1036 @@
+# Linear regression {#sec-ch-ml-regression}
+
+> *"Far better an approximate answer to the right question, which is often
+> vague, than an exact answer to the wrong question, which can always be made
+> precise."* — John W. Tukey [@tukey1962].
+
+```{python}
+#| echo: false
+import mlbook
+mlbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- fit a **simple linear regression** by least squares, by hand and in code, and
+  **prove** the formulas for slope and intercept;
+- compare **cost functions** (squared, absolute, Huber), prove which summary
+  each one targets, and prove that least squares is **maximum likelihood**
+  under Gaussian noise;
+- minimise a cost by **gradient descent** and prove its convergence rate;
+  explain why unscaled features slow it down;
+- compute and interpret **MSE, RMSE, MAE and $R^2$**, prove the decomposition
+  behind $R^2$, and explain why a test $R^2$ can be negative;
+- compute the **correlation matrix** and prove $|r| \le 1$;
+- fit a **multiple linear regression**, derive the **normal equations**,
+  interpret coefficients (Frisch–Waugh–Lovell), diagnose **multicollinearity**
+  with variance inflation factors, and state and prove the **Gauss–Markov**
+  theorem;
+- build **polynomial** features and see the first signs of overfitting.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Regression models for continuous targets: simple and multiple linear
+regression, the least-squares method, cost functions, the coefficient of
+determination and polynomial regression; in practice, regression from
+scratch, with scikit-learn, metrics and the correlation matrix.
+:::
+
+## Intuition: the line through the cloud
+
+Plot the price of houses against their surface: a cloud of points, rising
+from left to right but far from a perfect line. A **linear regression** draws
+the line that summarises the cloud best and uses it to predict: for a new
+surface, read the price off the line.
+
+"Best" needs a definition. For each house, the vertical gap between its price
+and the line is its **residual** — the error the line makes on it. A good line
+makes the residuals small *overall*, and the classical way to combine them is
+to add up their **squares**. The line that minimises this sum is the
+**least-squares** line. Everything else in this chapter — many features
+instead of one, other ways of measuring errors, how to judge the result — is a
+variation on this picture.
+
+## Simple linear regression {#sec-simple-regression}
+
+The model with one feature is
+$$
+y = \beta_0 + \beta_1 x + \varepsilon,
+$$ {#eq-simple-model}
+where $\beta_0$ (**intercept**) and $\beta_1$ (**slope**) are unknown
+parameters and $\varepsilon$ is a random **error** with mean zero that
+collects everything $x$ does not explain. Given data $(x_i, y_i)$,
+$i = 1, \dots, n$, the **fitted values** are $\hat y_i = b_0 + b_1 x_i$ and the
+**residuals** $e_i = y_i - \hat y_i$.
+
+### The method of least squares
+
+Least squares was published by Adrien-Marie Legendre in 1805, in an appendix
+on computing the orbits of comets [@legendre1805]; Carl Friedrich Gauss
+published his version in 1809, claimed to have used it since 1795, and
+justified it with normally distributed errors [@gauss1809] — a priority
+dispute told by Stigler [@stigler1981]. The word **regression** is younger:
+Francis Galton observed in 1886 that tall parents have children who are, on
+average, less extremely tall — they "regress" towards the mean
+[@galton1886] — and the name stuck to the method he used.
+
+Write $\bar x, \bar y$ for the means and
+$$
+S_{xx} = \sum_i (x_i - \bar x)^2, \quad S_{yy} = \sum_i (y_i - \bar y)^2, \quad S_{xy} = \sum_i (x_i - \bar x)(y_i - \bar y).
+$$
+
+::: {#thm-simple-ls}
+## The least-squares line
+If the $x_i$ are not all equal, the sum of squared residuals
+$\mathrm{SSE}(b_0, b_1) = \sum_i (y_i - b_0 - b_1 x_i)^2$ has a unique
+minimiser
+$$
+\hat\beta_1 = \frac{S_{xy}}{S_{xx}}, \qquad \hat\beta_0 = \bar y - \hat\beta_1 \bar x .
+$$ {#eq-simple-ls}
+At the minimum the residuals sum to zero, are uncorrelated with $x$
+($\sum_i e_i x_i = 0$), and the line passes through $(\bar x, \bar y)$.
+:::
+
+*In one line:* the slope is "how $x$ and $y$ move together" divided by "how
+much $x$ moves"; the line goes through the centre of the cloud.
+
+::: {.deep kind="proof"}
+## Proof of @thm-simple-ls
+$\mathrm{SSE}$ is a sum of squares of affine functions of $(b_0, b_1)$, so it
+is a convex quadratic; a point where both partial derivatives vanish is its
+global minimum. Setting them to zero:
+$$
+\frac{\partial\,\mathrm{SSE}}{\partial b_0} = -2\sum_i (y_i - b_0 - b_1x_i) = 0, \qquad
+\frac{\partial\,\mathrm{SSE}}{\partial b_1} = -2\sum_i x_i(y_i - b_0 - b_1x_i) = 0 .
+$$
+The first says $\sum_i e_i = 0$, i.e. $\bar y = b_0 + b_1\bar x$, which gives
+$b_0 = \bar y - b_1\bar x$ and shows that the line passes through
+$(\bar x, \bar y)$. Substitute in the second, which says $\sum_i x_i e_i = 0$:
+$\sum_i x_i\big((y_i - \bar y) - b_1(x_i - \bar x)\big) = 0$. Since
+$\sum_i \bar x\,(y_i - \bar y) = 0$ and $\sum_i \bar x\,(x_i - \bar x) = 0$, we
+may replace $x_i$ by $x_i - \bar x$ in front of the bracket:
+$S_{xy} - b_1 S_{xx} = 0$, so $b_1 = S_{xy}/S_{xx}$ ($S_{xx} > 0$ because the
+$x_i$ are not all equal). Uniqueness: the Hessian is
+$2\begin{pmatrix} n & \sum x_i \\ \sum x_i & \sum x_i^2\end{pmatrix}$, whose
+determinant $4\big(n\sum x_i^2 - (\sum x_i)^2\big) = 4nS_{xx} > 0$, so the
+quadratic is strictly convex. $\blacksquare$
+:::
+
+::: {#exm-ls-hand}
+## Least squares by hand
+Five points: $x = (1, 2, 3, 4, 5)$, $y = (2, 4, 5, 4, 5)$. Then
+$\bar x = 3$, $\bar y = 4$, deviations $x_i - \bar x = (-2,-1,0,1,2)$ and
+$y_i - \bar y = (-2, 0, 1, 0, 1)$. So $S_{xx} = 10$,
+$S_{xy} = 4 + 0 + 0 + 0 + 2 = 6$, $S_{yy} = 6$, and
+$$
+\hat\beta_1 = 6/10 = 0.6, \qquad \hat\beta_0 = 4 - 0.6 \cdot 3 = 2.2 .
+$$
+Fitted values $2.8, 3.4, 4.0, 4.6, 5.2$; residuals $-0.8, 0.6, 1.0, -0.6,
+-0.2$, which sum to $0$ as promised. $\mathrm{SSE} = 0.64 + 0.36 + 1 + 0.36 +
+0.04 = 2.4$.
+:::
+
+Now the same computation in code, first from scratch with NumPy
+(@sec-numpy), then with scikit-learn:
+
+```{python}
+import numpy as np
+from sklearn.linear_model import LinearRegression
+
+class SimpleLinearRegression:
+    """Least-squares line y = b0 + b1 x, fitted with the closed-form formulas."""
+    def fit(self, x, y):
+        x, y = np.asarray(x, float), np.asarray(y, float)
+        dx, dy = x - x.mean(), y - y.mean()
+        self.b1 = (dx @ dy) / (dx @ dx)            # S_xy / S_xx
+        self.b0 = y.mean() - self.b1 * x.mean()
+        return self
+    def predict(self, x):
+        return self.b0 + self.b1 * np.asarray(x, float)
+
+x = np.array([1, 2, 3, 4, 5]); y = np.array([2, 4, 5, 4, 5])
+mine = SimpleLinearRegression().fit(x, y)
+sk = LinearRegression().fit(x.reshape(-1, 1), y)          # scikit-learn wants a 2-D X
+print(f"from scratch: b0 = {mine.b0:.3f}, b1 = {mine.b1:.3f}")
+print(f"scikit-learn: b0 = {sk.intercept_:.3f}, b1 = {sk.coef_[0]:.3f}")
+print("residuals:", (y - mine.predict(x)).round(3), " sum:", round(float((y - mine.predict(x)).sum()), 12))
+```
+
+On real data: the logarithm of the price against the logarithm of the lot area
+of the 545 houses of @sec-first-look (why logarithms: @sec-loss-functions and
+the project).
+
+```{python}
+#| label: fig-simple-fit
+#| fig-cap: "Least-squares line for ln(price) against ln(area) on the 545 house sales. The grey segments are the residuals of a random sample of 40 houses: least squares minimises the sum of their squares."
+import pandas as pd
+import matplotlib.pyplot as plt
+
+houses = mlbook.load_housing()
+lx, ly = np.log(houses["area"]), np.log(houses["price"])
+line = SimpleLinearRegression().fit(lx, ly)
+
+fig, ax = plt.subplots(figsize=(6.5, 3.6))
+sample = np.random.default_rng(3).choice(len(lx), 40, replace=False)
+for i in sample:
+    ax.plot([lx.iloc[i]] * 2, [ly.iloc[i], line.predict(lx.iloc[i])], color=mlbook.MUTED, lw=0.8)
+ax.scatter(lx, ly, s=12, alpha=0.6, color=mlbook.COLORS[0], label="houses")
+grid = np.linspace(lx.min(), lx.max(), 100)
+ax.plot(grid, line.predict(grid), color=mlbook.COLORS[1], label=f"ln(price) = {line.b0:.2f} + {line.b1:.2f} ln(area)")
+ax.set_xlabel("ln(area)"); ax.set_ylabel("ln(price)"); ax.legend(loc="lower right")
+plt.show()
+```
+
+In a log–log model the slope is an **elasticity**: a 1% larger lot is
+associated with about a `{python} f"{line.b1:.2f}"`% higher price, on average,
+in these data. "Associated" matters: the line describes the data, it does not
+say that enlarging a lot would raise its price by that much (@sec-correlation).
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof lsSlope = Inputs.range([-0.5, 1.5], {step: 0.01, value: 0.2, label: "slope b₁"})
+```
+
+```{ojs}
+//| echo: false
+viewof lsIntercept = Inputs.range([0, 5], {step: 0.05, value: 3.5, label: "intercept b₀"})
+```
+
+```{ojs}
+//| echo: false
+lsData = [[1,2],[2,4],[3,5],[4,4],[5,5],[6,6.5],[7,6],[8,7.5]].map(([x, y]) => ({x, y}))
+lsBest = {
+  const n = lsData.length, mx = d3.mean(lsData, d => d.x), my = d3.mean(lsData, d => d.y);
+  const sxy = d3.sum(lsData, d => (d.x - mx) * (d.y - my)), sxx = d3.sum(lsData, d => (d.x - mx) ** 2);
+  const b1 = sxy / sxx, b0 = my - b1 * mx;
+  return {b0, b1, mse: d3.mean(lsData, d => (d.y - b0 - b1 * d.x) ** 2)};
+}
+lsMse = d3.mean(lsData, d => (d.y - lsIntercept - lsSlope * d.x) ** 2)
+```
+
+```{ojs}
+//| echo: false
+md`**Your line:** MSE = ${lsMse.toFixed(3)} · **least squares:** b₀ = ${lsBest.b0.toFixed(2)}, b₁ = ${lsBest.b1.toFixed(2)}, MSE = ${lsBest.mse.toFixed(3)}`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-ls-widget
+//| fig-cap: "Try to beat least squares. Move the sliders: the red segments are the residuals of your line, and the line above the plot reports its mean squared error next to the minimum, attained by the least-squares line (dashed)."
+Plot.plot({
+  height: 300, x: {domain: [0, 9], label: "x"}, y: {domain: [0, 9], label: "y"},
+  marks: [
+    Plot.link(lsData, {x1: "x", y1: "y", x2: "x", y2: d => lsIntercept + lsSlope * d.x, stroke: "#e34948"}),
+    Plot.line([[0, lsBest.b0], [9, lsBest.b0 + 9 * lsBest.b1]], {stroke: "#8a8984", strokeDasharray: "4,4"}),
+    Plot.line([[0, lsIntercept], [9, lsIntercept + 9 * lsSlope]], {stroke: "#eb6834", strokeWidth: 2}),
+    Plot.dot(lsData, {x: "x", y: "y", r: 5, fill: "#2a78d6"})
+  ]
+})
+```
+:::
+
+## Cost functions {#sec-loss-functions}
+
+"Add up the squared residuals" is a choice. A **cost function** (loss
+averaged over the data) states what kind of error we care about; three are
+standard.
+
+| Cost | Formula | Best constant prediction | Sensitivity to outliers |
+|---|---|---|---|
+| **mean squared error** (MSE) | $\frac1n\sum_i (y_i - \hat y_i)^2$ | the **mean** (@thm-regression-function) | high: errors count quadratically |
+| **mean absolute error** (MAE) | $\frac1n\sum_i \lvert y_i - \hat y_i\rvert$ | the **median** (@exr-ml1-median) | low: errors count linearly |
+| **Huber** with threshold $\delta$ | $\frac1n\sum_i H_\delta(y_i - \hat y_i)$ | between mean and median | quadratic for small, linear for large errors |
+
+: Common cost functions for regression {#tbl-costs}
+
+with the **Huber loss** [@huber1964]
+$$
+H_\delta(r) = \begin{cases} \tfrac12 r^2 & |r| \le \delta,\\ \delta\big(|r| - \tfrac12\delta\big) & |r| > \delta. \end{cases}
+$$ {#eq-huber}
+The two pieces meet with the same value and slope at $|r| = \delta$, so $H$ is
+smooth enough for gradient methods; Huber designed it to keep the efficiency
+of least squares on well-behaved data while limiting the influence of gross
+errors. The **root mean squared error** $\mathrm{RMSE} = \sqrt{\mathrm{MSE}}$
+is in the units of $y$ and is what you report to people; the MSE is what you
+minimise.
+
+Why is the squared error the default? Besides being smooth and giving closed
+formulas, it is the natural cost when the errors are Gaussian — Gauss's own
+argument [@gauss1809].
+
+::: {#thm-ls-mle}
+## Least squares is maximum likelihood under Gaussian errors
+If $y_i = \beta_0 + \beta_1 x_i + \varepsilon_i$ with $\varepsilon_i$
+independent $\mathcal N(0, \sigma^2)$, then for every $\sigma$ the
+log-likelihood of $(\beta_0, \beta_1)$ is a decreasing function of
+$\mathrm{SSE}(\beta_0, \beta_1)$. Hence the maximum-likelihood estimates are the
+least-squares estimates, and the maximum-likelihood estimate of $\sigma^2$ is
+$\mathrm{SSE}/n$.
+:::
+
+*In one line:* if the noise is bell-shaped, the line that makes the observed
+data most probable is the least-squares line.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ls-mle
+The density of $y_i$ is $\frac{1}{\sqrt{2\pi\sigma^2}}\exp\big(-\frac{(y_i -
+\beta_0 - \beta_1x_i)^2}{2\sigma^2}\big)$; by independence the likelihood is
+the product, and its logarithm is
+$$
+\ell(\beta_0, \beta_1, \sigma^2) = -\frac n2 \ln(2\pi\sigma^2) - \frac{1}{2\sigma^2}\,\mathrm{SSE}(\beta_0, \beta_1).
+$$
+For fixed $\sigma$ this decreases as SSE increases, so it is maximised by the
+least-squares $(\hat\beta_0, \hat\beta_1)$ whatever $\sigma$ is. Substituting,
+$\partial\ell/\partial\sigma^2 = -\frac{n}{2\sigma^2} +
+\frac{\mathrm{SSE}}{2\sigma^4} = 0$ gives $\hat\sigma^2 = \mathrm{SSE}/n$.
+(The same argument with Laplace-distributed errors, density $\propto
+e^{-|\varepsilon|/b}$, leads to minimising the sum of absolute residuals.)
+$\blacksquare$
+:::
+
+The price of the square is sensitivity to **outliers**: a residual ten times
+larger costs a hundred times more, so a single wrong record can tilt the
+line. The experiment adds one gross error (a price typed with an extra zero)
+to synthetic data and compares least squares with scikit-learn's
+`HuberRegressor`.
+
+```{python}
+#| label: fig-losses
+#| fig-cap: "Left: the three losses as functions of the residual (Huber with δ = 1). Right: one gross error (the point at the top right) tilts the least-squares line; the Huber fit is almost unaffected."
+from sklearn.linear_model import HuberRegressor
+
+r = np.linspace(-3, 3, 200)
+huber = np.where(np.abs(r) <= 1, 0.5 * r**2, np.abs(r) - 0.5)
+
+rng = np.random.default_rng(7)
+xo = rng.uniform(0, 10, 30); yo = 1 + 0.5 * xo + rng.normal(0, 0.5, 30)
+yo[np.argmax(xo)] *= 10                                   # one record typed with an extra zero
+fits = {"least squares": LinearRegression(), "Huber": HuberRegressor()}
+for f in fits.values():
+    f.fit(xo.reshape(-1, 1), yo)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.2))
+ax1.plot(r, r**2, label="squared"); ax1.plot(r, np.abs(r), label="absolute"); ax1.plot(r, huber, label="Huber")
+ax1.set_xlabel("residual r"); ax1.set_ylabel("loss"); ax1.set_ylim(0, 5); ax1.legend()
+ax2.scatter(xo, yo, s=18, color=mlbook.COLORS[0])
+g = np.linspace(0, 10, 50).reshape(-1, 1)
+ax2.plot(g, fits["least squares"].predict(g), color=mlbook.COLORS[1], label="least squares")
+ax2.plot(g, fits["Huber"].predict(g), color=mlbook.COLORS[2], label="Huber")
+ax2.set_xlabel("x"); ax2.set_ylabel("y"); ax2.legend()
+fig.tight_layout(); plt.show()
+for name, f in fits.items():
+    print(f"{name:14s} slope = {f.coef_[0]:.3f}   (true slope 0.5)")
+```
+
+The better cure for a typo is to find and fix it — robust losses are for
+errors you cannot find. Note also that the choice of cost is a choice of
+**what to predict**: the squared error targets the mean, the absolute error
+the median. For skewed targets like prices they differ (@sec-describing), and
+modelling $\ln y$ with squared error targets yet another quantity, the mean of
+$\ln y$ — a point the project returns to.
+
+## Gradient descent {#sec-gradient-descent}
+
+For least squares we have formulas. Most models of later parts do not, and
+are fitted by **gradient descent**, proposed by Cauchy in 1847 [@cauchy1847]:
+start from some parameters and repeatedly take a small step in the direction
+in which the cost decreases fastest, the negative **gradient**.
+
+For a linear model with parameter vector $\beta$ and design matrix $X$ (one
+column of ones for the intercept), the cost
+$J(\beta) = \frac{1}{2n}\lVert y - X\beta \rVert^2$ (the $\frac12$ only
+simplifies the derivative) has gradient
+$$
+\nabla J(\beta) = -\frac1n X^\top (y - X\beta),
+$$ {#eq-ls-gradient}
+and gradient descent with **step size** (learning rate) $\eta$ is
+$\beta_{k+1} = \beta_k - \eta\,\nabla J(\beta_k)$.
+
+::: {#thm-gd-rate}
+## Convergence of gradient descent on least squares
+Let $L$ be the largest eigenvalue of $H = \frac1n X^\top X$ (the Hessian of
+$J$), and let $\beta^*$ minimise $J$. With step $\eta = 1/L$,
+$$
+J(\beta_k) - J(\beta^*) \le \frac{L\,\lVert \beta_0 - \beta^* \rVert^2}{2k} \qquad (k \ge 1),
+$$
+and $J(\beta_k)$ decreases at every step.
+:::
+
+*In one line:* with the right step, the excess cost falls at least like
+$1/k$; the step must be small enough for the steepest direction, which is why
+badly scaled features — one very steep direction — make progress slow.
+
+::: {.deep kind="proof"}
+## Proof of @thm-gd-rate
+$J$ is a quadratic with Hessian $H$, so for all $\beta, \gamma$, exactly,
+$J(\gamma) = J(\beta) + \nabla J(\beta)^\top(\gamma - \beta) +
+\tfrac12(\gamma-\beta)^\top H(\gamma-\beta)$. Because $0 \preceq H \preceq L I$
+(its eigenvalues lie in $[0, L]$; $H \succeq 0$ as $v^\top Hv = \lVert Xv
+\rVert^2/n$), this gives two inequalities:
+$$
+\text{(descent)}\; J(\gamma) \le J(\beta) + \nabla J(\beta)^\top(\gamma-\beta) + \tfrac L2\lVert\gamma-\beta\rVert^2, \qquad
+\text{(convexity)}\; J(\gamma) \ge J(\beta) + \nabla J(\beta)^\top(\gamma-\beta).
+$$
+Let $g = \nabla J(\beta_k)$ and $\beta_{k+1} = \beta_k - g/L$. Descent with
+$\gamma = \beta_{k+1}$: $J(\beta_{k+1}) \le J(\beta_k) - \frac{1}{2L}\lVert g
+\rVert^2$, so $J$ decreases. Convexity with $\gamma = \beta^*$, $\beta =
+\beta_k$: $J(\beta_k) \le J(\beta^*) + g^\top(\beta_k - \beta^*)$. Adding,
+$$
+J(\beta_{k+1}) - J(\beta^*) \le g^\top(\beta_k - \beta^*) - \tfrac{1}{2L}\lVert g\rVert^2
+= \tfrac L2\big(\lVert \beta_k - \beta^*\rVert^2 - \lVert \beta_{k+1} - \beta^*\rVert^2\big),
+$$
+where the equality is the expansion of
+$\lVert \beta_k - \beta^* - g/L \rVert^2$. Summing over $k = 0, \dots, K-1$ the
+right side telescopes to at most $\frac L2\lVert \beta_0 - \beta^*\rVert^2$;
+since the left terms decrease, $K\big(J(\beta_K) - J(\beta^*)\big)$ is at most
+their sum. $\blacksquare$
+
+The argument works for every convex function whose gradient is
+$L$-Lipschitz, not only quadratics [@nesterov2018, §2.1.5]. For quadratics with
+$H \succ 0$ convergence is in fact geometric, at a rate governed by the
+**condition number** $\kappa = \lambda_{\max}/\lambda_{\min}$ of $H$
+[@boyd2004, §9.3]: the larger $\kappa$, the slower.
+:::
+
+The condition number is where scaling enters (@sec-scaling). The area of a
+house is in the thousands, the number of bathrooms between 1 and 4; with raw
+features $H$ has one enormous eigenvalue, the step must be tiny to avoid
+diverging along that direction, and progress along the others is glacial.
+
+```{python}
+def gradient_descent(X, y, steps):
+    """Least squares by gradient descent with step 1/L; returns the cost after each step."""
+    X1 = np.column_stack([np.ones(len(X)), X])
+    H = X1.T @ X1 / len(y)
+    L = np.linalg.eigvalsh(H).max()
+    beta, costs = np.zeros(X1.shape[1]), []
+    for _ in range(steps):
+        beta -= (-(X1.T @ (y - X1 @ beta)) / len(y)) / L      # beta - grad / L
+        costs.append(0.5 * np.mean((y - X1 @ beta) ** 2))
+    return beta, np.array(costs), np.linalg.cond(H)
+
+Xr = houses[["area", "bathrooms"]].to_numpy(float)
+Xs = (Xr - Xr.mean(0)) / Xr.std(0)                            # standardised
+y_log = np.log(houses["price"]).to_numpy()
+best = 0.5 * np.mean((y_log - LinearRegression().fit(Xr, y_log).predict(Xr)) ** 2)
+for name, X_ in [("raw features", Xr), ("standardised", Xs)]:
+    _, costs, kappa = gradient_descent(X_, y_log, 2000)
+    print(f"{name:13s} condition number {kappa:12.3g} | excess cost after 10 steps {costs[9] - best:.2e}, "
+          f"after 2000 steps {costs[-1] - best:.2e}")
+```
+
+With standardised features the cost reaches the least-squares optimum to
+machine precision; with raw features it is still far away after 2 000 steps.
+Same data, same algorithm, same model — only the units differ.
+
+## Measuring the fit {#sec-regression-metrics}
+
+### $R^2$, the coefficient of determination
+
+MSE and RMSE depend on the units of $y$ (an RMSE of 0.2 on log-prices and one
+of 1 000 000 on prices may describe the same model). The **coefficient of
+determination**, named by Sewall Wright [@wright1921], is unit-free: it
+compares the model's errors with those of the simplest possible predictor, the
+constant $\bar y$.
+
+::: {#def-r2}
+## Coefficient of determination
+With $\mathrm{SSE} = \sum_i (y_i - \hat y_i)^2$ (residual sum of squares) and
+$\mathrm{SST} = \sum_i (y_i - \bar y)^2$ (total sum of squares),
+$$
+R^2 = 1 - \frac{\mathrm{SSE}}{\mathrm{SST}} .
+$$ {#eq-r2}
+:::
+
+*In one line:* $R^2$ is the fraction of the variation of $y$ around its mean
+that the model removes.
+
+For least squares with an intercept, on its own training data, $R^2$ has a
+second reading.
+
+::: {#thm-r2-decomposition}
+## The variance decomposition
+For a least-squares fit with an intercept, with $\mathrm{SSR} = \sum_i
+(\hat y_i - \bar y)^2$ (explained sum of squares),
+$$
+\mathrm{SST} = \mathrm{SSR} + \mathrm{SSE},
+$$ {#eq-sst-decomposition}
+so on the training data $R^2 = \mathrm{SSR}/\mathrm{SST} \in [0, 1]$. For
+simple regression, moreover, $R^2 = r_{xy}^2$, the squared correlation between
+$x$ and $y$ (@def-correlation).
+:::
+
+*In one line:* the total variation splits into the part the line explains and
+the part left in the residuals; with one feature, the explained fraction is
+the squared correlation.
+
+::: {.deep kind="proof"}
+## Proof of @thm-r2-decomposition
+Write $y_i - \bar y = (\hat y_i - \bar y) + e_i$. Squaring and summing,
+$\mathrm{SST} = \mathrm{SSR} + \mathrm{SSE} + 2\sum_i (\hat y_i - \bar y)e_i$.
+The fitted values are a linear combination of the columns of $X$, which
+include the column of ones; by the normal equations (@thm-normal-equations)
+the residuals are orthogonal to every column, hence to $\hat y$ and to the
+constant $\bar y$: the cross term is $0$. So $\mathrm{SSE} \le \mathrm{SST}$ and
+$R^2 = 1 - \mathrm{SSE}/\mathrm{SST} = \mathrm{SSR}/\mathrm{SST} \in [0,1]$.
+For simple regression, $\hat y_i - \bar y = \hat\beta_1(x_i - \bar x)$, so
+$\mathrm{SSR} = \hat\beta_1^2 S_{xx} = S_{xy}^2/S_{xx}$ and
+$R^2 = S_{xy}^2/(S_{xx}S_{yy}) = r_{xy}^2$. $\blacksquare$
+:::
+
+In @exm-ls-hand, $\mathrm{SST} = 6$, $\mathrm{SSE} = 2.4$: $R^2 = 0.6$, and
+$r_{xy} = 6/\sqrt{10\cdot6} \approx 0.775$, whose square is $0.6$.
+
+Three warnings, all of which bite in practice [@kvalseth1985]:
+
+1. **On new data, $R^2$ can be negative.** The decomposition holds for a
+   least-squares fit on *its own* data. On a test set, $\mathrm{SSE}$ is
+   computed with a model fitted elsewhere and can exceed $\mathrm{SST}$: the
+   model is then worse than predicting the test mean. scikit-learn's
+   `r2_score` and `score` use @eq-r2 with the test set's own mean.
+2. **Adding features never lowers the training $R^2$** (a least-squares fit
+   with more columns can always reproduce the fit with fewer, by setting the
+   extra coefficients to zero). The **adjusted** $R^2_{\text{adj}} = 1 - (1-R^2)
+   \frac{n-1}{n-p-1}$, with $p$ features, charges for each feature; better
+   still, measure on held-out data (@sec-ch-ml-regularization).
+3. **$R^2$ depends on the spread of $y$** in the sample: the same model has a
+   higher $R^2$ on a data set with more varied prices. Compare $R^2$ only on the
+   same data; report RMSE or MAE for the size of the errors in real units.
+
+```{python}
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, root_mean_squared_error
+from sklearn.model_selection import train_test_split
+
+y_true = np.array([3.0, 5.0, 7.0, 9.0])
+for name, y_pred in [("good model", np.array([3.2, 4.9, 7.3, 8.6])),
+                     ("constant = test mean", np.full(4, 6.0)),
+                     ("model biased by +3", np.array([6.2, 7.9, 10.3, 11.6]))]:
+    print(f"{name:21s} MSE {mean_squared_error(y_true, y_pred):6.3f}  RMSE {root_mean_squared_error(y_true, y_pred):5.3f}  "
+          f"MAE {mean_absolute_error(y_true, y_pred):5.3f}  R^2 {r2_score(y_true, y_pred):6.3f}")
+```
+
+The constant predictor scores exactly $R^2 = 0$ and the biased model, whose
+predictions *correlate* perfectly with the truth, scores below zero.
+
+### Correlation and the correlation matrix {#sec-correlation}
+
+::: {#def-correlation}
+## Pearson correlation
+For paired values $(x_i, y_i)$,
+$$
+r_{xy} = \frac{S_{xy}}{\sqrt{S_{xx}S_{yy}}} = \frac{\sum_i (x_i - \bar x)(y_i - \bar y)}{\sqrt{\sum_i (x_i - \bar x)^2}\sqrt{\sum_i (y_i - \bar y)^2}} .
+$$ {#eq-correlation}
+:::
+
+The coefficient was formalised by Karl Pearson in 1896 [@pearson1896],
+building on Galton.
+
+::: {#prp-correlation-bounds}
+## Range of the correlation
+$-1 \le r_{xy} \le 1$, with $|r_{xy}| = 1$ if and only if the points lie
+exactly on a non-horizontal line. $r$ is unchanged by positive affine changes of
+unit of either variable.
+:::
+
+*In one line:* $r$ measures how close the cloud is to a straight line,
+on a scale from $-1$ to $1$, whatever the units.
+
+::: {.deep kind="proof"}
+## Proof of @prp-correlation-bounds
+Let $u_i = x_i - \bar x$, $v_i = y_i - \bar y$; then $r = u^\top v/(\lVert u
+\rVert\lVert v \rVert)$. By the **Cauchy–Schwarz inequality**
+$|u^\top v| \le \lVert u\rVert\lVert v\rVert$, so $|r| \le 1$. (Proof of
+Cauchy–Schwarz: for every real $t$, $0 \le \lVert u - tv \rVert^2 =
+\lVert u\rVert^2 - 2t\,u^\top v + t^2\lVert v\rVert^2$; a quadratic in $t$ that is
+never negative has discriminant $4(u^\top v)^2 - 4\lVert u\rVert^2\lVert
+v\rVert^2 \le 0$.) Equality holds iff $u - tv = 0$ for some $t$, i.e. the
+centred points are proportional: $y_i - \bar y = c\,(x_i - \bar x)$, a line.
+Replacing $x$ by $ax + b$ with $a > 0$ multiplies $u$ by $a$, which cancels
+between numerator and denominator. $\blacksquare$
+:::
+
+A **correlation matrix** collects $r$ for every pair of numerical columns. It
+answers two questions before modelling: which features move with the target,
+and which features move with *each other* (a warning of multicollinearity,
+@sec-multicollinearity).
+
+```{python}
+#| label: fig-corr-matrix
+#| fig-cap: "Correlation matrix of the house data (yes/no columns coded 1/0; the furnishing status is left out because it is not a quantity, @sec-variable-types). Blue = positive, red = negative; the first row is the correlation with ln(price)."
+from matplotlib.colors import LinearSegmentedColormap
+
+enc = mlbook.load_housing(encoded=True).drop(columns="furnishingstatus")
+enc.insert(0, "ln(price)", np.log(enc.pop("price")))
+corr = enc.corr()
+cmap = LinearSegmentedColormap.from_list("div", ["#e34948", "#f0efec", "#2a78d6"])
+fig, ax = plt.subplots(figsize=(7.5, 6.2))
+im = ax.imshow(corr, cmap=cmap, vmin=-1, vmax=1)
+ax.set_xticks(range(len(corr)), corr.columns, rotation=60, ha="right")
+ax.set_yticks(range(len(corr)), corr.columns)
+ax.grid(False)
+for i in range(len(corr)):
+    for j in range(len(corr)):
+        ax.text(j, i, f"{corr.iloc[i, j]:.2f}", ha="center", va="center", fontsize=7, color=mlbook.INK)
+fig.colorbar(im, ax=ax, shrink=0.7, label="Pearson r")
+fig.tight_layout(); plt.show()
+print(corr["ln(price)"].drop("ln(price)").sort_values(ascending=False).round(2).to_string())
+```
+
+Every feature correlates positively with the log-price; area, bathrooms and
+air conditioning most strongly. The features are also correlated with each
+other (bedrooms with stories and bathrooms, area with parking), so the
+coefficients of a model with all of them will not equal these one-at-a-time
+associations.
+
+::: {.callout-warning}
+## Correlation is not causation, and not every relationship
+A correlation describes how two columns co-vary *in these data*. It does not
+say that changing one would change the other (both may be driven by a third,
+such as the neighbourhood), and it measures only **linear** association: a
+perfect U-shaped relationship can have $r = 0$. Anscombe's four data sets with
+identical means, variances, correlations and regression lines, but completely
+different shapes, are the classic reminder to plot the data [@anscombe1973].
+:::
+
+## Multiple linear regression {#sec-multiple-regression}
+
+With $p$ features the model is
+$y = \beta_0 + \beta_1 x_1 + \dots + \beta_p x_p + \varepsilon$. Stack the
+examples: the **design matrix** $X \in \mathbb{R}^{n \times (p+1)}$ has a
+first column of ones and then one column per feature, and the model reads
+$$
+y = X\beta + \varepsilon, \qquad \beta = (\beta_0, \dots, \beta_p)^\top .
+$$ {#eq-multiple-model}
+Least squares minimises $\lVert y - X\beta \rVert^2$.
+
+::: {#thm-normal-equations}
+## The normal equations
+$\hat\beta$ minimises $\lVert y - X\beta\rVert^2$ if and only if it solves
+the **normal equations**
+$$
+X^\top X\,\hat\beta = X^\top y .
+$$ {#eq-normal-equations}
+Solutions always exist; the residual vector $e = y - X\hat\beta$ is orthogonal
+to every column of $X$; the fitted values $\hat y = X\hat\beta$ are the same for
+all solutions. The solution is unique, $\hat\beta = (X^\top X)^{-1}X^\top y$,
+if and only if $X$ has full column rank.
+:::
+
+*In one line:* least squares finds the point of the column space of $X$
+closest to $y$; the residual is perpendicular to that space, and that
+perpendicularity *is* the normal equations.
+
+::: {.deep kind="proof"}
+## Proof of @thm-normal-equations
+*Sufficiency.* Let $\hat\beta$ solve @eq-normal-equations, so
+$X^\top(y - X\hat\beta) = 0$. For any $\beta = \hat\beta + \delta$,
+$$
+\lVert y - X\beta\rVert^2 = \lVert (y - X\hat\beta) - X\delta\rVert^2
+= \lVert y - X\hat\beta\rVert^2 - 2\delta^\top X^\top(y - X\hat\beta) + \lVert X\delta\rVert^2
+= \lVert y - X\hat\beta\rVert^2 + \lVert X\delta\rVert^2,
+$$
+which is $\ge \lVert y - X\hat\beta\rVert^2$, with equality iff $X\delta = 0$.
+So $\hat\beta$ is a minimiser, every minimiser has the same fitted values, and
+the minimiser is unique iff $X\delta = 0 \Rightarrow \delta = 0$, i.e. full
+column rank (then $X^\top X$ is invertible: $X^\top X v = 0 \Rightarrow
+v^\top X^\top Xv = \lVert Xv\rVert^2 = 0 \Rightarrow v = 0$).
+
+*Necessity.* At a minimiser the gradient of the differentiable function
+$\lVert y - X\beta\rVert^2$, which is $-2X^\top(y - X\beta)$, must vanish.
+
+*Existence.* The column space of $X$ is a closed subspace, so it contains a
+point $\hat y$ closest to $y$, characterised by $y - \hat y$ being orthogonal to
+it, i.e. $X^\top(y - \hat y) = 0$; writing $\hat y = X\hat\beta$ for some
+$\hat\beta$ gives a solution. $\blacksquare$
+:::
+
+Gauss already wrote these equations; the name "normal" refers to the
+orthogonality (normality) of the residual. In code, never form the inverse:
+`np.linalg.lstsq` (and scikit-learn) solve the problem with orthogonal
+factorisations (QR, SVD), which are more accurate because forming $X^\top X$
+squares the condition number of $X$ [@golub2013, §5.3].
+
+```{python}
+X1 = np.column_stack([np.ones(len(houses)), houses[["area", "bedrooms", "bathrooms"]].to_numpy(float)])
+b_normal = np.linalg.solve(X1.T @ X1, X1.T @ y_log)          # normal equations (fine here, risky in general)
+b_lstsq, *_ = np.linalg.lstsq(X1, y_log, rcond=None)          # orthogonal factorisation
+print("normal equations:", b_normal.round(6))
+print("lstsq:           ", b_lstsq.round(6))
+print(f"cond(X) = {np.linalg.cond(X1):.3g},  cond(X^T X) = {np.linalg.cond(X1.T @ X1):.3g}  (the square)")
+print("residuals orthogonal to the columns:", np.abs(X1.T @ (y_log - X1 @ b_lstsq)).max() < 1e-6)
+```
+
+### What a coefficient means
+
+In simple regression $\hat\beta_1$ is the slope of the cloud. In multiple
+regression, $\hat\beta_j$ is the change in prediction when $x_j$ increases by
+one unit **and the other features stay the same**. The Frisch–Waugh–Lovell
+theorem makes "the others stay the same" precise
+[@frisch1933; @lovell1963].
+
+::: {#thm-fwl}
+## Frisch–Waugh–Lovell
+Let $r_j$ be the residuals of regressing column $x_j$ on all the other
+columns of $X$ (including the intercept), and suppose $r_j \neq 0$. Then the
+least-squares coefficient of $x_j$ in the full regression is
+$$
+\hat\beta_j = \frac{r_j^\top y}{r_j^\top r_j},
+$$
+the slope of a simple regression (through the origin) of $y$ on $r_j$.
+:::
+
+*In one line:* the coefficient of a feature measures the association of $y$
+with the part of that feature that the other features cannot explain.
+
+::: {.deep kind="proof"}
+## Proof of @thm-fwl
+Write the full fit as $y = X_{-j}\hat\beta_{-j} + x_j\hat\beta_j + e$, with $e$
+orthogonal to all columns (@thm-normal-equations). By construction $r_j = x_j -
+X_{-j}\gamma$ for some $\gamma$ and $r_j$ is orthogonal to every column of
+$X_{-j}$. Multiply the fit by $r_j^\top$: $r_j^\top X_{-j} = 0$; $r_j^\top e =
+0$ because $r_j$ is a combination of columns of $X$; and $r_j^\top x_j =
+r_j^\top(r_j + X_{-j}\gamma) = r_j^\top r_j$. So $r_j^\top y = \hat\beta_j\,
+r_j^\top r_j$. $\blacksquare$
+:::
+
+The theorem explains a frequent surprise: a feature strongly correlated with
+the target can get a small coefficient, or even a negative one, if the other
+features already carry the same information — what remains of it ($r_j$) is
+small or unrelated to $y$.
+
+### Multicollinearity and the variance inflation factor {#sec-multicollinearity}
+
+When features are strongly correlated with each other, $r_j$ is small, and
+the coefficient becomes unstable: a different sample gives a very different
+value. To quantify it we need a model of the noise: assume that $X$ is fixed
+and the errors $\varepsilon_i$ have mean $0$, the same variance $\sigma^2$,
+and are uncorrelated.
+
+::: {#thm-ols-variance}
+## Unbiasedness and variance of least squares
+Under these assumptions and with $X$ of full column rank,
+$\mathbb{E}[\hat\beta] = \beta$ and $\operatorname{Var}(\hat\beta) =
+\sigma^2(X^\top X)^{-1}$. For a feature $x_j$ with total sum of squares
+$\mathrm{SST}_j = \sum_i (x_{ij} - \bar x_j)^2$, and $R_j^2$ the $R^2$ of
+regressing $x_j$ on the other features,
+$$
+\operatorname{Var}(\hat\beta_j) = \frac{\sigma^2}{\mathrm{SST}_j}\cdot\frac{1}{1 - R_j^2}.
+$$ {#eq-vif}
+The factor $\mathrm{VIF}_j = 1/(1 - R_j^2)$ is the **variance inflation
+factor**.
+:::
+
+*In one line:* least squares is right on average, and the uncertainty of a
+coefficient is multiplied by $1/(1-R_j^2)$ when its feature is predictable
+from the others.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ols-variance
+$\hat\beta = (X^\top X)^{-1}X^\top y = (X^\top X)^{-1}X^\top(X\beta +
+\varepsilon) = \beta + (X^\top X)^{-1}X^\top\varepsilon$. Taking expectations,
+$\mathbb{E}[\hat\beta] = \beta$. With $A = (X^\top X)^{-1}X^\top$,
+$\operatorname{Var}(\hat\beta) = A\operatorname{Var}(\varepsilon)A^\top =
+\sigma^2 AA^\top = \sigma^2(X^\top X)^{-1}$. For a single coefficient use
+@thm-fwl: $\hat\beta_j = r_j^\top y/r_j^\top r_j$ with $r_j$ depending only
+on $X$, so $\operatorname{Var}(\hat\beta_j) = r_j^\top(\sigma^2 I)r_j/(r_j^\top
+r_j)^2 = \sigma^2/(r_j^\top r_j)$. Finally $r_j^\top r_j$ is the residual sum
+of squares of regressing $x_j$ on the others (with intercept), which by
+@eq-r2 equals $\mathrm{SST}_j(1 - R_j^2)$. $\blacksquare$
+:::
+
+The term was introduced by Marquardt [@marquardt1970]; a common rule of thumb
+treats $\mathrm{VIF} > 5$ or $10$ as a warning. In the house data:
+
+```{python}
+features = ["area", "bedrooms", "bathrooms", "stories", "parking"]
+F = houses[features].to_numpy(float)
+for j, name in enumerate(features):
+    others = np.delete(F, j, axis=1)
+    r2_j = LinearRegression().fit(others, F[:, j]).score(others, F[:, j])
+    print(f"{name:10s} R_j^2 = {r2_j:.3f}   VIF = {1 / (1 - r2_j):.2f}")
+```
+
+The features are correlated but far from collinear (all VIFs below 1.5):
+multicollinearity is not a problem in these data, which matters for the
+project's hypotheses (@sec-ch-project-housing).
+
+### The best linear unbiased estimator
+
+Is least squares the best we can do? Among estimators that are **linear** in
+$y$ and **unbiased**, yes — this is the Gauss–Markov theorem (Gauss 1821,
+rediscovered by Markov; see [@seber2003, §3.2]).
+
+::: {#thm-gauss-markov}
+## Gauss–Markov
+Under the assumptions of @thm-ols-variance, for every estimator $\tilde\beta
+= Cy$ with $\mathbb{E}[\tilde\beta] = \beta$ for all $\beta$, the matrix
+$\operatorname{Var}(\tilde\beta) - \operatorname{Var}(\hat\beta)$ is positive
+semidefinite. In particular every coefficient, and every linear combination
+$a^\top\beta$, is estimated with the smallest variance by least squares.
+:::
+
+*In one line:* no unbiased linear recipe beats least squares in precision —
+which is why improving on it requires accepting some **bias**, the idea of
+regularisation (@sec-ch-ml-regularization).
+
+::: {.deep kind="proof"}
+## Proof of @thm-gauss-markov
+Write $C = (X^\top X)^{-1}X^\top + D$. Unbiasedness for every $\beta$ means
+$CX\beta = \beta$ for all $\beta$, i.e. $CX = I$, hence $DX = 0$. Then
+$\operatorname{Var}(Cy) = \sigma^2 CC^\top = \sigma^2\big[(X^\top X)^{-1} +
+(X^\top X)^{-1}X^\top D^\top + DX(X^\top X)^{-1} + DD^\top\big] =
+\sigma^2(X^\top X)^{-1} + \sigma^2DD^\top$, since $DX = 0$. $DD^\top$ is
+positive semidefinite ($v^\top DD^\top v = \lVert D^\top v\rVert^2 \ge 0$), and
+$\operatorname{Var}(a^\top\tilde\beta) - \operatorname{Var}(a^\top\hat\beta) =
+\sigma^2\lVert D^\top a\rVert^2 \ge 0$. $\blacksquare$
+:::
+
+### Multiple regression on the house data
+
+The preprocessing pipeline of @sec-leakage, followed by `LinearRegression`,
+fitted on the log-price:
+
+```{python}
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
+
+numeric = ["area", "bedrooms", "bathrooms", "stories", "parking"]
+binary = ["mainroad", "guestroom", "basement", "hotwaterheating", "airconditioning", "prefarea"]
+preprocess = ColumnTransformer([
+    ("num", StandardScaler(), numeric),
+    ("bin", OrdinalEncoder(categories=[["no", "yes"]] * len(binary)), binary),
+    ("furn", OneHotEncoder(drop=["unfurnished"], sparse_output=False), ["furnishingstatus"]),
+], verbose_feature_names_out=False)
+ols = Pipeline([("prep", preprocess), ("reg", LinearRegression())])
+
+X_all, y_all = houses.drop(columns="price"), np.log(houses["price"])
+X_tr, X_te, y_tr, y_te = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
+ols.fit(X_tr, y_tr)
+coef = pd.Series(ols[-1].coef_, index=ols[:-1].get_feature_names_out())
+table = pd.DataFrame({"coef (log-price)": coef, "≈ % effect": 100 * (np.exp(coef) - 1)})
+print(table.sort_values("coef (log-price)", ascending=False).round(3).to_string())
+print(f"\nR^2 train {ols.score(X_tr, y_tr):.3f}   test {ols.score(X_te, y_te):.3f}")
+```
+
+Because the target is $\ln(\text{price})$, a coefficient $b$ multiplies the
+predicted price by $e^b$: the "% effect" column. For the yes/no columns it is
+the effect of having the feature, other things equal (air conditioning:
+about +`{python} f"{100 * (np.exp(coef['airconditioning']) - 1):.0f}"`%); for
+the standardised numerical columns it is the effect of **one standard
+deviation** more (for the area, about 2 200 square feet:
++`{python} f"{100 * (np.exp(coef['area']) - 1):.0f}"`%). Standardisation makes
+the numerical coefficients comparable with each other; it does not make them
+comparable with the 0/1 ones, whose unit is "having the feature".
+
+## Polynomial regression {#sec-polynomial}
+
+"Linear" refers to the **parameters**, not to the features. Adding powers of
+a feature, $y = \beta_0 + \beta_1 x + \beta_2 x^2 + \dots + \beta_d x^d +
+\varepsilon$, gives a model that is still linear in $\beta$: build the columns
+$x, x^2, \dots, x^d$ and run ordinary least squares. scikit-learn's
+`PolynomialFeatures` builds them (and, with several features, the
+**interaction** products $x_j x_k$ too).
+
+```{python}
+#| label: fig-polynomial
+#| fig-cap: "Polynomial fits of degree 1, 3 and 15 to 20 noisy points from a sine curve (dashed). Degree 1 is too rigid, degree 15 follows the noise. The panel titles give the mean squared error on the 20 training points and on 1 000 new points."
+from sklearn.preprocessing import PolynomialFeatures
+
+rng = np.random.default_rng(0)
+truth = lambda x: np.sin(2 * np.pi * x)
+x_tr = np.sort(rng.uniform(0, 1, 20)); y_tr_p = truth(x_tr) + rng.normal(0, 0.25, 20)
+x_te = rng.uniform(0, 1, 1000);        y_te_p = truth(x_te) + rng.normal(0, 0.25, 1000)
+
+fig, axes = plt.subplots(1, 3, figsize=(9.5, 2.9), sharey=True)
+g = np.linspace(0, 1, 400)
+for ax, d, c in zip(axes, (1, 3, 15), mlbook.COLORS[1:4]):
+    poly = Pipeline([("poly", PolynomialFeatures(d, include_bias=False)), ("scale", StandardScaler()),
+                     ("reg", LinearRegression())]).fit(x_tr[:, None], y_tr_p)
+    ax.plot(g, truth(g), ls="--", color=mlbook.MUTED, lw=1.2)
+    ax.plot(g, poly.predict(g[:, None]), color=c)
+    ax.scatter(x_tr, y_tr_p, s=16, color=mlbook.COLORS[0], zorder=3)
+    tr = mean_squared_error(y_tr_p, poly.predict(x_tr[:, None])); te = mean_squared_error(y_te_p, poly.predict(x_te[:, None]))
+    ax.set_title(f"degree {d}: train {tr:.3f}, test {te:.3f}", fontsize=9)
+    ax.set_ylim(-2, 2); ax.set_xlabel("x")
+axes[0].set_ylabel("y")
+fig.tight_layout(); plt.show()
+```
+
+The training error falls as the degree grows — with 20 points, degree 19
+would interpolate them exactly — while the test error first falls and then
+explodes. The cubic captures the shape; the degree-15 polynomial captures the
+noise. Choosing the degree, or more generally the flexibility of a model,
+without being fooled by the training error is the subject of the next
+chapter.
+
+::: {.project-link}
+**In the project.** The baseline the brief asks for is the multiple linear
+regression of @sec-multiple-regression, evaluated with MSE and $R^2$
+(@sec-regression-metrics) on training and test data. Three results of this
+chapter shape the analysis: the correlation matrix and the VIFs show that the
+features are related but not collinear; the log transform makes coefficients
+read as percentage effects; and the MSE must be reported with its **units** — on
+log-prices an MSE of 0.04 means typical errors of about 20% of the price,
+while on raw prices the same model has an MSE in the trillions.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Reading a coefficient as a causal effect.** It is an association,
+  "other features held fixed" (@thm-fwl); confounders not in the model are not
+  held fixed.
+- **Comparing raw coefficients** of features in different units. Standardise
+  first, or report effects for meaningful changes.
+- **Reporting training $R^2$** as model quality, or comparing $R^2$ across
+  data sets with different spreads of $y$.
+- **Treating a negative test $R^2$ as a bug.** It means the model is worse
+  than predicting the mean.
+- **Inverting $X^\top X$** explicitly; use `lstsq`/scikit-learn.
+- **Forgetting the dummy-variable trap** when building the design matrix by
+  hand (@prp-dummy-trap).
+- **Gradient descent on unscaled features**: slow or divergent.
+- **High-degree polynomials** without validation: perfect training fit,
+  terrible predictions, wild behaviour outside the data range.
+:::
+
+## Summary
+
+- **Least squares** minimises the sum of squared residuals; for one feature
+  $\hat\beta_1 = S_{xy}/S_{xx}$, $\hat\beta_0 = \bar y - \hat\beta_1\bar x$; for
+  many, the **normal equations** $X^\top X\hat\beta = X^\top y$ (residuals
+  orthogonal to the columns).
+- **MSE** targets the mean and equals maximum likelihood under Gaussian
+  noise; **MAE** targets the median; **Huber** interpolates. RMSE and MAE are in
+  the units of $y$.
+- **Gradient descent** with step $1/L$ converges at rate $O(1/k)$; its speed
+  depends on the conditioning, hence on feature scaling.
+- $R^2 = 1 - \mathrm{SSE}/\mathrm{SST}$; on training data with an intercept,
+  $\mathrm{SST} = \mathrm{SSR} + \mathrm{SSE}$ and $R^2 \in [0,1]$ ($= r^2$ for one
+  feature); on test data it can be negative.
+- $|r| \le 1$ (Cauchy–Schwarz); correlation is linear association, not
+  causation.
+- Coefficients are partial effects (**Frisch–Waugh–Lovell**); their variance is
+  inflated by $1/(1 - R_j^2)$ (**VIF**); least squares is unbiased and, by
+  **Gauss–Markov**, the most precise linear unbiased estimator.
+- **Polynomial** features keep the model linear in the parameters and make it
+  more flexible — and prone to overfitting.
+
+## Exercises
+
+::: {#exr-ml4-hand}
+For the points $(0, 1), (1, 3), (2, 2), (3, 5), (4, 4)$: compute $\hat\beta_0$,
+$\hat\beta_1$, the residuals, SSE, SST and $R^2$ by hand, and check that
+$R^2 = r^2$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$\bar x = 2$, $\bar y = 3$; $x - \bar x = (-2,-1,0,1,2)$,
+$y - \bar y = (-2,0,-1,2,1)$. $S_{xx} = 10$, $S_{xy} = 4+0+0+2+2 = 8$,
+$S_{yy} = 4+0+1+4+1 = 10$. $\hat\beta_1 = 0.8$, $\hat\beta_0 = 3 - 1.6 = 1.4$.
+Fitted $1.4, 2.2, 3.0, 3.8, 4.6$; residuals $-0.4, 0.8, -1.0, 1.2, -0.6$
+(sum 0); SSE $= 0.16+0.64+1+1.44+0.36 = 3.6$; SST $= 10$; $R^2 = 0.64$;
+$r = 8/\sqrt{100} = 0.8$, $r^2 = 0.64$. ✓
+```{python}
+xe, ye = np.array([0, 1, 2, 3, 4]), np.array([1, 3, 2, 5, 4])
+f = SimpleLinearRegression().fit(xe, ye)
+print(f.b0, f.b1, r2_score(ye, f.predict(xe)), np.corrcoef(xe, ye)[0, 1] ** 2)
+```
+:::
+
+::: {#exr-ml4-regression-to-mean}
+Show that in simple regression, after standardising both $x$ and $y$, the
+slope equals $r_{xy}$. Use this to explain Galton's "regression towards the
+mean": why do children of very tall parents tend to be less extreme than their
+parents, even if heights do not change from one generation to the next?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+With standardised variables $S_{xx} = S_{yy} = n$ (population standard
+deviation $1$), so $\hat\beta_1 = S_{xy}/S_{xx} = S_{xy}/\sqrt{S_{xx}S_{yy}} =
+r$. A parent $2$ standard deviations above the mean has a predicted child
+$2r$ standard deviations above it; since $|r| < 1$ unless the relation is
+exact, the prediction is closer to the mean. This is a property of imperfect
+correlation, not a biological force: the same happens backwards (tall
+children have, on average, less tall parents).
+:::
+
+::: {#exr-ml4-r2-corr}
+Prove that, for a least-squares fit with an intercept, $R^2$ equals the
+squared correlation between $y$ and the fitted values $\hat y$, for any number
+of features.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Let $e = y - \hat y$; with an intercept, $\sum e_i = 0$ so $\bar{\hat y} =
+\bar y$, and $e \perp \hat y - \bar y\mathbf 1$ (@thm-normal-equations). Then
+$S_{y\hat y} = \sum (y_i - \bar y)(\hat y_i - \bar y) = \sum (\hat y_i - \bar
+y + e_i)(\hat y_i - \bar y) = \mathrm{SSR}$. Hence $r_{y\hat y}^2 =
+\mathrm{SSR}^2/(\mathrm{SST}\cdot\mathrm{SSR}) = \mathrm{SSR}/\mathrm{SST} = R^2$
+by @thm-r2-decomposition.
+:::
+
+::: {#exr-ml4-gd}
+Run `gradient_descent` on the standardised features with steps $\eta = 0.5/L$,
+$1/L$, $1.9/L$ and $2.1/L$ (modify the function to accept a factor). What
+happens in the last case, and why does the threshold $2/L$ appear?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def gd_factor(X, y, steps, factor):
+    X1 = np.column_stack([np.ones(len(X)), X]); H = X1.T @ X1 / len(y); L = np.linalg.eigvalsh(H).max()
+    beta = np.zeros(X1.shape[1])
+    for _ in range(steps):
+        beta += factor / L * X1.T @ (y - X1 @ beta) / len(y)
+    return 0.5 * np.mean((y - X1 @ beta) ** 2)
+for fct in (0.5, 1.0, 1.9, 2.1):
+    print(f"step {fct}/L: final cost {gd_factor(Xs, y_log, 200, fct):.6g}")
+```
+Along an eigenvector of $H$ with eigenvalue $\lambda$, the error is multiplied
+at each step by $1 - \eta\lambda$. Convergence needs $|1 - \eta\lambda| < 1$
+for every $\lambda$, i.e. $0 < \eta < 2/\lambda_{\max} = 2/L$. At $2.1/L$ the
+component along the top eigenvector grows by a factor $1.1$ per step and the
+cost diverges.
+:::
+
+::: {#exr-ml4-dummy-coef}
+In the multiple regression on the house data, the furnishing status entered as
+two indicators with "unfurnished" as reference. Refit with "furnished" as the
+reference (`drop=["furnished"]`). Which numbers change, which stay the same,
+and why?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The predictions, $R^2$ and all other coefficients are identical; only the
+intercept and the two furnishing coefficients change, because they are now
+differences from a different reference: the new coefficient of "unfurnished"
+is minus the old one, and that of "semi-furnished" is the old semi-furnished
+minus the old furnished. The two codings span the same column space
+(@prp-dummy-trap), so @thm-normal-equations gives the same fitted values.
+:::
+
+## Further reading {.unnumbered}
+
+- @james2023, ch. 3 — linear regression with Python labs: the best first
+  read; @hastie2009, ch. 3 — the same with the geometry and the theory.
+- @seber2003, ch. 3–4 — least squares, Gauss–Markov and distribution theory,
+  proved in detail.
+- @stigler1981 and @stigler1986 — the history of least squares and
+  correlation, from Legendre and Gauss to Galton and Pearson.
+- @golub2013, §5.3 — how least squares is computed reliably (QR, SVD) and why
+  the normal equations lose accuracy.
+- @boyd2004, ch. 9 — gradient descent and the role of conditioning.
+- @kvalseth1985 — the many definitions of $R^2$ and how to avoid misusing
+  them; @anscombe1973 — why you plot before you summarise.

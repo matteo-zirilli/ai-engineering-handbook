@@ -1,0 +1,698 @@
+# What machine learning is {#sec-ch-ml-intro}
+
+> *"All models are wrong but some are useful."* — George E. P. Box
+> [@box1979].
+
+```{python}
+#| echo: false
+import mlbook
+mlbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- define **machine learning** precisely — data, features, target, model,
+  loss, risk — and say what "learning" means in that vocabulary;
+- distinguish the **paradigms** (supervised, unsupervised, self-supervised,
+  reinforcement learning) by *what the data contain* and *what is optimised*;
+- **prove** which predictor is the best possible under the squared loss (the
+  conditional mean) and under the 0–1 loss (the Bayes classifier), and explain
+  why models output **probabilities**;
+- explain why the **training error is optimistic** (and prove it), why a
+  separate **test set** gives an unbiased estimate, and how large the test set
+  must be (Chebyshev and Hoeffding bounds, proved);
+- tell **memorising** from **generalising** on a concrete example;
+- explain *why now*: data, compute and software;
+- describe the **workflow** of a machine-learning project and the
+  `fit`/`predict` interface of scikit-learn.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What machine learning is and why it has become central today; the main
+families of techniques and how they differ in the way they learn from data
+and in the kind of answer — often a probability — they give.
+:::
+
+## Intuition: the appraiser and the rule book
+
+How would you write a program that estimates the price of a house? One way is
+to sit with an expert and write the rules down: *start from 1 000 € per square
+metre, add 10% for a garden, subtract 15% if there is no lift…* The program
+is only as good as the rules, the rules are never complete, and when the
+market changes someone has to rewrite them.
+
+An experienced appraiser works differently. She has seen thousands of sales:
+for each, the characteristics of the house and the price it fetched. She has
+never written a rule down, yet she estimates a new house well — because she
+has extracted, from **examples**, the regularities that link characteristics
+to prices. If the market changes, she updates her intuition from the new
+sales.
+
+**Machine learning** is the second strategy, made precise and automatic: a
+program receives examples and produces, by itself, a function that maps
+inputs to outputs, and that works on inputs it has never seen. The rule
+book is replaced by a **model** whose parameters are **fitted** to data.
+
+## Definitions {#sec-ml-definitions}
+
+Arthur Samuel, who wrote a checkers program that improved by playing against
+itself, popularised the term in 1959 [@samuel1959]. The definition used today
+is Tom Mitchell's [@mitchell1997, §1.1].
+
+::: {#def-ml}
+## Machine learning
+A program **learns** from experience $E$ with respect to a class of tasks $T$
+and a performance measure $P$ if its performance at tasks in $T$, as measured
+by $P$, improves with experience $E$.
+:::
+
+*In one line:* learning = getting measurably better at a task by seeing data.
+
+For the house appraiser, $T$ is "estimate the price of a house", $E$ is a list
+of past sales, and $P$ is, for example, the average squared difference between
+estimated and actual prices. The vocabulary of the whole part follows.
+
+- An **example** (observation, sample, row) is one unit of experience: one
+  house sale.
+- Its **features** (inputs, predictors, covariates, attributes) are the
+  measured characteristics, collected in a vector
+  $x = (x_1, \dots, x_p) \in \mathcal{X}$: surface, number of rooms, …
+- The **target** (label, response, output) $y \in \mathcal{Y}$ is what we
+  want to predict: the price.
+- A **data set** is a list of $n$ examples
+  $\mathcal{D} = \{(x^{(1)}, y^{(1)}), \dots, (x^{(n)}, y^{(n)})\}$; stacked,
+  the features form the $n \times p$ **design matrix** $X$ and the targets the
+  vector $y \in \mathbb{R}^n$ (@sec-ch-ml-data).
+- A **model** (hypothesis, predictor) is a function $f: \mathcal{X} \to
+  \mathcal{Y}$, usually chosen from a family $\mathcal{F} = \{f_\theta\}$
+  indexed by **parameters** $\theta$ (for a line, slope and intercept).
+- A **loss** $\ell(y, \hat y) \ge 0$ measures the cost of predicting $\hat y$
+  when the truth is $y$: the **squared loss** $(y - \hat y)^2$ for numbers,
+  the **0–1 loss** $[y \ne \hat y]$ (1 if wrong, 0 if right) for classes.
+
+The crucial modelling assumption is that the examples are drawn
+**independently from one fixed probability distribution** $P$ over pairs
+$(X, Y)$ — the "i.i.d." assumption (independent and identically distributed).
+Then the quantity we really care about is the average loss on *future*
+examples.
+
+::: {#def-risk}
+## Risk and empirical risk
+The **risk** (expected loss, generalisation error) of a predictor $f$ is
+$$
+R(f) = \mathbb{E}_{(X,Y)\sim P}\big[\ell(Y, f(X))\big].
+$$ {#eq-risk}
+Its **empirical risk** on a data set of $n$ examples is the average loss
+$$
+\hat R_n(f) = \frac1n \sum_{i=1}^n \ell\big(y^{(i)}, f(x^{(i)})\big).
+$$ {#eq-empirical-risk}
+:::
+
+*In one line:* the risk is the error we will make on average in the future;
+the empirical risk is the error we can actually compute on the data we have.
+
+We cannot compute $R(f)$ — $P$ is unknown — so learning algorithms minimise
+something computable. The simplest principle, named **empirical risk
+minimisation** (ERM) by Vapnik [@vapnik1991], is: *choose the
+$f \in \mathcal{F}$ with the smallest $\hat R_n(f)$ on the training data.*
+Least-squares regression (@sec-ch-ml-regression) and logistic regression
+(@sec-ch-ml-classification) are ERM with particular families and losses;
+regularisation (@sec-ch-ml-regularization) adds a penalty to it.
+
+## The paradigms {#sec-ml-paradigms}
+
+What differs between the families of machine learning is *what the data
+contain* and *what is optimised*.
+
+| Paradigm | Data | Goal | Examples in this part |
+|---|---|---|---|
+| **supervised** | pairs $(x, y)$ | predict $y$ from $x$: **regression** if $y$ is a number, **classification** if $y$ is a class | price of a house (@sec-ch-ml-regression); benign or malignant tumour (@sec-ch-ml-classification) |
+| **unsupervised** | only $x$ | find structure: groups (**clustering**), fewer dimensions, the density of the data | groups of similar wines (@sec-ch-ml-clustering) |
+| **self-supervised** | only $x$, but a target is carved out of $x$ itself | predict a hidden part of the input from the rest | the next word of a text — how language models are pre-trained (@sec-llm-basics) |
+| **reinforcement** | an agent's actions, the states they lead to and numerical **rewards** | choose actions that maximise the total reward over time | game playing, robot control [@sutton2018] |
+
+: The paradigms of machine learning {#tbl-ml-paradigms}
+
+Two remarks. First, the boundary between supervised and unsupervised is about
+**labels**, which are often expensive: a radiologist must examine every image
+to label it, while unlabelled images are cheap. Methods in between
+(semi-supervised, self-supervised) exist precisely to exploit unlabelled data.
+Second, reinforcement learning differs in kind: its data are *produced by the
+learner's own decisions*, so the i.i.d. assumption does not hold and the
+techniques of this part do not apply directly.
+
+This part studies supervised learning (regression and classification) and
+the most common unsupervised task (clustering). Reinforcement learning has its
+own part later in the book.
+
+## The best possible predictor {#sec-best-predictor}
+
+Before learning anything, ask: *if we knew $P$ exactly, what would the best
+predictor be?* The answer tells us what learning algorithms are trying to
+approximate — and why their outputs are naturally **probabilistic**.
+
+### Regression: the conditional mean
+
+::: {#thm-regression-function}
+## The conditional mean minimises the squared risk
+Let $m(x) = \mathbb{E}[Y \mid X = x]$ (the **regression function**). For every
+predictor $f$ with finite risk,
+$$
+\mathbb{E}\big[(Y - f(X))^2\big] = \mathbb{E}\big[(Y - m(X))^2\big] + \mathbb{E}\big[(m(X) - f(X))^2\big].
+$$ {#eq-regression-decomposition}
+Hence $m$ has the smallest squared risk, and the excess risk of $f$ is its mean
+squared distance from $m$.
+:::
+
+*In one line:* under squared loss the ideal prediction is the **average**
+price of all houses with exactly these characteristics; any other predictor
+pays extra in proportion to how far it is from that average.
+
+::: {.deep kind="proof"}
+## Proof of @thm-regression-function
+Write $Y - f(X) = \big(Y - m(X)\big) + \big(m(X) - f(X)\big)$ and expand the
+square:
+$$
+\mathbb{E}[(Y-f)^2] = \mathbb{E}[(Y-m)^2] + \mathbb{E}[(m-f)^2] + 2\,\mathbb{E}\big[(Y-m(X))(m(X)-f(X))\big].
+$$
+For the cross term, condition on $X$ (the **tower property**
+$\mathbb{E}[Z] = \mathbb{E}[\mathbb{E}[Z\mid X]]$): given $X$, the factor
+$m(X) - f(X)$ is a constant, so
+$\mathbb{E}[(Y-m(X))(m(X)-f(X)) \mid X] = (m(X)-f(X))\,\big(\mathbb{E}[Y\mid X] - m(X)\big) = 0$.
+The cross term vanishes, which gives @eq-regression-decomposition; the second
+term on the right is $\ge 0$ and is $0$ for $f = m$. $\blacksquare$
+:::
+
+The first term, $\mathbb{E}[(Y - m(X))^2]$, is the **irreducible error**:
+houses with identical recorded characteristics still sell at different prices
+(the view, the negotiation, the timing), and no model using only these
+features can predict that part. It will reappear in the bias–variance
+decomposition (@sec-ch-ml-regularization).
+
+### Classification: the Bayes classifier
+
+For classes $\mathcal{Y} = \{1, \dots, K\}$ the analogue of $m(x)$ is the
+vector of **conditional class probabilities**
+$p_k(x) = P(Y = k \mid X = x)$.
+
+::: {#thm-bayes-classifier}
+## The Bayes classifier minimises the 0–1 risk
+The classifier $f^*(x) = \arg\max_k p_k(x)$ minimises the probability of
+error $P(Y \ne f(X))$ among all classifiers, and its error is
+$R(f^*) = 1 - \mathbb{E}\big[\max_k p_k(X)\big]$.
+:::
+
+*In one line:* if you knew the probability of each class, the best guess is
+the most probable class — and the error you cannot avoid is the probability
+mass of the other classes.
+
+::: {.deep kind="proof"}
+## Proof of @thm-bayes-classifier
+For any classifier $f$, by the tower property,
+$P(Y \ne f(X)) = 1 - P(Y = f(X)) = 1 - \mathbb{E}\big[P(Y = f(X) \mid X)\big]
+= 1 - \mathbb{E}\big[p_{f(X)}(X)\big]$. For each $x$,
+$p_{f(x)}(x) \le \max_k p_k(x)$, with equality when $f(x)$ is a most probable
+class. Taking expectations, $P(Y \ne f(X)) \ge 1 - \mathbb{E}[\max_k p_k(X)]
+= P(Y \ne f^*(X))$. $\blacksquare$
+:::
+
+The two theorems explain why so many models output **probabilities** rather
+than bare answers: a classifier that estimates $p_k(x)$ can take the most
+probable class, but it can also take *costs* into account (a missed tumour is
+worse than a false alarm, @sec-ch-ml-classification) or report its
+**uncertainty** to a human. A regression model that estimates $m(x)$ is
+estimating a *mean*; a good one also says how spread the prices around that
+mean are (@sec-ch-project-housing). These ideas go back to statistical
+decision theory; Bishop gives a readable account [@bishop2006, §1.5].
+
+## Generalisation: why the training error lies {#sec-generalization}
+
+The data we have serve two purposes that pull in opposite directions: we
+want to **fit** the model to them, and we want to **measure** how good it is.
+Using the same data for both is a mistake, and the reason can be proved.
+
+::: {#thm-train-optimistic}
+## The training error of ERM is optimistic
+Let $\hat f$ minimise the empirical risk $\hat R_n$ over a family
+$\mathcal{F}$ on an i.i.d. training set, and let $f^\circ$ be any *fixed*
+member of $\mathcal{F}$ (chosen without looking at the data). Then
+$$
+\mathbb{E}\big[\hat R_n(\hat f)\big] \;\le\; R(f^\circ).
+$$
+In particular $\mathbb{E}[\hat R_n(\hat f)] \le \min_{f \in \mathcal F} R(f) \le \mathbb{E}[R(\hat f)]$
+whenever the minimum exists: on average, the training error of the fitted
+model is *at most* the true error of the best model in the family, which in
+turn is at most the true error of the fitted model.
+:::
+
+*In one line:* a model chosen because it looks good on some data will, on
+average, look better on those data than it really is.
+
+::: {.deep kind="proof"}
+## Proof of @thm-train-optimistic
+By definition of $\hat f$, $\hat R_n(\hat f) \le \hat R_n(f^\circ)$ for every
+training set. Take expectations: $\mathbb{E}[\hat R_n(\hat f)] \le
+\mathbb{E}[\hat R_n(f^\circ)]$. Because $f^\circ$ does not depend on the
+data, each term $\ell(y^{(i)}, f^\circ(x^{(i)}))$ has expectation $R(f^\circ)$
+(@eq-risk), and so does their average: $\mathbb{E}[\hat R_n(f^\circ)] =
+R(f^\circ)$. Choosing $f^\circ$ as a minimiser of $R$ over $\mathcal F$ gives
+the first inequality of the second statement; the last one holds because
+$\hat f \in \mathcal F$, so $R(\hat f) \ge \min_{\mathcal F} R$ for every
+training set. $\blacksquare$
+:::
+
+The proof also shows the cure. The step "$\mathbb{E}[\hat R_n(f^\circ)] =
+R(f^\circ)$" used only one thing: that $f^\circ$ was chosen **without
+looking at the data on which it is evaluated**. So we split the data: a
+**training set** to fit, a **test set**, never touched during fitting, to
+measure.
+
+::: {#prp-test-unbiased}
+## The test error is unbiased
+If $\hat f$ is fitted on the training set and $(x'^{(j)}, y'^{(j)})$,
+$j = 1, \dots, m$, is an independent test set from the same distribution,
+then $\mathbb{E}\big[\hat R'_m(\hat f) \mid \hat f\big] = R(\hat f)$, where
+$\hat R'_m$ is the empirical risk on the test set.
+:::
+
+*In one line:* error measured on data the model has never seen is, on
+average, exactly the error it will make in the future.
+
+::: {.deep kind="proof"}
+## Proof of @prp-test-unbiased
+Conditionally on the training set, $\hat f$ is a fixed function and the test
+pairs are i.i.d. draws from $P$ independent of it; the argument of the proof of
+@thm-train-optimistic for $f^\circ$ applies verbatim. $\blacksquare$
+:::
+
+Unbiased is not enough: a test set of 10 houses gives an unbiased but very
+noisy estimate. How large must it be? For a classifier, the test error is
+the average of $m$ independent 0/1 variables, and two classical inequalities
+answer the question.
+
+::: {#thm-test-set-size}
+## How precise is a test-set estimate?
+Let $Z_1, \dots, Z_m$ be i.i.d. with values in $[a, b]$, mean $\mu$, and let
+$\bar Z = \frac1m\sum_j Z_j$. For every $t > 0$:
+
+1. (**Chebyshev**) $P(|\bar Z - \mu| \ge t) \le \dfrac{\operatorname{Var}(Z_1)}{m t^2} \le \dfrac{(b-a)^2}{4 m t^2}$;
+2. (**Hoeffding**) $P(|\bar Z - \mu| \ge t) \le 2\exp\!\left(-\dfrac{2 m t^2}{(b-a)^2}\right)$.
+
+Consequently, with probability at least $1 - \delta$, the test error of a
+classifier ($Z_j \in \{0,1\}$) is within
+$$
+t_\delta = \sqrt{\frac{\ln(2/\delta)}{2m}}
+$$ {#eq-hoeffding-width}
+of its true error.
+:::
+
+*In one line:* the uncertainty of a test estimate shrinks like
+$1/\sqrt{m}$: to halve it you need **four times** as many test examples.
+
+::: {.deep kind="proof"}
+## Proof of @thm-test-set-size
+*Chebyshev.* Markov's inequality — for $W \ge 0$, $P(W \ge c) \le
+\mathbb{E}[W]/c$, because $c\,[W \ge c] \le W$ pointwise — applied to
+$W = (\bar Z - \mu)^2$ and $c = t^2$ gives $P(|\bar Z-\mu| \ge t) \le
+\operatorname{Var}(\bar Z)/t^2 = \operatorname{Var}(Z_1)/(m t^2)$, since the
+variance of an average of $m$ independent copies is $1/m$ times the variance
+of one. A variable in $[a, b]$ has variance at most $(b-a)^2/4$:
+$\operatorname{Var}(Z) \le \mathbb{E}[(Z - c)^2]$ for every constant $c$ (the
+mean minimises it, @thm-regression-function with no $X$), and with $c =
+(a+b)/2$ we get $|Z - c| \le (b-a)/2$.
+
+*Hoeffding's lemma.* If $\mathbb{E}[W] = 0$ and $W \in [a, b]$, then
+$\mathbb{E}[e^{sW}] \le e^{s^2(b-a)^2/8}$ for all $s$. By convexity of the
+exponential, for $w \in [a,b]$: $e^{sw} \le \frac{b-w}{b-a}e^{sa} +
+\frac{w-a}{b-a}e^{sb}$. Taking expectations with $\mathbb{E}[W] = 0$:
+$\mathbb{E}[e^{sW}] \le \frac{b}{b-a}e^{sa} - \frac{a}{b-a}e^{sb}$. Put
+$h = s(b-a)$, $\pi = -a/(b-a) \in [0,1]$; the right-hand side equals
+$e^{L(h)}$ with $L(h) = -h\pi + \ln(1 - \pi + \pi e^h)$. Then $L(0) = 0$,
+$L'(h) = -\pi + q(h)$ with $q = \pi e^h/(1 - \pi + \pi e^h)$, so $L'(0) = 0$,
+and $L''(h) = q(1-q) \le 1/4$. By Taylor's theorem with remainder,
+$L(h) \le h^2/8 = s^2(b-a)^2/8$.
+
+*Hoeffding's inequality* (the Chernoff method). For $s > 0$, by Markov's
+inequality applied to $e^{s\sum_j (Z_j-\mu)}$ and independence,
+$$
+P\Big(\sum_j (Z_j - \mu) \ge mt\Big) \le e^{-smt}\prod_{j=1}^m \mathbb{E}\big[e^{s(Z_j-\mu)}\big]
+\le \exp\!\Big(-smt + \frac{m s^2 (b-a)^2}{8}\Big).
+$$
+The exponent is minimised at $s = 4t/(b-a)^2$, giving
+$\exp(-2mt^2/(b-a)^2)$. The same bound for $-(Z_j - \mu)$ handles the other
+tail; the two together give the factor 2. Finally, setting
+$2e^{-2mt^2} = \delta$ (with $b - a = 1$) and solving for $t$ gives
+@eq-hoeffding-width. $\blacksquare$
+
+The inequality is Theorem 2 of Hoeffding's 1963 paper [@hoeffding1963];
+Shalev-Shwartz and Ben-David build learning theory on it
+[@shalevshwartz2014, ch. 4].
+:::
+
+::: {#exm-test-size}
+## How many test examples?
+A classifier makes 15 errors on $m = 100$ test examples: estimated error
+$0.15$. With $\delta = 0.05$, @eq-hoeffding-width gives
+$t = \sqrt{\ln 40 / 200} = \sqrt{3.689/200} \approx 0.136$: the true error is
+somewhere between about 1% and 29% (with 95% confidence) — not very
+informative. Chebyshev's bound is weaker: $1/(4 \cdot 100\, t^2) = 0.05$ gives
+$t = 1/\sqrt{20} \approx 0.224$. To reach $\pm 0.03$ with Hoeffding we need
+$m \ge \ln 40/(2 \cdot 0.03^2) \approx 2049$ test examples.
+:::
+
+The code below checks the example by simulation: we draw many test sets of
+100 examples from a classifier whose true error is $0.15$ and count how often
+the estimate falls outside $\pm 0.136$.
+
+```{python}
+import numpy as np
+
+rng = np.random.default_rng(0)
+true_error, m, trials = 0.15, 100, 200_000
+estimates = rng.binomial(m, true_error, size=trials) / m      # test error of each simulated test set
+t_hoeffding = np.sqrt(np.log(2 / 0.05) / (2 * m))
+outside = np.mean(np.abs(estimates - true_error) >= t_hoeffding)
+print(f"Hoeffding half-width t = {t_hoeffding:.3f}")
+print(f"fraction of test sets off by >= t: {outside:.5f}  (the bound guarantees <= 0.05)")
+print(f"middle 95% of the estimates: [{np.quantile(estimates, 0.025):.2f}, {np.quantile(estimates, 0.975):.2f}]")
+```
+
+The bound holds with a large margin: it is valid for *every* distribution on
+$[0,1]$, so for a particular one it is conservative. The middle 95% of the
+estimates spans about $\pm 0.07$, roughly half the guaranteed width —
+still a wide interval. The lesson for the project (@sec-ch-project-housing):
+on a data set of a few hundred examples, a single train/test split gives a
+noisy number, and differences of a few percent between models can be pure
+luck. Cross-validation (@sec-ch-ml-regularization) uses the data more
+efficiently.
+
+## Memorising is not learning {#sec-memorising}
+
+The cheapest way to get zero training error is to **memorise**: store every
+training example and, for a new input, return the target of the closest
+stored one (the *1-nearest-neighbour* rule). Let us compare it with a
+straight line on synthetic data where we know the truth: $y = 2 + 0.5x$ plus
+noise with standard deviation 1.
+
+```{python}
+#| label: fig-memorise
+#| fig-cap: "Memorising versus learning. Left: 30 training points from a straight line plus noise; the 1-nearest-neighbour rule (steps) passes through every training point, the least-squares line does not. Right: on 1 000 new points, the line is far more accurate."
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.metrics import mean_squared_error
+
+rng = np.random.default_rng(1)
+def sample(n):
+    x = rng.uniform(0, 10, n)
+    return x.reshape(-1, 1), 2 + 0.5 * x + rng.normal(0, 1, n)   # true model + noise
+
+X_train, y_train = sample(30)
+X_test, y_test = sample(1000)
+
+models = {"1-nearest neighbour (memorise)": KNeighborsRegressor(n_neighbors=1),
+          "least-squares line": LinearRegression()}
+errors = {}
+for name, model in models.items():
+    model.fit(X_train, y_train)
+    errors[name] = (mean_squared_error(y_train, model.predict(X_train)),
+                    mean_squared_error(y_test, model.predict(X_test)))
+    print(f"{name:32s} train MSE = {errors[name][0]:.3f}   test MSE = {errors[name][1]:.3f}")
+
+grid = np.linspace(0, 10, 500).reshape(-1, 1)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.4))
+ax1.scatter(X_train, y_train, s=28, color=mlbook.COLORS[0], label="training data", zorder=3)
+ax1.plot(grid, models["1-nearest neighbour (memorise)"].predict(grid), color=mlbook.COLORS[1], lw=1.5, label="1-NN")
+ax1.plot(grid, models["least-squares line"].predict(grid), color=mlbook.COLORS[2], label="line")
+ax1.set_xlabel("x"); ax1.set_ylabel("y"); ax1.legend(loc="upper left")
+names = list(errors)
+pos = np.arange(2)
+ax2.bar(pos - 0.18, [errors[n][0] for n in names], width=0.34, color=mlbook.COLORS[0], label="train")
+ax2.bar(pos + 0.18, [errors[n][1] for n in names], width=0.34, color=mlbook.COLORS[1], label="test")
+ax2.set_xticks(pos, ["1-NN", "line"]); ax2.set_ylabel("mean squared error"); ax2.legend()
+ax2.axhline(1.0, color=mlbook.MUTED, lw=1, ls="--")
+ax2.text(-0.45, 1.03, "noise variance", ha="left", fontsize=8, color=mlbook.INK2)
+ax2.text(-0.18, 0.03, "0", ha="center", fontsize=8, color=mlbook.INK2)
+fig.tight_layout()
+plt.show()
+```
+
+The memoriser has **zero** training error and the worse test error; the
+line has a training error close to the noise variance (1.0) and a test error
+close to it too. The dashed line is the irreducible error of
+@thm-regression-function: no model can beat it on average, and a test error
+far below it would be a sign of a mistake. Memorising reproduces the noise of
+the training data along with the signal; this is **overfitting**, the subject
+of @sec-ch-ml-regularization.
+
+::: {.callout-important}
+## No model is best for every problem
+The line wins here because the truth *is* a line. On data from a wiggly
+function, a flexible model would win. Wolpert's **no-free-lunch theorems**
+make this precise: averaged over all possible data-generating processes, every
+learning algorithm has the same expected performance on unseen inputs
+[@wolpert1996]. Learning works in practice because real problems are not
+"all possible problems": they have structure, and choosing a model is
+choosing which structure to bet on. That bet must be checked on held-out data.
+:::
+
+## Why now? {#sec-why-now}
+
+The statistical ideas of this part are old — least squares is from 1805,
+logistic regression from the 1940s–1950s, k-means from the 1950s. Machine
+learning became central to computing in the 2010s because three ingredients
+arrived together.
+
+- **Data.** Digitisation made examples cheap: web pages, photos, sensor logs,
+  transactions. The ImageNet data set, more than a million labelled images
+  [@deng2009], is the symbol of this change.
+- **Compute.** Graphics processors (GPUs), designed for video games, turned
+  out to be ideal for the matrix arithmetic of learning. In 2012 a neural
+  network trained on two GPUs cut the ImageNet error rate far below every
+  previous method [@krizhevsky2012], and the deep-learning era began
+  [@lecun2015]. Sevilla et al. measured the training compute of milestone
+  models: it doubled roughly every 20 months before 2010 — in line with
+  Moore's law — and roughly every 6 months afterwards [@sevilla2022].
+- **Software.** Open-source libraries made the methods accessible to every
+  programmer. This part uses **scikit-learn** [@pedregosa2011], which
+  provides almost every classical method behind one consistent interface.
+
+What did *not* change is the logic of this chapter: a model is fitted on some
+data and must be judged on other data. The largest language models obey the
+same rules as a straight line.
+
+## The workflow of a machine-learning project {#sec-ml-workflow}
+
+Every project of this part, and most in practice, follows the same steps.
+The chapters of this part follow them too.
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "The workflow of a supervised machine-learning project, with the chapter that covers each step. The dashed arrow is the loop of model selection, which must never use the test set."
+flowchart LR
+    Q["Frame the question<br/>(task, metric)"] --> D["Collect and read data<br/>(Ch. 2)"]
+    D --> S["Split: train / test"]
+    S --> P["Preprocess<br/>(Ch. 3)"]
+    P --> M["Fit models<br/>(Ch. 4, 6, 7)"]
+    M --> V["Validate and select<br/>(Ch. 5)"]
+    V -.-> P
+    V --> T["Final test,<br/>report"]
+```
+
+Two features of the diagram matter more than any algorithm. The **split**
+comes *before* preprocessing, because everything learned from data —
+including the mean used to fill a missing value or to scale a feature — is
+part of the model (@sec-ch-ml-preprocessing). And the **test set** is used
+**once**, at the end: if you go back and change the model after looking at
+the test error, the test set has become part of the training process, and
+@prp-test-unbiased no longer applies.
+
+### The scikit-learn interface
+
+scikit-learn gives every algorithm the same small interface [@buitinck2013]:
+
+- an **estimator** is an object configured by its constructor arguments
+  (**hyper-parameters**, chosen by you, such as `n_neighbors=1` above);
+- `fit(X, y)` learns the **parameters** from data and stores them in
+  attributes ending in an underscore (`coef_`, `intercept_`);
+- a predictor has `predict(X)` (and classifiers often `predict_proba(X)`);
+- a **transformer** has `transform(X)` (scaling, encoding,
+  @sec-ch-ml-preprocessing);
+- `score(X, y)` returns a default metric (accuracy for classifiers, $R^2$ for
+  regressors).
+
+`X` is a two-dimensional array or `DataFrame` with one row per example; `y`
+is one-dimensional.
+
+```{python}
+model = LinearRegression()                  # hyper-parameters: here the defaults
+model.fit(X_train, y_train)                 # learns the parameters
+print("learned parameters:", model.intercept_.round(3), model.coef_.round(3), "(truth: 2 and 0.5)")
+print("prediction for x = 4:", model.predict([[4.0]]).round(3))
+print("R^2 on the test set:", round(model.score(X_test, y_test), 3))
+```
+
+The same three lines — construct, `fit`, `predict` — work for every model in
+this part; only the constructor changes.
+
+::: {.project-link}
+**In the project.** The project of this part (@sec-ch-project-housing) is a
+**supervised regression** problem: $x$ = the characteristics of a house, $y$ =
+its sale price, loss = squared error. @thm-regression-function says what we
+are estimating — the *average* price of houses like this one — and
+@thm-train-optimistic is the reason the brief asks for a comparison on data
+not used for fitting. The project also inherits this chapter's caution about
+small samples: with a few hundred sales, a single split gives noisy numbers,
+which is why the evaluation uses repeated cross-validation.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Reporting the training error** as the performance of a model. It is
+  optimistic by construction (@thm-train-optimistic).
+- **Peeking at the test set** — choosing features, models or
+  hyper-parameters by their test error. The test set then stops being a test.
+- **Trusting a tiny test set.** With 100 examples the uncertainty is about
+  $\pm 0.1$ on an error rate (@exm-test-size).
+- **Forgetting the i.i.d. assumption.** A model trained on 1987 house sales
+  and tested on 1987 sales says nothing about 2026 prices: the distribution has
+  changed. Test data must resemble the data the model will meet.
+- **Expecting zero error.** Part of the target is not predictable from the
+  features (the irreducible error); a test error far below the noise level is
+  a bug, not a success.
+- **Confusing parameters and hyper-parameters.** Parameters are learned by
+  `fit`; hyper-parameters are chosen by you (and must be chosen *without* the
+  test set).
+:::
+
+## Summary
+
+- Machine learning builds a predictor $f$ from **examples**; its quality is
+  the **risk** $R(f) = \mathbb{E}[\ell(Y, f(X))]$, the average loss on future
+  data drawn from the same distribution.
+- **Paradigms**: supervised (regression, classification), unsupervised
+  (clustering, …), self-supervised, reinforcement learning — distinguished by
+  what the data contain and what is optimised.
+- With full knowledge of the distribution, the best squared-loss predictor is
+  the **conditional mean** and the best classifier is the **most probable
+  class**; models therefore estimate means and probabilities.
+- The **training error** of a fitted model is optimistic; the error on an
+  untouched **test set** is unbiased, with uncertainty of order
+  $\sqrt{\ln(2/\delta)/(2m)}$ (Hoeffding).
+- **Memorising** gives zero training error and poor generalisation.
+- Data, GPUs and open-source software explain *why now*; the workflow —
+  split, preprocess, fit, validate, test once — is the same at every scale.
+
+## Exercises
+
+::: {#exr-ml1-paradigm}
+For each task, name the paradigm and, if supervised, say whether it is
+regression or classification: (a) estimating tomorrow's electricity demand of a
+city; (b) grouping a shop's customers into segments with similar purchases;
+(c) deciding whether a bank transaction is fraudulent, given past
+transactions labelled by investigators; (d) teaching a robot arm to grasp
+objects by trial and error; (e) predicting the missing word in "the cat sat on
+the ___".
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) supervised regression (the target is a number); (b) unsupervised,
+clustering (no target); (c) supervised classification (two classes);
+(d) reinforcement learning (actions and rewards); (e) self-supervised: the
+target is part of the input itself.
+:::
+
+::: {#exr-ml1-median}
+Repeat @thm-regression-function for the **absolute** loss $|y - \hat y|$, with
+no features: show that the constant $c$ minimising $\mathbb{E}|Y - c|$ is a
+**median** of $Y$. (Hint: compute how $\mathbb{E}|Y - c|$ changes when $c$
+increases by a small $h > 0$.)
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+For $h > 0$, $|y - (c+h)| - |y - c|$ equals $+h$ if $y \le c$, $-h$ if
+$y \ge c + h$, and lies in $[-h, h]$ in between. So
+$\mathbb{E}|Y-c-h| - \mathbb{E}|Y-c| \ge h\,P(Y \le c) - h\,P(Y > c)$, which is
+$\ge 0$ when $P(Y \le c) \ge 1/2$: moving right does not help once at least
+half of the mass is at or below $c$. Symmetrically, moving left does not help
+when $P(Y \ge c) \ge 1/2$. A point with both properties is a median, and it
+is a minimiser. The mean minimises the squared loss, the median the absolute
+loss — a fact we will use when choosing loss functions
+(@sec-ch-ml-regression).
+:::
+
+::: {#exr-ml1-hoeffding}
+You want to estimate the error rate of a spam filter within $\pm 0.01$ with
+95% confidence. How many labelled test e-mails does Hoeffding's bound require?
+And Chebyshev's?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Hoeffding: $m \ge \ln(2/0.05)/(2 \cdot 0.01^2) = 3.689/0.0002 \approx 18\,445$.
+Chebyshev: $1/(4 m t^2) \le 0.05$ gives $m \ge 1/(4 \cdot 0.05 \cdot 0.0001)
+= 50\,000$. Precise evaluation is expensive; this is why public benchmarks
+have test sets of tens of thousands of examples.
+:::
+
+::: {#exr-ml1-bayes}
+Two classes, one feature. Given $X = x$, the probability of class 1 is
+$p(x) = 0.9$ for $x < 0$ and $0.3$ for $x \ge 0$, and $X$ is equally likely to
+be negative or non-negative. What does the Bayes classifier predict, and what
+is its error? Could any classifier do better?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+For $x < 0$ predict class 1 (probability 0.9 > 0.5); for $x \ge 0$ predict
+class 0 (probability $1 - 0.3 = 0.7$). Error: $1 - \mathbb{E}[\max_k p_k(X)] =
+1 - (0.5 \cdot 0.9 + 0.5 \cdot 0.7) = 0.2$. By @thm-bayes-classifier no
+classifier that sees only $x$ can do better; a lower test error with these
+features would be a fluke of the test set or a leak of information.
+:::
+
+::: {#exr-ml1-memorise}
+In @fig-memorise, replace the 1-nearest-neighbour rule by the
+$k$-nearest-neighbour rule (average of the $k$ closest training targets) for
+$k = 1, 3, 10, 30$. How do the training and test errors change with $k$, and
+why does $k = 30$ behave badly?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+for k in (1, 3, 10, 30):
+    knn = KNeighborsRegressor(n_neighbors=k).fit(X_train, y_train)
+    print(f"k = {k:2d}: train MSE = {mean_squared_error(y_train, knn.predict(X_train)):.3f}, "
+          f"test MSE = {mean_squared_error(y_test, knn.predict(X_test)):.3f}")
+```
+The training error grows with $k$ (each prediction averages more neighbours,
+so the training point itself counts less); the test error first falls — the
+average cancels part of the noise — then rises again. With $k = 30$ every
+prediction is the mean of *all* 30 training targets, a constant: the model can
+no longer follow the slope (**underfitting**). The best $k$ is in between:
+the bias–variance trade-off of @sec-ch-ml-regularization.
+:::
+
+## Further reading {.unnumbered}
+
+- @james2023, ch. 2 — the gentlest introduction to statistical learning,
+  with Python labs; @hastie2009, ch. 2 — the same ideas with more
+  mathematics.
+- @mitchell1997, ch. 1 — the definition of learning and the design of a
+  learning program.
+- @shalevshwartz2014, ch. 2–5 — empirical risk minimisation, Hoeffding-based
+  guarantees and the no-free-lunch theorem, proved.
+- @bishop2006, §1.5 — decision theory: from probabilities to decisions.
+- @domingos2012 — "a few useful things to know about machine learning", ten
+  pages of hard-won lessons.
+- @breiman2001 and @shmueli2010 — predicting versus explaining: why a model
+  that predicts well need not reveal causes.
+- @sevilla2022 — the measured growth of training compute.
