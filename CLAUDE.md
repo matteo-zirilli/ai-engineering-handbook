@@ -77,10 +77,24 @@ for style, depth and structure**: read one chapter (e.g.
   cells need `%%| echo: false`.
 - Do not leave machine-specific paths (`/tmp/...`, `/root/...`) in outputs.
 
-## Notes for the C++ part (Part II, next)
+## Notes for Part II (C and C++, `cpp/`)
 
-Executed C++ needs a decision before writing: the simplest robust option is
-Python cells that write a `.cpp` file, compile it with `g++ -std=c++20 -O2`
-and run it (outputs then go into `_freeze/` like Python), showing the C++
-source as a normal `cpp` code block. Check compiler availability first, and
-state the compiler and standard used in the part overview.
+- Executed C/C++: every example is a Python cell calling `cpp/cppbook.py`
+  (`run`, `show`, `sh`, `write`, `compile_sources`, `run_exe`), which writes the
+  source to a private temp dir, compiles it (`g++ -std=c++20 -O2 -Wall -Wextra`
+  or `gcc -std=c17`), runs it and prints source + output as Markdown.
+  `cpp/_metadata.yml` sets `echo: false` and `output: asis`; cells whose Python
+  code must be shown override with `#| echo: true` and `#| output: true`.
+  The helper strips temp-dir paths and PIDs from outputs; check `_freeze/cpp`
+  for machine-specific paths before committing.
+- The project's reference implementation is a real CMake project in
+  `cpp/_crm` (the leading `_` keeps Quarto from rendering it). The project
+  chapter reads and displays those files: **freeze does not notice changes to
+  them**, so after editing `_crm` delete `_freeze/cpp/09-project-crm` and
+  re-render. Build and test it with `-Werror` and sanitizers (GCC and Clang).
+- The author's own CRM solution is not yet in `ai-projects`; when it is,
+  add a walkthrough and code review to `cpp/09-project-crm.qmd` as in Part I.
+- Screenshots: serve `_book` over HTTP (OJS modules fail on `file://`) and
+  map `cdn.jsdelivr.net/npm/<pkg>@<version>/...` to local npm installs of the
+  exact versions requested (mathjax@3, @observablehq/plot, @observablehq/inputs,
+  d3, htl).

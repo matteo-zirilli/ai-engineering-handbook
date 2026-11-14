@@ -1,0 +1,851 @@
+# Controlling execution: conditions, selections and loops {#sec-ch-c-control}
+
+> *"Go To Statement Considered Harmful."* — title given by the editor to
+> Edsger Dijkstra's 1968 letter [@dijkstra1968].
+
+```{python}
+from cppbook import run, show, sh
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- write conditions with C's **comparison** and **logical** operators, knowing
+  where they differ from Python's (no chained comparisons, `=` versus `==`,
+  `&` versus `&&`);
+- use `if`/`else`, the **conditional operator** `?:` and resolve the
+  **dangling-else** ambiguity;
+- write a **`switch`** with `case`, `default`, `break` and intentional
+  **fall-through**, and explain — and **prove** — why a dense `switch` can be
+  faster than a chain of `if`s;
+- write `while`, `do`/`while` and `for` loops, **prove** when a `for` loop is
+  equivalent to a `while` loop (and when it is not), and control them with
+  `break`, `continue` and, rarely, `goto`;
+- avoid the classic loop bugs of fixed-width integers — the unsigned
+  count-down that never ends, the overflowing midpoint — and **prove** the
+  fixes correct;
+- analyse the nested loops of the sieve of Eratosthenes and **prove** an
+  $O(n \log n)$ bound with the harmonic series.
+:::
+
+::: {.callout-tip}
+## Topics covered
+How C and C++ programs decide and repeat: comparing values and combining
+conditions, choosing among alternatives, repeating a block of code, and leaving
+or skipping an iteration early.
+:::
+
+## Intuition: the same three bricks
+
+Böhm and Jacopini proved that every algorithm can be written with three
+bricks: **sequence**, **selection** and **iteration** (@thm-bohm-jacopini). You
+met them in Python in @sec-ch-conditionals and @sec-ch-loops, together with the
+logic behind them: Boolean algebra, short-circuit evaluation, loop invariants.
+C and C++ offer the same bricks with a different syntax and three important
+differences in spirit:
+
+1. a condition is a **number**: zero is false, anything else is true
+   (@sec-c-bool);
+2. integers are **fixed-width** (@sec-c-integers), so loop counters can wrap
+   around or overflow — a source of loops that never end;
+3. the language gives you lower-level tools — `switch` with fall-through,
+   `do`/`while`, `goto` — that map directly onto machine jumps.
+
+This chapter is therefore short on new logic and long on the traps of the
+syntax and of fixed-width arithmetic.
+
+## Comparison operators {#sec-c-comparisons}
+
+| Operator | Meaning | Result type in C | in C++ |
+|---|---|---|---|
+| `a == b` | equal | `int` (1 or 0) | `bool` |
+| `a != b` | not equal | `int` | `bool` |
+| `a < b`, `a <= b` | less, less or equal | `int` | `bool` |
+| `a > b`, `a >= b` | greater, greater or equal | `int` | `bool` |
+| `a <=> b` | three-way comparison (C++20) | — | an ordering object: less, equal, greater |
+
+: Comparison operators {#tbl-c-comparisons}
+
+Operands undergo the usual arithmetic conversions first (@sec-conversions), so
+`-1 < 0u` is false (@exm-minus-one). Two differences from Python deserve a
+section each.
+
+### No chained comparisons
+
+In Python `0 < x < 10` means `0 < x and x < 10`. In C and C++ it parses as
+`(0 < x) < 10`: the first comparison yields 0 or 1, which is always less than
+10.
+
+::: {#prp-chained}
+## `a < b < c` is not a range test in C
+For any integers `a`, `b`, `c` with `c > 1`, the C expression `a < b < c` is
+true (equal to 1), whatever `a` and `b` are.
+:::
+
+*In one line:* the inner comparison produces 0 or 1, and both are less than any
+`c` greater than 1.
+
+::: {.deep kind="proof"}
+## Proof of @prp-chained
+The operator `<` is left-associative, so the expression is `(a < b) < c`. The
+value of `a < b` is $v \in \{0, 1\}$, and $v \le 1 < c$, so `v < c` is 1.
+$\blacksquare$
+:::
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int x = 42;
+    printf("0 < x < 10           -> %d   (wrong: always 1)\n", 0 < x < 10);
+    printf("0 < x && x < 10      -> %d   (right)\n", 0 < x && x < 10);
+    return 0;
+}
+""", name="chained.c", flags=("-O2", "-Wall"))
+```
+
+GCC warns (`-Wparentheses`) that the comparison "does not have its
+mathematical meaning". Write range tests with `&&`.
+
+### `=` is not `==`
+
+`if (x = 5)` *assigns* 5 to `x` and then tests the value 5, which is true
+(@sec-flags). The compiler warns with `-Wall`; some programmers write the
+constant first (`if (5 == x)`) so that the typo `5 = x` does not compile — a
+habit known as "Yoda conditions". Modern compilers make it unnecessary:
+**enable warnings**.
+
+## `if`, `else` and the conditional operator {#sec-c-if}
+
+```c
+if (condition) {
+    /* executed if condition is non-zero */
+} else if (other_condition) {
+    /* ... */
+} else {
+    /* otherwise */
+}
+```
+
+The parentheses around the condition are mandatory; the braces are optional
+when a branch is a single statement — and omitting them is the source of two
+famous mistakes.
+
+::: {#exm-dangling-else}
+## The dangling else
+To which `if` does this `else` belong?
+```c
+if (a > 0)
+    if (b > 0)
+        printf("both positive\n");
+else
+    printf("a is not positive\n");     /* the indentation lies! */
+```
+The grammar of C is ambiguous here, and the standard resolves the ambiguity
+with a rule: an `else` belongs to the **nearest** preceding `if` without an
+`else` [@iso9899, §6.8.4.1]. So the `else` belongs to `if (b > 0)`: with
+`a = -1` nothing is printed, despite the indentation. GCC warns
+(`-Wdangling-else`, part of `-Wall`). **Always use braces** around branches
+that contain another `if`.
+:::
+
+The second mistake is the same one in a different costume: adding a second
+statement to an unbraced branch, which then always executes. In 2014 a
+duplicated `goto fail;` line after an unbraced `if` disabled certificate
+verification in Apple's TLS library [@langley2014]. Braces would have made the
+extra line harmless.
+
+The **conditional operator** `condition ? a : b` is an *expression* (like
+Python's `a if condition else b`, @sec-if-expression): it evaluates the
+condition and then exactly one of `a` and `b`.
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+const char *sign_name(int x)
+{
+    return x > 0 ? "positive" : x < 0 ? "negative" : "zero";   /* nested ?: reads right to left */
+}
+
+int main(void)
+{
+    int values[] = {7, -3, 0};
+    for (int i = 0; i < 3; ++i)
+        printf("%2d is %s\n", values[i], sign_name(values[i]));
+    return 0;
+}
+""", name="ternary.c")
+```
+
+## Logical operators {#sec-c-logical}
+
+| C/C++ | Python | Meaning |
+|---|---|---|
+| `a && b` | `a and b` | true iff both are true (non-zero) |
+| `a \|\| b` | `a or b` | true iff at least one is true |
+| `!a` | `not a` | true iff `a` is zero |
+
+: Logical operators {#tbl-c-logical}
+
+The laws of Boolean algebra, De Morgan's laws included, are the same
+(@thm-boolean-laws). Two details differ from Python: the result is always 0
+or 1 (Python's `or` returns one of its operands), and C also has **bitwise**
+operators `&`, `|`, `^`, `~` that act on every bit separately
+(@sec-twos-complement). Confusing `&` with `&&` compiles and gives wrong
+answers: `2 & 1` is 0 (no common bits) while `2 && 1` is 1.
+
+**Short-circuit evaluation** (@def-short-circuit) is guaranteed: in `a && b`,
+`b` is evaluated only if `a` is true; in `a || b`, only if `a` is false. It is
+what makes the classic guard idiom safe:
+
+```c
+if (p != NULL && p->count > 0)       /* p->count is read only if p is not NULL */
+if (n != 0 && total / n > limit)     /* no division by zero */
+```
+
+## Selection with `switch` {#sec-switch}
+
+When one integer value chooses among many alternatives — a menu option, a
+command code, a character — `switch` expresses the choice directly:
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    const char *commands = "a?lqx";               /* simulate five key presses */
+    for (const char *c = commands; *c != '\0'; ++c) {
+        switch (*c) {                             /* the controlling expression: an integer */
+        case 'a':
+            printf("%c: add a customer\n", *c);
+            break;                                /* leave the switch */
+        case 'l':
+        case 'L':                                 /* several labels, one action */
+            printf("%c: list customers\n", *c);
+            break;
+        case 'q':
+            printf("%c: quit\n", *c);
+            break;
+        default:                                  /* no case matched */
+            printf("%c: unknown command\n", *c);
+            break;
+        }
+    }
+    return 0;
+}
+""", name="switch.c")
+```
+
+The rules [@iso9899, §6.8.4.2]:
+
+- the controlling expression must have an **integer** type (characters and
+  enumerations included; not strings, not floating-point numbers);
+- each `case` label must be a **constant** expression, and labels must be
+  distinct;
+- execution **jumps** to the matching label (or to `default`, or past the
+  `switch` if there is no `default`) and continues from there **until a
+  `break`** or the end of the `switch`.
+
+The last rule is the dangerous one: without `break`, execution **falls
+through** into the next case.
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int level = 2;                      /* how many safety checks to run */
+    switch (level) {
+    case 3:
+        printf("check 3: full audit\n");
+        /* fall through */
+    case 2:
+        printf("check 2: validate fields\n");
+        /* fall through */
+    case 1:
+        printf("check 1: verify identifier\n");
+        break;
+    default:
+        printf("no checks\n");
+    }
+    return 0;
+}
+""", name="fallthrough.c")
+```
+
+Fall-through is occasionally useful, as here; forgetting a `break` is a far
+more common bug. GCC's `-Wimplicit-fallthrough` (in `-Wextra`) warns about
+fall-through unless it is marked by a comment like the one above or, in C23
+and C++17, by the attribute `[[fallthrough]];`.
+
+Why have `switch` at all, when a chain of `if`/`else if` does the same? Because
+it tells the compiler that one integer is compared with constants. When the
+case values are dense, the compiler can build a **jump table** — an array of
+code addresses indexed by the value — and dispatch in **constant time**,
+whereas any scheme that only compares the value needs at least
+$\lceil\log_2(k+1)\rceil$ comparisons for $k$ cases in the worst case
+(@prp-switch-lower-bound, proved in the deep dive below).
+
+### How a `switch` is compiled {#sec-switch-compiled .deep}
+
+Knowing that one integer is compared with constants allows two implementations
+better than testing the cases one after another:
+
+- **binary search** over the sorted case values: about $\log_2 k$ comparisons
+  for $k$ cases;
+- a **jump table**: when the case values are dense, an array of code addresses
+  indexed by the value — one bounds check and one indirect jump, whatever $k$
+  is.
+
+::: {#prp-switch-lower-bound}
+## Comparisons cannot beat $\log_2$
+Any implementation that selects among $k$ cases and a default using only
+two-way comparisons of the value needs, in the worst case, at least
+$\lceil \log_2 (k+1) \rceil$ comparisons.
+:::
+
+*In one line:* each comparison has two outcomes, so $t$ comparisons can tell
+apart at most $2^t$ situations, and there are $k + 1$.
+
+::: {.deep kind="proof"}
+## Proof of @prp-switch-lower-bound
+Draw the comparisons as a binary decision tree (as in the proof of
+@thm-sort-lower-bound): each inner node is a comparison, each leaf an action.
+The $k + 1$ possible actions must label different leaves for the inputs that
+require them, so the tree has at least $k + 1$ leaves; a binary tree of height
+$h$ has at most $2^h$ leaves, hence $2^h \ge k+1$ and
+$h \ge \lceil\log_2(k+1)\rceil$. The height is the worst-case number of
+comparisons. $\blacksquare$
+:::
+
+A jump table escapes the bound because an indexed jump is not a two-way
+comparison: it chooses among many targets in one step, exactly as an array
+access finds element $i$ in one step (@def-pointer-arith). GCC uses a jump
+table for dense cases. Here is a menu dispatcher with options 0 to 5:
+
+```{python}
+show(r"""
+void add(void); void list(void); void edit(void);
+void del(void); void search(void); void quit(void); void unknown(void);
+
+void dispatch(int option) {        /* cases 0..5: dense */
+    switch (option) {
+    case 1: add();    break;
+    case 2: list();   break;
+    case 3: edit();   break;
+    case 4: del();    break;
+    case 5: search(); break;
+    case 0: quit();   break;
+    default: unknown();
+    }
+}
+""", name="dispatch.c")
+sh("gcc -std=c17 -O2 -fno-pic -S dispatch.c -o - | sed -n '/^dispatch:/,/\\.size/p' | "
+   "grep -Ev '\\.cfi|endbr|\\.p2align|\\.size|\\.section|\\.text|\\.align|LF[BE]'")
+```
+
+Read it from the top: one comparison (`cmpl $5` / `ja`: is the option, seen as
+unsigned, greater than 5? then go to `default`) and one indirect jump
+`jmp *.L4(,%rdi,8)` (`notrack` is another control-flow-protection marker) to the address stored at position `option` of the table
+`.L4` — six 8-byte addresses, one per case. (The single unsigned comparison
+handles negative options too, because a negative `int` reinterpreted as
+unsigned is larger than 5: @exm-minus-one used for good.) For sparse values
+such as 1, 100 and 10 000 a table would be mostly empty, and the compiler falls
+back to comparisons; when every case only returns a constant, it may even
+replace the code by a table of *values*.
+An `if` chain can be optimised in the same way only if the compiler can prove
+that it has the same structure, which is why `switch` is the idiomatic choice
+for menus and command dispatch.
+
+## Loops {#sec-c-loops}
+
+### `while` and `do`/`while`
+
+`while (condition) body` tests **before** each iteration, so the body may run
+zero times (@sec-while). `do body while (condition);` tests **after**, so the
+body runs **at least once** — the natural shape when the first iteration
+produces the value to test, as in "ask until the answer is valid":
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int choice;
+    do {
+        printf("Choose 1-3: ");
+        if (scanf("%d", &choice) != 1) return 1;   /* not a number: give up (Chapter 5 does better) */
+        printf("%d\n", choice);
+    } while (choice < 1 || choice > 3);            /* repeat while invalid */
+    printf("You chose %d\n", choice);
+    return 0;
+}
+""", name="dowhile.c", stdin="7\n0\n2\n")
+```
+
+### `for`
+
+`for (init; condition; step) body` packs the three parts of a counting loop on
+one line. Since C99 the `init` part can declare the loop variable, visible
+only inside the loop. Any part may be omitted; `for (;;)` is an infinite loop,
+like `while (1)`.
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    for (int i = 1; i <= 5; ++i)              /* ++i: add 1 to i */
+        printf("%d squared is %d\n", i, i * i);
+
+    for (int lo = 0, hi = 9; lo < hi; ++lo, --hi)   /* comma operator: two variables */
+        printf("(%d,%d) ", lo, hi);
+    printf("\n");
+    return 0;
+}
+""", name="for.c")
+```
+
+Is `for` just shorthand for `while`? Almost:
+
+::: {#prp-for-while}
+## `for` as `while`
+If `body` contains no `continue` statement (belonging to this loop), then
+```c
+for (init; cond; step) body
+```
+behaves exactly like
+```c
+{ init; while (cond) { body step; } }
+```
+(where an omitted `cond` means 1). If `body` contains `continue`, the two may
+differ.
+:::
+
+*In one line:* `for` runs `step` after each iteration *including* those cut
+short by `continue`; the naive `while` translation skips `step` on
+`continue`.
+
+::: {.deep kind="proof"}
+## Proof of @prp-for-while
+The standard defines the `for` statement by this very equivalence, with one
+addition: a `continue` in the body jumps to the evaluation of `step`
+[@iso9899, §6.8.5.3 and §6.8.6.2]. Without `continue`, the body always ends
+by falling off its end; then both forms execute `init` once, and afterwards
+repeat "test `cond`; if false stop; run `body`; run `step`" — the same sequence
+of actions, so they behave identically (the extra block `{ … }` limits the
+scope of variables declared in `init`, as in `for`).
+
+With `continue`, take
+`for (int i = 0; i < 3; ++i) { if (i == 1) continue; printf("%d", i); }`,
+which prints `02`. The `while` translation
+`{ int i = 0; while (i < 3) { if (i == 1) continue; printf("%d", i); ++i; } }`
+prints `0` and then loops forever: at $i = 1$, `continue` jumps to the test
+without executing `++i`, so $i$ stays 1. $\blacksquare$
+:::
+
+In C++ there is also a **range-based `for`**, which visits every element of a
+container (@sec-ch-c-vs-cpp) like Python's `for x in collection`:
+`for (const auto& customer : customers) { … }`.
+
+### `break`, `continue` and `goto` {#sec-c-break}
+
+`break` leaves the innermost loop (or `switch`); `continue` skips to the next
+iteration of the innermost loop (@sec-break-continue). Unlike Python, C has no
+`for … else`. In nested loops, `break` leaves only the inner one; the usual
+solutions are a flag variable, moving the loops into a function and using
+`return`, or `goto` to a label after the loops:
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int grid[3][4] = {{1, 2, 3, 4}, {5, 6, -7, 8}, {9, 10, 11, 12}};
+    int row = -1, col = -1;
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 4; ++c)
+            if (grid[r][c] < 0) {
+                row = r; col = c;
+                goto found;                 /* leave BOTH loops */
+            }
+found:
+    if (row >= 0) printf("first negative value at (%d, %d)\n", row, col);
+    else          printf("no negative values\n");
+    return 0;
+}
+""", name="goto.c")
+```
+
+Dijkstra's letter [@dijkstra1968] argued that unrestricted `goto` makes
+programs hard to reason about, because the state at a label depends on every
+jump that can reach it; Knuth's reply [@knuth1974] showed disciplined uses that
+remain clear. Modern C style allows `goto` for two patterns only — leaving
+nested loops and jumping to a single clean-up block at the end of a function —
+and C++ needs neither, thanks to `return` from small functions and destructors
+(@sec-ch-cpp-oop).
+
+## Loop bugs of fixed-width integers {#sec-loop-bugs}
+
+### The count-down that never ends
+
+To visit an array backwards, the natural loop is
+```c
+for (size_t i = n - 1; i >= 0; --i)   /* BUG */
+    printf("%d\n", a[i]);
+```
+
+::: {#prp-unsigned-countdown}
+## An unsigned loop test `i >= 0` never fails
+If `i` has an unsigned type, the condition `i >= 0` is true for every value of
+`i`, so the loop above never terminates normally; after `i == 0`, `--i` wraps
+to the largest value of the type and the next access `a[i]` is out of bounds.
+:::
+
+*In one line:* an unsigned number cannot be negative, so "stop when it becomes
+negative" never happens.
+
+::: {.deep kind="proof"}
+## Proof of @prp-unsigned-countdown
+The values of an $n$-bit unsigned type are $0, \dots, 2^n - 1$
+(@prp-int-ranges), all $\ge 0$, so the test is always true. Decrementing 0
+gives $(0 - 1) \bmod 2^n = 2^n - 1$ (@thm-mod-arith), the largest value.
+$\blacksquare$
+:::
+
+GCC even warns that the comparison is always true (`-Wtype-limits`, in
+`-Wextra`). Two correct versions: test **before** decrementing,
+`for (size_t i = n; i-- > 0; )`, or use a signed index when `n` is known to
+fit. The first idiom is worth understanding:
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int a[] = {10, 20, 30, 40};
+    size_t n = sizeof a / sizeof a[0];
+    for (size_t i = n; i-- > 0; )        /* test i > 0, THEN decrement: body sees n-1 .. 0 */
+        printf("a[%zu] = %d\n", i, a[i]);
+    return 0;
+}
+""", name="countdown.c")
+```
+
+### The overflowing midpoint {#sec-midpoint}
+
+Binary search (@sec-binary-search) computes the middle of the range
+`[lo, hi]`. With `int` indices, `(lo + hi) / 2` overflows as soon as
+`lo + hi > INT_MAX` — undefined behaviour (@sec-ub). This bug lived for years
+in widely used libraries [@bloch2006]. The fix is `lo + (hi - lo) / 2`:
+
+::: {#prp-midpoint}
+## The safe midpoint
+For integers $0 \le \mathit{lo} \le \mathit{hi} \le M$ (with $M$ the largest
+value of the type), the expression `lo + (hi - lo) / 2` never overflows and
+yields $m = \mathit{lo} + \lfloor(\mathit{hi}-\mathit{lo})/2\rfloor$, with
+$\mathit{lo} \le m \le \mathit{hi}$.
+:::
+
+*In one line:* compute the half-*distance*, which is small, instead of the
+*sum*, which can be large.
+
+::: {.deep kind="proof"}
+## Proof of @prp-midpoint
+$d = \mathit{hi} - \mathit{lo}$ satisfies $0 \le d \le \mathit{hi} \le M$: no
+overflow. $d / 2$ in C truncates toward zero, which for $d \ge 0$ is
+$\lfloor d/2 \rfloor$, with $0 \le \lfloor d/2\rfloor \le d$. Hence
+$\mathit{lo} \le \mathit{lo} + \lfloor d/2\rfloor \le \mathit{lo} + d = \mathit{hi} \le M$:
+the final addition does not overflow either, and the result lies in
+$[\mathit{lo}, \mathit{hi}]$. $\blacksquare$
+:::
+
+```{python}
+run(r"""
+#include <limits.h>
+#include <stdio.h>
+
+int main(void)
+{
+    int lo = 2000000000, hi = 2100000000;             /* both valid ints */
+    unsigned wrapped = (unsigned)lo + (unsigned)hi;   /* what the hardware sum would be, mod 2^32 */
+    printf("lo + hi does not fit in an int: %lld > INT_MAX = %d\n", (long long)lo + hi, INT_MAX);
+    printf("as a 32-bit int the sum would read %d -> \"midpoint\" %d\n", (int)wrapped, (int)wrapped / 2);
+    printf("safe midpoint lo + (hi - lo) / 2 = %d\n", lo + (hi - lo) / 2);
+    return 0;
+}
+""", name="midpoint.c")
+```
+
+(We computed the wrapped sum with unsigned arithmetic, which is defined; the
+`int` sum itself would be undefined behaviour.) A negative "midpoint" used as an
+index reads memory before the array.
+
+## Worked example: nested loops and the sieve of Eratosthenes {#sec-sieve}
+
+To list the primes up to $n$, the sieve of Eratosthenes (3rd century BC,
+described by Nicomachus of Gerasa) starts with all numbers $2..n$ marked as
+candidates and, for each $p$ still marked, crosses out its multiples. Two
+nested loops, a `continue`, and an array of flags:
+
+```{python}
+run(r"""
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+
+enum { N = 100 };
+
+int main(void)
+{
+    bool composite[N + 1];
+    memset(composite, 0, sizeof composite);           /* all false: every number is a candidate */
+    int count = 0;
+    for (int p = 2; p <= N; ++p) {
+        if (composite[p])
+            continue;                                 /* not a prime: skip it */
+        printf("%d ", p);
+        ++count;
+        for (int multiple = p * p; multiple <= N; multiple += p)   /* smaller multiples already crossed */
+            composite[multiple] = true;
+    }
+    printf("\n%d primes up to %d\n", count, N);
+    return 0;
+}
+""", name="sieve.c")
+```
+
+How much work is that? The inner loop runs about $n/p$ times for each prime
+$p$, so the total is at most $\sum_{p \le n} n/p \le n \sum_{k=1}^{n} 1/k$.
+
+::: {#prp-harmonic}
+## Harmonic numbers grow like the logarithm
+For every $n \ge 1$, the harmonic number $H_n = \sum_{k=1}^n \frac1k$ satisfies
+$\ln(n+1) \le H_n \le 1 + \ln n$. Consequently the sieve crosses out at most
+$n H_n = O(n \log n)$ entries.
+:::
+
+*In one line:* the sum $1 + \frac12 + \dots + \frac1n$ is squeezed between two
+integrals of $1/x$.
+
+::: {.deep kind="proof"}
+## Proof of @prp-harmonic
+The function $1/x$ is decreasing on $(0, \infty)$. For $k \ge 1$,
+$\frac1k \ge \int_k^{k+1} \frac{dx}{x}$ (on $[k, k+1]$ the function is at most
+$1/k$), and summing for $k = 1..n$ gives
+$H_n \ge \int_1^{n+1} \frac{dx}{x} = \ln(n+1)$. For $k \ge 2$,
+$\frac1k \le \int_{k-1}^{k}\frac{dx}{x}$ (on $[k-1, k]$ the function is at least
+$1/k$); summing for $k = 2..n$ and adding the term $1$ for $k=1$ gives
+$H_n \le 1 + \int_1^n \frac{dx}{x} = 1 + \ln n$.
+
+For the sieve, the inner loop for prime $p$ performs at most $n/p$ steps; the
+primes are a subset of $\{2, \dots, n\}$, so the total is at most
+$\sum_{k=2}^{n} n/k \le n H_n \le n(1 + \ln n) = O(n\log n)$. $\blacksquare$
+:::
+
+Summing only over primes gives a sharper bound: $\sum_{p\le n} 1/p$ grows like
+$\ln \ln n$ (a theorem of Mertens, 1874), so the sieve runs in
+$O(n \log\log n)$ time [@hardy2008, §22.7] — practically linear.
+
+## Putting it together: a menu loop {#sec-menu-loop}
+
+The structure of every interactive console program, the CRM included, is a
+loop around a `switch`: show the options, read a choice, dispatch, repeat until
+the user quits. In C++:
+
+```{python}
+run(r"""
+#include <iostream>
+
+int main() {
+    bool running = true;
+    while (running) {
+        std::cout << "\n1) Greet  2) Count to three  0) Quit\nChoice: ";
+        int choice;
+        if (!(std::cin >> choice)) break;          // end of input or not a number: leave (see Chapter 5)
+        std::cout << choice << '\n';
+        switch (choice) {
+        case 1:
+            std::cout << "Hello!\n";
+            break;
+        case 2:
+            for (int i = 1; i <= 3; ++i) std::cout << i << ' ';
+            std::cout << '\n';
+            break;
+        case 0:
+            running = false;                         // the loop ends after this iteration
+            break;
+        default:
+            std::cout << "Unknown option " << choice << ", try again.\n";
+        }
+    }
+    std::cout << "Goodbye.\n";
+}
+""", name="menu.cpp", stdin="1\n5\n2\n0\n")
+```
+
+Note `break` inside `switch` leaves the **switch**, not the loop — which is why
+the loop is controlled by the flag `running`. Reading a number with
+`std::cin >> choice` is not yet robust: if the user types a letter, the stream
+enters a failure state. Handling that properly is the first topic of
+@sec-ch-c-tools.
+
+::: {.project-link}
+**In the project.** The CRM's user interface (@sec-ch-project-crm) is a main
+menu loop of exactly this shape (R1, @sec-crm-brief), with a sub-menu loop for
+the interactions of one customer. The choices are dispatched with a `switch`
+whose `default` branch reports an invalid option instead of crashing (R11);
+loops over customers use range-based `for` and unsigned sizes with the
+precautions of @sec-loop-bugs; and quitting goes through the normal end of the
+loop, so that the data are saved on the way out (R8).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Chained comparisons** `a < b < c`: always true for `c > 1`. Use `&&`.
+- **`=` instead of `==`** in a condition; **`&` instead of `&&`**.
+- **Missing braces**: the dangling else, and a second statement added to a
+  one-line branch.
+- **Missing `break`** in a `switch`: unintended fall-through. Mark intended
+  ones with `[[fallthrough]]` or a comment.
+- **`switch` on strings or floats**: not allowed; map strings to an enum or
+  use `if`.
+- **`break` in a `switch` inside a loop** leaves the `switch`, not the loop.
+- **`continue` in a `while` loop** that updates its counter at the end of the
+  body: the update is skipped (@prp-for-while).
+- **Unsigned count-down** `i >= 0`: never false. Use `for (i = n; i-- > 0; )`.
+- **Overflowing arithmetic in loop bounds**: `(lo + hi) / 2`, `i * i <= n` near
+  the type's limit.
+- **`;` after the condition**: `while (x > 0);` is an empty loop that never
+  ends.
+:::
+
+## Summary
+
+- Conditions are numbers: zero is false. Comparisons yield 0/1 (`bool` in
+  C++); they do **not** chain (@prp-chained).
+- `if`/`else` binds each `else` to the nearest `if`; use braces. `?:` is the
+  conditional expression.
+- `&&`, `||`, `!` short-circuit and obey Boolean algebra; `&`, `|`, `^`, `~`
+  are bitwise.
+- `switch` dispatches on an integer to constant `case` labels; without `break`
+  execution falls through. Dense cases compile to a jump table, which beats the
+  $\lceil\log_2(k+1)\rceil$ bound for comparisons (@prp-switch-lower-bound).
+- `while` tests before, `do`/`while` after (body at least once), `for` packs
+  init/test/step and equals the `while` form except for `continue`
+  (@prp-for-while).
+- `break` leaves the innermost loop or `switch`; `goto` only for leaving nested
+  loops or clean-up.
+- Fixed-width integers cause loop bugs: the unsigned count-down
+  (@prp-unsigned-countdown) and the overflowing midpoint (fixed by
+  `lo + (hi - lo) / 2`, @prp-midpoint).
+- The sieve's nested loops cost $O(n \log n)$ by the harmonic bound
+  (@prp-harmonic), in fact $O(n \log\log n)$.
+
+## Exercises
+
+::: {#exr-cpp4-switch}
+What does this print for `x = 1`, `x = 2` and `x = 7`?
+```c
+switch (x) {
+case 1: printf("one ");
+case 2: printf("two ");  break;
+case 3: printf("three ");
+default: printf("other ");
+}
+```
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`x = 1`: `one two ` (falls through from case 1 into case 2, then `break`).
+`x = 2`: `two `. `x = 7`: `other ` (jumps to `default`, the last label).
+:::
+
+::: {#exr-cpp4-rewrite}
+Rewrite `for (int i = 0; i < n; ++i) { if (a[i] < 0) continue; sum += a[i]; }`
+as a `while` loop that behaves identically, in a way that stays correct with
+the `continue`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Either put the step before any `continue`, or replace `continue` by an `if`:
+```c
+int i = 0;
+while (i < n) {
+    if (a[i] >= 0)
+        sum += a[i];
+    ++i;
+}
+```
+or `int i = 0; while (i < n) { int x = a[i++]; if (x < 0) continue; sum += x; }`.
+Both execute the step on every iteration, as `for` does (@prp-for-while).
+:::
+
+::: {#exr-cpp4-collatz-max}
+Write a C program that finds the starting value $n < 1\,000\,000$ with the
+longest Collatz sequence (@sec-where-time-goes). Which integer type must hold
+the intermediate values, and why? (Hint: the trajectory of some starting values
+below one million exceeds $2^{32}$.)
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```c
+#include <stdint.h>
+#include <stdio.h>
+int main(void) {
+    uint32_t best_n = 1, best_len = 0;
+    for (uint32_t n = 1; n < 1000000; ++n) {
+        uint64_t x = n;  uint32_t len = 0;           /* 64 bits for the trajectory */
+        while (x != 1) { x = (x % 2 == 0) ? x / 2 : 3 * x + 1; ++len; }
+        if (len > best_len) { best_len = len; best_n = n; }
+    }
+    printf("%u needs %u steps\n", best_n, best_len);  /* 837799 needs 524 steps */
+}
+```
+The trajectory of 113 383 reaches 2 482 111 348, above $2^{31}-1$, and some
+trajectories below one million exceed $2^{32}$ (e.g. that of 159 487 reaches
+17 202 377 752); with `uint32_t` the values would wrap modulo $2^{32}$
+(@thm-mod-arith) and the program would compute wrong lengths — or loop
+forever.
+:::
+
+::: {#exr-cpp4-harmonic}
+Use @prp-harmonic to bound $H_{1000}$, and compute it with a C loop in
+`double`. Is it better to sum from $k = 1$ up or from $k = 1000$ down? Why?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$\ln 1001 \approx 6.909 \le H_{1000} \le 1 + \ln 1000 \approx 7.908$; the true
+value is $H_{1000} \approx 7.4855$. Summing from the smallest terms ($k = 1000$
+down to 1) is slightly more accurate: small terms are added while the running
+sum is still small, so fewer of their low-order bits are rounded away
+(@thm-sum-error). With `double` the difference appears only around the 15th
+significant digit; with `float` it is visible.
+:::
+
+## Further reading {.unnumbered}
+
+- @kernighan1988, ch. 3 (control flow) — compact and complete.
+- @iso9899, §6.8 (statements): the exact semantics of `if`, `switch`, the
+  loops, `break`, `continue` and `goto`.
+- @dijkstra1968 and @knuth1974 — the `goto` debate, from both sides.
+- @bloch2006 — the binary-search overflow bug in the wild.
+- @hardy2008, §22.7 — Mertens' theorems and the sum of the reciprocals of the
+  primes.
+- @langley2014 — a short analysis of the `goto fail` bug.

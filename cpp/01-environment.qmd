@@ -1,0 +1,851 @@
+# Setting up a C and C++ development environment {#sec-ch-cpp-env}
+
+> *"Debugging is twice as hard as writing the code in the first place."* —
+> Brian Kernighan and P. J. Plauger [@kernighan1978].
+
+```{python}
+from cppbook import run, show, sh, write, compile_sources, run_exe, sanitizer_summary
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- describe the **toolchain** that turns C and C++ source code into a running
+  program — preprocessor, compiler, assembler, linker, loader — and the file
+  each stage produces;
+- install a compiler and a debugger on **Linux** and on **Windows** (GCC via
+  MSYS2, or Microsoft's MSVC), and configure **Visual Studio Code** to build,
+  run and debug C and C++ programs;
+- compile from the command line with the right **flags** (language standard,
+  warnings, optimisation, debug information, sanitizers) and read compiler
+  **diagnostics**;
+- split a program into **header** and **source** files and build it with
+  **Make** or **CMake**;
+- **prove** which files must be recompiled after a change, and why Make's
+  timestamp rule gets it right.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Preparing a workstation to write, compile, run and debug C and C++ programs
+with Visual Studio Code, on Windows and on Linux.
+:::
+
+## Intuition: a translator, not a reader
+
+In Part I, Python read your program and carried it out line by line, a bit
+like a cook who reads a recipe aloud while cooking (@sec-python-language). C
+and C++ work differently: before anything runs, a **translator** rewrites the
+whole recipe into the cook's native language — the machine code of your
+processor (@sec-von-neumann) — and binds it into a booklet, the
+**executable**. Running the program means handing the booklet to the cook.
+
+This has three consequences you will feel from day one:
+
+1. there is a **build step** between editing and running: forget it and you
+   run yesterday's program;
+2. many mistakes are caught **before** the program runs, by the translator —
+   and the error messages refer to a moment ("compile time") different from
+   the one in which the program misbehaves ("run time");
+3. the executable is tied to a **platform** (processor + operating system):
+   the booklet written for one cook is unreadable to another.
+
+Chapter [-@sec-ch-compiled] studies these trade-offs in depth. This chapter is
+practical: we set up the tools, follow a program through the translator, and
+learn to drive a debugger.
+
+## The toolchain: from source to process {#sec-toolchain}
+
+A **toolchain** is the chain of programs that turns source files into a
+running process. For C and C++ the stages are always the same, whatever the
+compiler brand [@bryant2016, ch. 1 and 7; @levine1999]:
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "The C/C++ toolchain. The compiler driver (`gcc`, `g++`, `clang++`, `cl`) runs the first four stages for you; the loader is part of the operating system."
+flowchart LR
+    A["hello.cpp<br/>source"] -->|preprocessor| B["hello.ii<br/>pure C++"]
+    B -->|compiler| C["hello.s<br/>assembly"]
+    C -->|assembler| D["hello.o<br/>object file"]
+    D -->|linker| E["hello<br/>executable"]
+    L["libstdc++, libc<br/>libraries"] -->|linker| E
+    E -->|loader| F["process<br/>in memory"]
+```
+
+| Stage | Input → output | What it does |
+|---|---|---|
+| **preprocessor** | `.c`/`.cpp` → translation unit | executes the `#` directives: pastes the text of `#include`d headers, expands `#define` macros, keeps or drops `#if` blocks |
+| **compiler proper** | translation unit → assembly (`.s`) | parses, type-checks, optimises, and emits instructions for the target processor |
+| **assembler** | `.s` → object file (`.o`, `.obj`) | encodes the instructions in binary; leaves **symbols** (names of functions and variables defined elsewhere) unresolved |
+| **linker** | object files + libraries → executable | resolves every symbol to an address and lays out the final file (ELF on Linux, PE on Windows, Mach-O on macOS) |
+| **loader** | executable → process | the operating system maps the file into memory, loads shared libraries, and jumps to the entry point, which eventually calls `main` |
+
+: The stages of the toolchain {#tbl-toolchain}
+
+The command `g++ hello.cpp -o hello` runs the first four stages in one go:
+`g++` is a **driver** that calls the real tools for you. Options let us stop
+after any stage, so we can look at each intermediate product. Here is the
+program we will follow:
+
+```{python}
+show(r"""
+// hello.cpp — the classic first program, plus one function of our own
+#include <iostream>     // preprocessor: paste the declarations of the I/O library
+
+int square(int x) {     // a function we define in this translation unit
+    return x * x;
+}
+
+int main() {            // execution starts here
+    std::cout << "Hello, C++! 7 squared is " << square(7) << '\n';
+    return 0;           // 0 = success, reported to the operating system
+}
+""", name="hello.cpp")
+```
+
+### Stage 1: the preprocessor
+
+`g++ -E` stops after preprocessing. The single line `#include <iostream>` is
+replaced by the full text of the header and of every header it includes in
+turn:
+
+```{python}
+sh("g++ -std=c++20 -E hello.cpp -o hello.ii && wc -l hello.cpp hello.ii")
+```
+
+Our 11-line file has become a translation unit of tens of thousands of lines
+— and **every** source file that includes `<iostream>` pays that price again.
+This is why large C++ projects compile slowly, and why C++20 introduced
+**modules** (`import std;` in C++23), which are compiled once and reused
+[@stroustrup2022, §3.2.2].
+
+### Stage 2: the compiler proper
+
+`g++ -S` stops after compilation and leaves human-readable **assembly**. Let
+us look at the instructions generated for `square`, with optimisations on
+(`-O2`):
+
+```{python}
+sh("g++ -std=c++20 -O2 -S hello.cpp -o hello.s && "
+   "sed -n '/^_Z6squarei:/,/ret/p' hello.s | grep -v '^\\s*\\.cfi'")
+```
+
+Apart from a label and `endbr64` (a marker used by the processor's
+control-flow protection), the function is three instructions, written in the
+AT&T syntax *operation source, destination*: multiply the argument by itself
+(`edi` is the register in which the x86-64 calling convention passes the first
+integer argument), copy the result into `eax` (the register that holds the
+return value), return. The odd name `_Z6squarei` is
+the **mangled** name of `square(int)`: C++ encodes the parameter types in the
+symbol name so that overloaded functions (@sec-ch-c-vs-cpp) get distinct
+symbols.
+
+### Stage 3: the assembler and the symbol table
+
+`g++ -c` produces an **object file**. `nm` lists its **symbols**: `T` marks a
+function defined here (in the *text* section), `U` a symbol that is **used but
+undefined** — the linker will have to find it elsewhere.
+
+```{python}
+sh("g++ -std=c++20 -O2 -c hello.cpp -o hello.o && nm -C hello.o | grep -E ' (T|U) '",
+   max_lines=12)
+```
+
+`square` and `main` are defined here; the stream `std::cout`, the output
+operators and the support routines come from the C++ standard library
+(`libstdc++` for GCC).
+
+### Stage 4: the linker
+
+Linking connects the `U`s to their definitions and produces the executable:
+
+```{python}
+sh("g++ hello.o -o hello && ./hello && echo \"exit status: $?\"")
+```
+
+`$?` is the shell's variable holding the **exit status** of the last command:
+the `return 0` of `main` reached the operating system. We will use exit
+statuses to make C++ and Python programs cooperate in @sec-ch-cpp-python.
+
+::: {#exm-link-error}
+## A link error is not a compile error
+If a function is **declared** (its signature is known) but never **defined**
+(its body is missing), every translation unit compiles, and the error appears
+only at link time:
+
+```{python}
+run(r"""
+#include <iostream>
+int cube(int x);                          // declaration only: "trust me, it exists"
+int main() { std::cout << cube(3) << '\n'; }
+""", name="nodef.cpp", expect_error=True)
+```
+
+The linker, not the compiler, complains: `undefined reference to cube(int)`.
+Learning to tell **which tool** produced an error message is the first step to
+fixing it.
+:::
+
+## Compilers, standards and versions {#sec-compilers}
+
+### The three major compilers
+
+- **GCC**, the GNU Compiler Collection, started by Richard Stallman in 1987;
+  the default compiler on Linux. Drivers: `gcc` for C, `g++` for C++
+  [@gccmanual].
+- **Clang**, the C/C++ front end of the **LLVM** project, started by Chris
+  Lattner at the University of Illinois [@lattner2004]; the default on macOS
+  and widely used on Linux and Windows. Drivers: `clang`, `clang++`.
+- **MSVC**, Microsoft's C/C++ compiler, shipped with Visual Studio; driver
+  `cl.exe`, Windows only.
+
+All three implement the same **ISO standards**, with small differences in
+extensions, diagnostics and the date at which they support new features. At
+the time of writing (November 2026) the latest major releases are GCC 16.1
+(April 2026), which made C++20 the default C++ dialect, and LLVM/Clang 23.1
+(August 2026) [@gcc16; @llvm23].
+
+### The language standards
+
+C and C++ are defined by international standards maintained by two ISO
+working groups: WG14 (C) and WG21 (C++). A program written against a standard
+works with any conforming compiler — this is the basis of the portability we
+discuss in @sec-ch-compiled.
+
+| Language | Standard | Informal name | Highlights |
+|---|---|---|---|
+| C | ANSI X3.159-1989 / ISO 9899:1990 | C89/C90 | the language of K&R 2nd edition [@kernighan1988] |
+| C | ISO/IEC 9899:1999 | C99 | `//` comments, `<stdbool.h>`, `<stdint.h>`, declarations anywhere |
+| C | ISO/IEC 9899:2011 / 2018 | C11 / C17 | threads, atomics, `_Static_assert`; C17 is a bug-fix release |
+| C | ISO/IEC 9899:2024 | C23 | `bool`, `true`, `false` and `nullptr` as keywords, `constexpr` objects [@iso9899c23] |
+| C++ | ISO/IEC 14882:1998 / 2003 | C++98/03 | the first standard: templates, the STL, exceptions |
+| C++ | ISO/IEC 14882:2011 | C++11 | move semantics, `auto`, lambdas, smart pointers: "modern C++" |
+| C++ | 2014, 2017 | C++14, C++17 | refinements; `std::optional`, `std::string_view`, structured bindings |
+| C++ | ISO/IEC 14882:2020 | C++20 | concepts, ranges, modules, coroutines, `<=>` |
+| C++ | ISO/IEC 14882:2024 | C++23 | `import std;`, `std::print`, `std::expected` [@iso14882] |
+
+: The C and C++ standards {#tbl-standards}
+
+C++26 completed its technical work in March 2026, but in October 2026 its
+international approval ballot did not pass, mainly over the new *contracts*
+feature; at the time of writing the committee is deciding how to proceed
+[@sutter2026]. Nothing in this part depends on C++26.
+
+::: {.callout-important}
+## The toolchain used in this book
+Every C++ example in this part is compiled with **GCC (`g++`) using
+`-std=c++20 -O2 -Wall -Wextra`** and every C example with **`gcc -std=c17`**,
+on x86-64 Linux, and actually executed when the book is built: the outputs you
+see are real. Where a result depends on the platform (sizes of types, timings),
+the text says so.
+:::
+
+```{python}
+sh("g++ --version | head -1 && gcc --version | head -1")
+```
+
+## Installing the tools {#sec-installing}
+
+### On Linux
+
+Linux distributions package GCC, the GNU debugger GDB, Make and CMake. On
+Debian and Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install build-essential gdb cmake   # gcc, g++, make, libc headers, gdb, cmake
+g++ --version                                # check
+```
+
+(On Fedora: `sudo dnf install gcc-c++ gdb make cmake`.) Clang is one command
+away (`sudo apt install clang`), and having two compilers is useful: a program
+that compiles cleanly with both is more likely to be standard-conforming.
+
+### On Windows
+
+Windows does not ship a C++ compiler. Three good options:
+
+1. **GCC through MSYS2** (the route of the VS Code documentation
+   [@vscodecpp]). Install MSYS2 from its web site, open the *MSYS2 UCRT64*
+   terminal and install the toolchain with
+   `pacman -S --needed base-devel mingw-w64-ucrt-x86_64-toolchain`; then add
+   `C:\msys64\ucrt64\bin` to the Windows `PATH` environment variable, open a
+   **new** terminal and check `g++ --version` and `gdb --version`. You get the
+   same compiler used in this book, producing native Windows executables
+   (`.exe`).
+2. **MSVC**, by installing *Visual Studio* or the lighter *Build Tools for
+   Visual Studio* with the "Desktop development with C++" workload. Compile
+   from the *Developer Command Prompt* with
+   `cl /std:c++20 /EHsc /W4 hello.cpp`.
+3. **WSL** (Windows Subsystem for Linux): a real Linux distribution inside
+   Windows; then follow the Linux instructions. VS Code connects to it
+   transparently.
+
+::: {.callout-warning}
+## The most common installation problem
+`'g++' is not recognized as an internal or external command`: the compiler is
+installed but its folder is not in `PATH`, or the terminal was opened **before**
+`PATH` was changed. Close every terminal (and VS Code), reopen, and run
+`where g++` (Windows) or `which g++` (Linux) to see which compiler, if any, is
+found.
+:::
+
+### Visual Studio Code
+
+VS Code is an **editor**, not a compiler: it calls the compiler you installed.
+Install VS Code and, from the Extensions view, Microsoft's **C/C++** extension
+(`ms-vscode.cpptools`), which adds code completion (IntelliSense), build tasks
+and debugging. When you first run *Run C/C++ File* on an open source file, VS
+Code asks which compiler to use and writes its configuration in a `.vscode`
+folder of your project:
+
+| File | Purpose |
+|---|---|
+| `tasks.json` | how to **build**: the compiler command and its arguments |
+| `launch.json` | how to **run and debug**: which executable, which debugger (`gdb`, `lldb` or the MSVC debugger) |
+| `c_cpp_properties.json` | how IntelliSense should **understand** the code: compiler path, standard, include folders |
+
+: The VS Code configuration files {#tbl-vscode-files}
+
+The default build task compiles the *active file* only, with debug information
+and no warnings. It is worth editing `tasks.json` once to use the flags of the
+next section. A version that works on Linux and, with `g++.exe`, on Windows:
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "cppbuild",
+      "label": "C/C++: g++ build active file",
+      "command": "g++",
+      "args": [
+        "-std=c++20", "-Wall", "-Wextra", "-Wpedantic",
+        "-g", "-O0",
+        "${file}",
+        "-o", "${fileDirname}/${fileBasenameNoExtension}"
+      ],
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true }
+    }
+  ]
+}
+```
+
+The `problemMatcher` turns the compiler's diagnostics into clickable entries in
+the *Problems* panel. For projects with several files, prefer a build system
+(@sec-build-systems): VS Code's *CMake Tools* extension drives CMake directly.
+
+## Compiler flags that matter {#sec-flags}
+
+A compiler has hundreds of options; a handful matter every day.
+
+| Flag (GCC/Clang) | MSVC | Effect |
+|---|---|---|
+| `-std=c++20`, `-std=c17` | `/std:c++20` | which **language standard** to accept |
+| `-Wall -Wextra` | `/W4` | enable the most useful **warnings** |
+| `-Wpedantic` | `/permissive-` | reject non-standard extensions |
+| `-Werror` | `/WX` | treat warnings as errors |
+| `-O0`, `-O2`, `-O3` | `/Od`, `/O2` | **optimisation** level: none (best for debugging) to aggressive |
+| `-g` | `/Zi` | include **debug information** (source lines, variable names) |
+| `-fsanitize=address,undefined` | `/fsanitize=address` | add run-time checks for memory errors and undefined behaviour |
+| `-o name` | `/Fe:name` | name of the output file |
+
+: Everyday compiler flags {#tbl-flags}
+
+### Warnings are free bug reports
+
+A **warning** is the compiler saying: "this is legal, but it is very probably
+not what you meant." Here are three classic mistakes that compile — and that
+`-Wall -Wextra` points out:
+
+```{python}
+run(r"""
+#include <iostream>
+
+int main() {
+    int n;                              // (1) never initialised
+    unsigned limit = 10;
+    for (int i = 0; i < limit; ++i) {   // (2) signed/unsigned comparison
+        if (i = 5)                      // (3) assignment, not comparison!
+            std::cout << "five\n";
+    }
+    std::cout << n << '\n';
+}
+""", name="warnings.cpp", flags=("-O2", "-Wall", "-Wextra"), run_it=False)
+```
+
+Mistake (3) would make the loop print `five` forever, since `i = 5` sets `i`
+and evaluates to 5, which is true; mistake (1) prints an unpredictable value.
+**Compile with warnings on, and treat every warning as an error until you can
+explain why it is harmless.**
+
+### Sanitizers: run-time checks for free
+
+Some errors cannot be detected at compile time. The **sanitizers** of GCC and
+Clang instrument the program with checks: AddressSanitizer detects
+out-of-bounds accesses, use of freed memory and leaks, with a typical slowdown
+of about 2× [@serebryany2012]; UndefinedBehaviorSanitizer detects, for
+example, signed integer overflow. Without the sanitizer this program silently
+writes past the end of an array; with it, it stops at the faulty line:
+
+```{python}
+run(r"""
+#include <iostream>
+
+int main() {
+    int a[4] = {1, 2, 3, 4};
+    int sum = 0;
+    for (int i = 0; i <= 4; ++i)     // off by one: a[4] does not exist
+        sum += a[i];
+    std::cout << sum << '\n';
+}
+""", name="oob.cpp", sanitize="address", flags=("-O0",), filter_lines=sanitizer_summary)
+```
+
+(We show only the key lines of the report; the full report also maps the
+memory around the bad address.) Read it from the top: the kind of error
+(`stack-buffer-overflow`), the access (`READ of size 4`), and the first frame
+of the stack trace, `in main oob.cpp:7` — file and line. Sanitizers are available on Linux and macOS
+with GCC and Clang; MSVC supports AddressSanitizer with `/fsanitize=address`.
+We will use them throughout this part, in particular for the memory errors of
+@sec-ch-c-intro and @sec-ch-c-vs-cpp.
+
+## Debugging {#sec-debugging}
+
+A **debugger** runs your program under control: it can stop it at a
+**breakpoint**, execute it **one line at a time**, and show the values of
+variables and the **call stack** (the chain of function calls that led to the
+current line, @sec-recursion). In VS Code you click in the margin to set a
+breakpoint and press <kbd>F5</kbd>; underneath, VS Code talks to GDB (or LLDB,
+or the MSVC debugger). We can drive GDB directly to see what happens. Compile
+with `-g -O0` (debug information, no optimisation, so that the machine code
+follows the source line by line):
+
+```{python}
+show(r"""
+#include <iostream>
+
+int square(int x) {
+    int r = x * x;
+    return r;
+}
+
+int main() {
+    int total = 0;
+    for (int i = 1; i <= 3; ++i)
+        total += square(i);
+    std::cout << total << '\n';
+}
+""", name="debugme.cpp")
+sh("g++ -std=c++20 -g -O0 debugme.cpp -o debugme && "
+   "gdb -batch -q -ex 'break square' -ex run -ex backtrace -ex 'info args' "
+   "-ex finish -ex 'print total' ./debugme",
+   filter_fn=lambda l: "libthread_db" not in l and l.strip())
+```
+
+| What you want | GDB command | VS Code |
+|---|---|---|
+| stop at a line or function | `break square`, `break debugme.cpp:11` | click in the margin |
+| start / continue | `run` / `continue` | <kbd>F5</kbd> |
+| next line (over calls) | `next` | <kbd>F10</kbd> |
+| enter the called function | `step` | <kbd>F11</kbd> |
+| run to the end of this function | `finish` | <kbd>Shift</kbd>+<kbd>F11</kbd> |
+| show the call stack | `backtrace` | *Call Stack* panel |
+| show a variable | `print total`, `info locals` | *Variables* / *Watch* panels |
+
+: Debugger commands and their VS Code equivalents {#tbl-gdb}
+
+Note the last line of the session: after `finish`, `total` is still `0`.
+Execution stopped in the middle of line 11, *after* `square(1)` returned
+(`Value returned is $1 = 1`) but *before* the addition — the debugger shows the
+state of the machine at an exact instant, which is what makes it so precise.
+
+::: {.callout-tip}
+## A debugging method
+A debugger is not a substitute for thinking. Kernighan and Pike's advice
+[@kernighan1999, ch. 5] still holds: **reproduce** the failure with the
+smallest input, **form a hypothesis** about the cause, **test** it (with a
+breakpoint, a `print`, an assertion), and only then change the code.
+:::
+
+## Programs in several files {#sec-multifile}
+
+Real programs are split into files, for the same reasons as Python modules
+(@sec-modularity): each file has one responsibility, can be understood alone,
+and — specific to compiled languages — can be **compiled separately**.
+
+### Declarations and definitions
+
+C and C++ distinguish two things that Python merges:
+
+- a **declaration** introduces a name and its type: `int square(int x);`
+  ("a function `square` exists, taking an `int` and returning an `int`");
+- a **definition** also provides the body (or, for a variable, the storage).
+
+A name must be **declared before it is used** in each translation unit, and
+**defined exactly once** in the whole program — the **one-definition rule**
+(ODR) [@iso14882, §basic.def.odr]. The convention that follows is:
+
+- a **header file** (`.h`, `.hpp`) contains declarations — the **interface**;
+- a **source file** (`.c`, `.cpp`) contains the definitions — the
+  **implementation**;
+- every file that needs the interface `#include`s the header.
+
+```{python}
+show(r"""
+// geometry.hpp — interface: what other files may use
+#pragma once                       // include this header at most once per translation unit
+
+double circle_area(double radius);
+double rectangle_area(double width, double height);
+""", name="geometry.hpp")
+show(r"""
+// geometry.cpp — implementation
+#include "geometry.hpp"            // quotes: search the project folder first
+
+constexpr double pi = 3.141592653589793;
+
+double circle_area(double radius) { return pi * radius * radius; }
+double rectangle_area(double width, double height) { return width * height; }
+""", name="geometry.cpp")
+show(r"""
+// main.cpp — the program
+#include <iostream>                // angle brackets: a system header
+#include "geometry.hpp"
+
+int main() {
+    std::cout << "circle r=1:    " << circle_area(1.0) << '\n'
+              << "rectangle 2x3: " << rectangle_area(2.0, 3.0) << '\n';
+}
+""", name="main.cpp")
+```
+
+Each source file is compiled **separately** into an object file, then the
+objects are linked:
+
+```{python}
+sh("g++ -std=c++20 -Wall -Wextra -c geometry.cpp && "
+   "g++ -std=c++20 -Wall -Wextra -c main.cpp && "
+   "g++ geometry.o main.o -o shapes && ./shapes")
+```
+
+`#pragma once` (supported by all major compilers, though not part of the
+standard) prevents a header from being pasted twice into the same translation
+unit, which would repeat its definitions of types. The portable equivalent is
+an **include guard**:
+
+```cpp
+#ifndef GEOMETRY_HPP
+#define GEOMETRY_HPP
+// ... declarations ...
+#endif
+```
+
+### Build systems: Make and CMake {#sec-build-systems}
+
+Typing the commands above by hand does not scale, and recompiling *every* file
+after each change wastes time. A **build system** records how each file is
+produced from others and redoes only the necessary work. The classic one is
+**Make**, written by Stuart Feldman at Bell Labs in 1976 [@feldman1979]. A
+`Makefile` lists **rules**: a *target*, its *prerequisites*, and the commands
+that rebuild the target from them.
+
+```{python}
+show("""
+# Makefile — each rule: target: prerequisites, then commands indented with a TAB
+CXX      = g++
+CXXFLAGS = -std=c++20 -Wall -Wextra -O2
+
+shapes: main.o geometry.o
+\t$(CXX) main.o geometry.o -o shapes
+
+main.o: main.cpp geometry.hpp
+\t$(CXX) $(CXXFLAGS) -c main.cpp
+
+geometry.o: geometry.cpp geometry.hpp
+\t$(CXX) $(CXXFLAGS) -c geometry.cpp
+
+clean:
+\trm -f shapes *.o
+""", name="Makefile", lang="makefile")
+```
+
+Make rebuilds a target when it is **missing** or **older** than one of its
+prerequisites. Watch it at work: a full build, then nothing to do, then a
+change to `main.cpp` only:
+
+```{python}
+sh("rm -f *.o shapes && make && echo '--- second run:' && make && "
+   "echo '--- after touching main.cpp:' && touch main.cpp && make")
+```
+
+After `main.cpp` changed, only `main.o` and the executable were rebuilt;
+`geometry.o` was reused. Why is that exactly the right set? The **dependency
+graph** answers.
+
+::: {#def-build-graph}
+## Build graph
+A **build graph** is a finite directed acyclic graph whose vertices are files
+and with an edge $u \to v$ when $v$ is built from $u$ ($u$ is a prerequisite of
+$v$). Vertices without incoming edges are **sources** (written by hand); the
+others are **targets**, each produced by a deterministic command from its
+direct prerequisites.
+:::
+
+::: {#prp-rebuild-set}
+## What must be rebuilt
+If the set $C$ of source files changes, a target must be rebuilt if and only
+if it is **reachable** from some file of $C$ (there is a directed path from a
+changed file to it). Moreover, rebuilding the reachable targets in a
+topological order (@thm-toposort) brings every target up to date with one
+command each.
+:::
+
+*In one line:* a change propagates exactly along the arrows — what is
+downstream of an edited file is stale, everything else can be reused.
+
+::: {.deep kind="proof"}
+## Proof of @prp-rebuild-set
+*Not reachable ⇒ unaffected.* By induction along a topological order: if no
+prerequisite of a target $t$ is a changed file or a stale target, then $t$'s
+command receives exactly the same inputs as last time and, being
+deterministic, produces the same output — so the old $t$ is still correct. A
+target not reachable from $C$ has, by definition, no changed or reachable
+prerequisite, so the induction applies to it.
+
+*Reachable ⇒ must be rebuilt.* If $t$ is reachable, some path
+$c \to v_1 \to \dots \to v_k = t$ starts at a changed file $c$. In general the
+new content of $c$ can change $v_1$, which can change $v_2$, and so on; a build
+system that does not inspect the *meaning* of the files cannot exclude it, so
+it must rebuild $t$. (A smarter system may still discover that a rebuilt file
+is byte-identical to the old one and stop the propagation there.)
+
+*Order.* Processing reachable targets in a topological order guarantees that
+when $t$ is rebuilt, all its prerequisites are already up to date; hence each
+target is built once. $\blacksquare$
+:::
+
+::: {.deep}
+## Why Make's timestamp rule implements @prp-rebuild-set
+Make does not know which files you changed; it compares **modification
+times**. To bring target $t$ up to date it first, recursively, brings every
+prerequisite up to date, and then rebuilds $t$ if $t$ is missing or some
+prerequisite is newer than $t$. Suppose that after the previous complete build
+every target was newer than its prerequisites, and that editing a file sets its
+time to "now", later than every existing file. Then, by induction along a
+topological order, a target gets a time later than its old one exactly when one
+of its prerequisites does — i.e. exactly when it is reachable from an edited
+file. The assumptions matter: copying an *old* file over a source (which keeps
+the old timestamp), a clock that goes backwards, or a prerequisite missing from
+the Makefile (a header not listed!) all break the guarantee. This is why
+compilers can **generate** the header dependencies for you (`g++ -MMD`), and
+why modern tools such as Ninja and Bazel also compare file contents.
+:::
+
+Writing Makefiles by hand is error-prone and not portable to MSVC. Most C++
+projects use **CMake**, which *generates* the build files for the platform
+(Makefiles, Ninja files, Visual Studio solutions) from a short description:
+
+```{python}
+show("""
+# CMakeLists.txt
+cmake_minimum_required(VERSION 3.20)
+project(shapes LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(shapes main.cpp geometry.cpp)
+target_compile_options(shapes PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>)
+""", name="CMakeLists.txt", lang="cmake")
+sh("cmake -S . -B build -G Ninja > /dev/null && cmake --build build && ./build/shapes")
+```
+
+The two commands are the same on every platform: `cmake -S . -B build`
+(configure: generate the build files in a separate `build` folder) and
+`cmake --build build` (build). CMake works out the header dependencies by
+itself. We will use this setup for the project (@sec-ch-project-crm).
+
+## Reading compiler errors {#sec-reading-errors}
+
+C++ error messages have a reputation for being long. Three rules make them
+manageable:
+
+1. **Fix the first error first.** Later errors are often consequences of the
+   first (a missing `;` can confuse the parser for many lines).
+2. **Find `file:line:column`.** Every diagnostic starts with a location; the
+   text after `error:` is the message, and `note:` lines add context.
+3. **Identify the tool.** A message mentioning `undefined reference` comes from
+   the linker (@exm-link-error); everything else from the compiler.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string name = "Ada";
+    int length = name.size()       // missing semicolon
+    std::cout << nmae << '\n';     // misspelt name
+}
+""", name="errors.cpp", expect_error=True)
+```
+
+GCC reports the missing semicolon — at the place where it noticed it, the
+beginning of the *next* line, since only there does the statement become
+impossible — and says nothing about the misspelt name: after the first error it
+skipped the rest of that statement. Add the semicolon and compile again; now the
+second mistake surfaces, with a suggestion:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string name = "Ada";
+    auto length = name.size();
+    std::cout << nmae << ' ' << length << '\n';
+}
+""", name="errors2.cpp", expect_error=True)
+```
+
+This is rule 1 in action: one real mistake can hide or cause others, so fix the
+first one and recompile.
+
+::: {.project-link}
+**In the project.** The CRM of @sec-ch-project-crm is a multi-file C++
+program: one header and one source file per component, a small `main.cpp`, and a
+`CMakeLists.txt` (requirement R12, @sec-crm-brief). It is built with the flags
+of @tbl-flags — warnings on, and sanitizers during development — and its README
+gives the two CMake commands of @sec-build-systems, which work unchanged on
+Linux and on Windows.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Running a stale executable.** You edited the source but did not rebuild: in
+  a compiled language, *save* is not *build*.
+- **Compiler not in `PATH`** after installation; reopen the terminal and VS
+  Code.
+- **Ignoring warnings.** Most beginners' bugs (uninitialised variables, `=`
+  instead of `==`, signed/unsigned comparisons) are reported as warnings.
+- **Debugging optimised code.** With `-O2` the debugger may skip lines or show
+  variables as `<optimized out>`: debug with `-O0 -g`.
+- **Definitions in headers.** A function *defined* (not just declared) in a
+  header included by two source files breaks the one-definition rule:
+  `multiple definition of …` at link time (unless it is `inline`).
+- **Headers missing from the Makefile** dependencies: Make does not rebuild
+  what it does not know about. Use CMake, or `-MMD`.
+:::
+
+## Summary
+
+- The **toolchain** turns sources into a process in stages: preprocessor →
+  compiler → assembler → linker → loader. `-E`, `-S`, `-c` stop after each
+  stage; `nm` shows the symbols an object file defines and needs.
+- **GCC**, **Clang** and **MSVC** implement the ISO **C** and **C++**
+  standards; this book uses `g++ -std=c++20` and `gcc -std=c17`.
+- On Linux install `build-essential` and `gdb`; on Windows use MSYS2's GCC,
+  MSVC, or WSL. VS Code stores build, debug and IntelliSense settings in
+  `tasks.json`, `launch.json` and `c_cpp_properties.json`.
+- Always compile with **warnings** (`-Wall -Wextra`) and, while developing,
+  with **sanitizers**; debug with `-g -O0`.
+- **Headers** hold declarations, **sources** definitions (one-definition
+  rule). A build system rebuilds exactly the targets **reachable** from the
+  changed files (@prp-rebuild-set); **CMake** generates the build files for any
+  platform.
+
+## Exercises
+
+::: {#exr-cpp1-stages}
+For each message, say which stage of the toolchain produced it and why:
+(a) `fatal error: geometri.hpp: No such file or directory`;
+(b) `error: 'cout' is not a member of 'std'`;
+(c) `undefined reference to 'circle_area(double)'`;
+(d) `multiple definition of 'pi'`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Preprocessor: it could not find the file named in an `#include` (a typo).
+(b) Compiler: the name `std::cout` is used but not declared — `<iostream>` was
+not included. (c) Linker: `circle_area` was declared but no object file defines
+it (e.g. `geometry.cpp` was not compiled or not linked). (d) Linker: two object
+files define the same non-`inline` variable, typically because the definition
+`double pi = …;` was put in a header included by two sources (one-definition
+rule). Fix: declare it `inline constexpr` in the header, or define it in one
+source file.
+:::
+
+::: {#exr-cpp1-rebuild}
+A project has sources `a.hpp`, `a.cpp`, `b.hpp`, `b.cpp`, `main.cpp`, where
+`a.cpp` includes `a.hpp`; `b.cpp` includes `b.hpp` and `a.hpp`; `main.cpp`
+includes `b.hpp`. Each `.cpp` is compiled to a `.o` and the three objects are
+linked into `app`. Draw the build graph. Which targets are rebuilt when
+(a) `a.hpp` changes; (b) `b.cpp` changes; (c) `main.cpp` changes?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Edges: `a.hpp → a.o`, `a.cpp → a.o`, `b.hpp → b.o`, `a.hpp → b.o`,
+`b.cpp → b.o`, `b.hpp → main.o`, `main.cpp → main.o`, and `a.o`, `b.o`,
+`main.o → app`. By @prp-rebuild-set: (a) `a.o`, `b.o`, `app`; (b) `b.o`,
+`app`; (c) `main.o`, `app`. Note that in (a) `main.o` is *not* rebuilt, even
+though `main.cpp` uses `b.hpp`, because `main.cpp` does not (transitively)
+include `a.hpp`.
+:::
+
+::: {#exr-cpp1-flags}
+Compile the `warnings.cpp` program of @sec-flags with `-Werror` added. What
+happens, and why is `-Werror` a good default for your own projects but a bad
+idea in code you distribute to others?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Compilation fails: each warning becomes an error, so no executable is produced
+until the three problems are fixed. In your own project this forces warnings to
+be dealt with immediately. In distributed source code, however, a newer
+compiler version may introduce *new* warnings, so users would be unable to
+build perfectly correct code with their compiler; enable `-Werror` in your
+development and CI builds, not in the default build.
+:::
+
+::: {#exr-cpp1-headers}
+How many lines does the preprocessed translation unit of a file containing only
+`#include <vector>` and `#include <string>` have with your compiler? Estimate
+how many lines the compiler must parse in a project of 200 source files that
+each include `<iostream>`, `<vector>` and `<string>`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Measure with `g++ -std=c++20 -E file.cpp | wc -l`. With GCC 13 and libstdc++
+each of these headers expands to tens of thousands of lines, and together
+(their contents overlap) to a few tens of thousands. With $L$ lines per
+translation unit and $n = 200$ files, the compiler parses about $nL$ lines —
+several million — although the headers are identical every time: the
+redundancy that precompiled headers and C++20 modules remove.
+:::
+
+## Further reading {.unnumbered}
+
+- @vscodecpp — the official VS Code tutorials: *GCC on Windows via MinGW*,
+  *Microsoft C++ on Windows*, *GCC on Linux*; and the pages on debugging and
+  `c_cpp_properties.json`.
+- @gccmanual — chapter *GCC Command Options*, in particular *Options to Request
+  or Suppress Warnings*, *Options for Debugging* and *Program Instrumentation
+  Options* (sanitizers).
+- @bryant2016 — ch. 1 (a tour of the toolchain) and ch. 7 (linking: symbols,
+  relocation, static and shared libraries).
+- @levine1999 — the classic book on linkers and loaders.
+- @feldman1979 — the original paper on Make, short and readable.
+- @serebryany2012 — how AddressSanitizer works (shadow memory), and its cost.
+- @kernighan1999, ch. 5 — debugging strategies that do not depend on the tool.

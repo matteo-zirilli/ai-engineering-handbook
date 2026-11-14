@@ -1,0 +1,848 @@
+# Functions, user input and files {#sec-ch-c-tools}
+
+> *"Simplicity is prerequisite for reliability."* — Edsger W. Dijkstra
+> [@dijkstra1975].
+
+```{python}
+from cppbook import run, show, sh, write, compile_sources, run_exe
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- declare and define **functions** in C and C++, explain **pass by value**,
+  use pointers to return several results, and describe what happens on the
+  **call stack**;
+- distinguish the **scope** and the **lifetime** of variables (local, global,
+  `static`);
+- use the three **standard streams** — `stdin`, `stdout`, `stderr` — from C
+  (`<stdio.h>`) and C++ (`<iostream>`), and explain **buffering**, with a
+  **proof** of how many system calls it saves;
+- read **user input robustly**: explain why `scanf` and `cin >> x` are
+  fragile, parse numbers with full error checking, and **prove** the overflow
+  test used by every correct integer parser;
+- **read and write files** in C (`fopen`, `fgets`, `fprintf`, `fclose`) and in
+  C++ (`std::ifstream`, `std::ofstream`), handle missing files and errors, and
+  write a CSV encoder/decoder that survives commas and quotes in the data.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Functions; reading input from the user; accessing files — in C and C++.
+:::
+
+## Intuition: workshops, conveyor belts and a filing cabinet
+
+A **function** is a workshop with a door for materials (the parameters) and a
+door for the product (the return value): the rest of the program does not need
+to know what happens inside (@sec-ch-functions). In C the workshop receives
+**copies** of the materials — what happens to them inside never affects the
+originals — unless you hand over the *address* of the original
+(@sec-pointers).
+
+A program talks to the outside world through **streams**: conveyor belts of
+bytes. Three are always there: one from the keyboard (**standard input**), one
+to the screen (**standard output**), and one for error messages (**standard
+error**). A **file** is a stream whose other end is a drawer of the filing
+cabinet: the data stay there after the program ends (@sec-ch-files).
+
+The hard part is not the mechanics but **distrust**: users type letters where
+numbers are expected, files go missing or contain garbage. A program for
+non-technical users must treat every byte that comes from outside as
+potentially wrong.
+
+## Functions in C and C++ {#sec-c-functions}
+
+### Declaration, definition, call
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+double celsius_to_fahrenheit(double c);      /* declaration (prototype): name, parameters, result */
+
+int main(void)
+{
+    for (int c = -10; c <= 40; c += 25)
+        printf("%3d C = %5.1f F\n", c, celsius_to_fahrenheit(c));   /* the int is converted to double */
+    return 0;
+}
+
+double celsius_to_fahrenheit(double c)       /* definition: the body */
+{
+    return c * 9.0 / 5.0 + 32.0;
+}
+""", name="functions.c")
+```
+
+A function has a **return type** (`void` if it returns nothing), a name, and a
+list of **typed parameters**. The compiler checks every call against the
+declaration: number and types of arguments (converting them when allowed, as
+`int` → `double` above) and use of the result. This is why a function must be
+declared before it is called, and why declarations go in headers
+(@sec-multifile). In C, an empty parameter list should be written `(void)`; in
+C++ `()` already means "no parameters".
+
+### Pass by value
+
+C passes every argument **by value**: the parameter is a new local variable
+initialised with a copy of the argument.
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+void try_to_reset(int x)      { x = 0; }          /* changes its own copy */
+void reset(int *x)            { *x = 0; }         /* changes the caller's variable through its address */
+
+void min_max(const int *a, int n, int *min, int *max)   /* two results: two out-parameters */
+{
+    *min = *max = a[0];
+    for (int i = 1; i < n; ++i) {
+        if (a[i] < *min) *min = a[i];
+        if (a[i] > *max) *max = a[i];
+    }
+}
+
+int main(void)
+{
+    int value = 42;
+    try_to_reset(value);
+    printf("after try_to_reset: %d\n", value);
+    reset(&value);
+    printf("after reset(&value): %d\n", value);
+
+    int data[] = {7, -2, 19, 4}, lo, hi;
+    min_max(data, 4, &lo, &hi);
+    printf("min = %d, max = %d\n", lo, hi);
+    return 0;
+}
+""", name="byvalue.c")
+```
+
+(GCC even warns that the assignment in `try_to_reset` is useless: the
+parameter is set but never used again.) Three idioms follow:
+
+- to let a function **modify** a variable, pass its **address** (`reset(&value)`);
+- to return **several results**, use **out-parameters** (pointers to the
+  caller's variables), or return a `struct` (@sec-ch-c-vs-cpp);
+- to pass a **large object** without copying it, pass a pointer — marked
+  `const` if the function must not modify it (`const int *a`): the compiler
+  then rejects any write through it.
+
+C++ adds **references**, which make the last two idioms safer and lighter
+(@sec-ch-c-vs-cpp). Python's model, "pass by object reference" (@sec-arguments),
+sits between the two: the function receives a reference to the same object,
+but rebinding the parameter does not affect the caller.
+
+### The call stack {#sec-call-stack}
+
+Each call creates an **activation record** (a *stack frame*) on the **call
+stack**: room for the parameters, the local variables and the address to
+return to. The frame is destroyed when the function returns — which is why a
+function must never return the address of one of its local variables: the
+pointer would **dangle** (@sec-malloc).
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+unsigned long long factorial(unsigned n)
+{
+    int local;                                         /* lives in this call's frame */
+    printf("%*sfactorial(%u): frame at %p\n", (int)(10 - n) * 2, "", n, (void *)&local);
+    return n <= 1 ? 1 : n * factorial(n - 1);          /* each recursive call: a new frame */
+}
+
+int main(void)
+{
+    printf("5! = %llu\n", factorial(5));
+    return 0;
+}
+""", name="stack.c", flags=("-O0",))
+```
+
+The addresses **decrease** by a fixed amount at each call (64 bytes here): on
+x86-64 the stack
+grows towards lower addresses, and each frame of `factorial` occupies the same
+number of bytes. Recursion depth is therefore limited by the size of the stack
+(typically 8 MiB on Linux, 1 MiB on Windows): a recursion a million calls deep
+**overflows the stack** and crashes. Python protects you with a recursion limit
+(@sec-recursion); C and C++ do not.
+
+### Scope and lifetime
+
+Two different questions are asked about a variable:
+
+| | **Scope**: where is the name visible? | **Lifetime**: when does the object exist? |
+|---|---|---|
+| local variable | the block `{ … }` where it is declared | from its declaration to the end of the block (automatic storage) |
+| `static` local variable | the block | the whole run of the program (initialised once) |
+| global variable | the file (and other files, if declared `extern` there) | the whole run |
+| `static` global / function | this file only (internal linkage) | the whole run |
+| `malloc`/`new` memory | — (reached through pointers) | until `free`/`delete` |
+
+: Scope and lifetime in C and C++ {#tbl-scope-lifetime}
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+static int calls_total = 0;          /* global, visible in this file only */
+
+int next_id(void)
+{
+    static int last = 1000;          /* initialised once, keeps its value between calls */
+    ++calls_total;
+    return ++last;
+}
+
+int main(void)
+{
+    for (int i = 0; i < 3; ++i)
+        printf("new id: %d\n", next_id());
+    printf("next_id was called %d times\n", calls_total);
+    return 0;
+}
+""", name="static.c")
+```
+
+Global mutable variables make programs hard to reason about (any function may
+change them) and hard to test; the CRM keeps all its state inside objects
+(@sec-ch-cpp-oop).
+
+## Standard streams and buffering {#sec-streams}
+
+Every process starts with three open streams, numbered 0, 1, 2 by the
+operating system (they are its first three **file descriptors**):
+
+| Stream | C (`<stdio.h>`) | C++ (`<iostream>`) | Descriptor | Default |
+|---|---|---|---|---|
+| standard input | `stdin` | `std::cin` | 0 | keyboard |
+| standard output | `stdout` | `std::cout` | 1 | terminal |
+| standard error | `stderr` | `std::cerr` | 2 | terminal |
+
+: The three standard streams {#tbl-std-streams}
+
+Normal results go to standard output, diagnostics to standard error. The
+distinction matters as soon as the output is **redirected** (`./prog > out.txt`)
+or **piped** into another program (`./prog | sort`): errors still reach the
+user instead of corrupting the data. @sec-ch-cpp-python builds on exactly this.
+
+### Buffering {#sec-buffering}
+
+Writing to a file or terminal is ultimately done by the operating system
+through a **system call** (`write` on Unix), which is expensive compared with
+copying a few bytes in memory. The C and C++ libraries therefore **buffer**
+output: `printf` copies the text into an array in memory, and the library calls
+`write` only when the buffer is full, when the stream is closed or explicitly
+flushed (`fflush`, `std::flush`, `std::endl`), or — for an interactive terminal
+— at each newline.
+
+::: {#prp-buffering}
+## System calls saved by buffering
+Writing a total of $n$ bytes through a buffer of $B$ bytes, with no explicit
+flushes, performs at most $\lceil n/B \rceil$ write system calls; writing the
+same data in $k$ unbuffered pieces performs $k$ system calls.
+:::
+
+*In one line:* each system call of a buffered stream carries a full buffer,
+except possibly the last.
+
+::: {.deep kind="proof"}
+## Proof of @prp-buffering
+The library issues a write only when the buffer is full ($B$ bytes) or at the
+final close (between 1 and $B$ bytes, if any remain). If $w$ writes happen,
+the first $w - 1$ carry exactly $B$ bytes, so $(w - 1)B < n$, i.e.
+$w < n/B + 1$, hence $w \le \lceil n/B\rceil$. (Libraries that write large
+pieces directly, bypassing the buffer, only reduce $w$.) Unbuffered, every
+piece is written by its own call. $\blacksquare$
+:::
+
+We can count the system calls with `strace`, which traces the calls a program
+makes to the Linux kernel. The program writes 10 000 short lines, first with
+the default buffering of a file, then with buffering disabled:
+
+```{python}
+run(r"""
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char **argv)
+{
+    FILE *f = fopen("lines.txt", "w");
+    if (f == NULL) { perror("lines.txt"); return 1; }
+    if (argc > 1 && strcmp(argv[1], "unbuffered") == 0)
+        setvbuf(f, NULL, _IONBF, 0);                 /* disable buffering for this stream */
+    for (int i = 0; i < 10000; ++i)
+        fprintf(f, "line %d\n", i);
+    fclose(f);
+    return 0;
+}
+""", name="buffering.c", run_it=False)
+sh("strace -c -e trace=write ./buffering 2>&1 | grep -E 'calls|write$' ; "
+   "strace -c -e trace=write ./buffering unbuffered 2>&1 | grep -E 'write$'; wc -c lines.txt")
+```
+
+98 890 bytes through a 4 096-byte buffer: $\lceil 98\,890 / 4\,096 \rceil = 25$
+system calls, exactly as @prp-buffering predicts, against 10 000. The flip side
+of buffering: output still in the buffer is **lost if the program crashes**,
+and output to a pipe may appear later than you expect. That is why `stderr` is
+unbuffered, and why a program that talks to another program through a pipe must
+flush at the right moments (@sec-ch-cpp-python). In C++, prefer `'\n'` to
+`std::endl` in loops: `std::endl` flushes every time.
+
+## Reading user input robustly {#sec-robust-input}
+
+### Why `scanf("%d")` and `cin >> n` are fragile
+
+`scanf("%d", &n)` reads characters that form an integer and **stops at the
+first character that does not fit**, leaving it in the input. If the user
+types `abc`, nothing is consumed, `n` is not assigned, and `scanf` returns 0 —
+a program that ignores the return value uses garbage, and a program that loops
+"until valid" loops forever on the same `abc`:
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int n = -1;
+    for (int attempt = 1; attempt <= 4; ++attempt) {      /* bounded, so that the demo ends */
+        int ok = scanf("%d", &n);
+        printf("attempt %d: scanf returned %d, n = %d\n", attempt, ok, n);
+        if (ok == 1) break;
+    }
+    return 0;
+}
+""", name="scanf_trap.c", stdin="abc\n12\n")
+```
+
+The `12` on the second line is never reached: `abc` blocks the input forever.
+C++'s `std::cin >> n` has the same behaviour plus a **failure state**: after a
+failed extraction the stream ignores every later operation until you call
+`std::cin.clear()` — and `abc` is still waiting in the input. Other problems
+are subtler: `scanf("%d")` accepts `12abc` (it reads `12` and leaves `abc`),
+gives undefined behaviour on numbers that do not fit in an `int`, and mixing
+`>>` with line-oriented reading leaves stray newlines behind.
+
+### A robust recipe: read a line, then parse it
+
+The reliable pattern, in both C and C++, separates two steps:
+
+1. **read a whole line** as text (`fgets` in C, `std::getline` in C++) — this
+   always consumes the user's input, whatever it is, and detects end of input;
+2. **parse** the text with a function that reports *precisely* whether it is a
+   valid value: all characters used, no overflow, within the allowed range.
+
+Every integer parser, from `strtol` to Python's `int()`, builds the value digit
+by digit with Horner's rule ($v \leftarrow 10v + d$, @sec-bits) and must stop
+**before** the value overflows. The test it uses deserves a proof:
+
+::: {#prp-overflow-test}
+## Detecting overflow before it happens
+Let $M \ge 9$ be the largest representable value and $0 \le d \le 9$ a digit.
+For every integer $v \ge 0$,
+$$
+10v + d \le M \iff v \le \left\lfloor \frac{M - d}{10} \right\rfloor .
+$$
+The right-hand side is computed without overflow, so the parser can test it
+**before** computing $10v + d$.
+:::
+
+*In one line:* move the operation to the other side of the inequality, where
+the numbers only get smaller.
+
+::: {.deep kind="proof"}
+## Proof of @prp-overflow-test
+$10v + d \le M \iff 10 v \le M - d \iff v \le (M - d)/10$, dividing by the
+positive number 10. Since $v$ is an integer, $v \le x \iff v \le \lfloor x\rfloor$
+for any real $x$ (if $v \le x$ then $v$ is an integer not exceeding $x$, hence
+not exceeding the largest such integer $\lfloor x\rfloor$; the converse is
+immediate). Finally $0 \le M - d \le M$, so $M - d$ and its quotient by 10 are
+representable. $\blacksquare$
+:::
+
+Here is the recipe in C with the standard `strtol` ("string to long"), which
+implements that test and reports overflow through `errno`:
+
+```{python}
+run(r"""
+#include <errno.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Parse text as an int in [lo, hi]. Returns true and stores the value on success. */
+bool parse_int(const char *text, int lo, int hi, int *out)
+{
+    char *end;
+    errno = 0;
+    long v = strtol(text, &end, 10);          /* end: first character NOT used */
+    if (end == text) return false;            /* no digits at all */
+    while (*end == ' ' || *end == '\t' || *end == '\n') ++end;
+    if (*end != '\0') return false;           /* trailing garbage, e.g. "12abc" */
+    if (errno == ERANGE) return false;        /* did not fit in a long */
+    if (v < lo || v > hi) return false;       /* outside the allowed range */
+    *out = (int)v;
+    return true;
+}
+
+int main(void)
+{
+    char line[128];
+    int age;
+    for (;;) {
+        printf("Age (0-130): ");
+        if (fgets(line, sizeof line, stdin) == NULL) {     /* end of input (Ctrl+D / Ctrl+Z) */
+            printf("\nNo more input.\n");
+            return 1;
+        }
+        printf("%s", line);                                /* echo, to show the transcript */
+        if (parse_int(line, 0, 130, &age)) break;
+        printf("  '%.*s' is not a whole number between 0 and 130.\n",
+               (int)strcspn(line, "\n"), line);
+    }
+    printf("Age accepted: %d\n", age);
+    return 0;
+}
+""", name="robust.c", stdin="abc\n12abc\n99999999999999999999\n-5\n  42  \n")
+```
+
+Five inputs, four of them wrong in different ways, and the program neither
+crashes nor loops: each line is consumed, judged and either accepted or
+explained.
+
+### The same in C++ {#sec-cpp-input}
+
+C++17 added `std::from_chars` (header `<charconv>`), a fast parser that never
+throws, does not depend on the locale, and reports exactly how many characters
+it used and whether the value was out of range. Combined with `std::getline`
+it gives a compact, robust reader — this is the code the CRM uses:
+
+```{python}
+run(r"""
+#include <charconv>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <string_view>
+
+// Remove spaces and tabs at both ends.
+std::string_view trim(std::string_view s) {
+    const auto first = s.find_first_not_of(" \t\r");
+    if (first == std::string_view::npos) return {};
+    const auto last = s.find_last_not_of(" \t\r");
+    return s.substr(first, last - first + 1);
+}
+
+// The whole text must be an integer in [lo, hi]; otherwise: no value.
+std::optional<int> parse_int(std::string_view text, int lo, int hi) {
+    text = trim(text);
+    int value{};
+    const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (ec != std::errc{} || ptr != text.data() + text.size() || text.empty())
+        return std::nullopt;                         // not a number, trailing junk, or out of int range
+    if (value < lo || value > hi) return std::nullopt;
+    return value;
+}
+
+// Ask until the answer is valid; std::nullopt if the input ends.
+std::optional<int> ask_int(std::istream& in, std::ostream& out,
+                           const std::string& prompt, int lo, int hi) {
+    std::string line;
+    while (true) {
+        out << prompt;
+        if (!std::getline(in, line)) return std::nullopt;     // end of input
+        out << line << '\n';                                  // echo (for the transcript)
+        if (auto v = parse_int(line, lo, hi)) return v;
+        out << "  Please type a whole number between " << lo << " and " << hi << ".\n";
+    }
+}
+
+int main() {
+    while (auto choice = ask_int(std::cin, std::cout, "Menu option (0-4): ", 0, 4)) {
+        std::cout << "  -> option " << *choice << '\n';
+        if (*choice == 0) break;
+    }
+    std::cout << "Bye.\n";
+}
+""", name="robust.cpp", stdin="2\nfour\n\n7\n3 \n0\n")
+```
+
+Three C++ types appear here and will return in @sec-ch-c-vs-cpp:
+`std::string` (a string that owns its characters and knows its length),
+`std::string_view` (a cheap, non-owning view of characters stored elsewhere)
+and `std::optional<int>` (either an `int` or *nothing* — a type-safe way to say
+"no valid value", where C needs an out-parameter plus a `bool`). Reading
+functions receive the streams as parameters (`std::istream& in`) rather than
+using `std::cin` directly: in the project this lets us test the user interface
+with scripted input, exactly as Part I did with an injected `input` function
+(@sec-ch-project-phonebook).
+
+## Files {#sec-c-files}
+
+### Files in C
+
+A file is opened with `fopen(path, mode)`, which returns a `FILE *` — or `NULL`
+on failure, with the reason in `errno`. The mode is `"r"` (read), `"w"`
+(write, **truncating** an existing file), or `"a"` (append), optionally with
+`"b"` for binary files (@tbl-open-modes is the same idea in Python). Reading
+and writing use the same functions as the standard streams, with an `f` in
+front: `fprintf`, `fgets`, `fputs`, `fscanf`; `fclose` flushes and closes.
+
+```{python}
+run(r"""
+#include <stdio.h>
+#include <string.h>
+
+int main(void)
+{
+    FILE *out = fopen("scores.txt", "w");
+    if (out == NULL) { perror("scores.txt"); return 1; }
+    fprintf(out, "Ada 93\nAlan 88\nGrace 97\n");
+    if (fclose(out) != 0) { perror("closing scores.txt"); return 1; }   /* a write error may appear only here */
+
+    FILE *in = fopen("scores.txt", "r");
+    if (in == NULL) { perror("scores.txt"); return 1; }
+    char name[64];
+    int score, total = 0, count = 0;
+    while (fscanf(in, "%63s %d", name, &score) == 2) {   /* %63s: never more than the buffer holds */
+        printf("%-6s %3d\n", name, score);
+        total += score;
+        ++count;
+    }
+    fclose(in);
+    printf("average: %.1f\n", count ? (double)total / count : 0.0);
+
+    FILE *missing = fopen("no_such_file.txt", "r");
+    if (missing == NULL) {
+        fflush(stdout);                                  /* keep the on-screen order (see buffering) */
+        perror("no_such_file.txt");                      /* prints the reason, from errno, on stderr */
+    }
+    return 0;
+}
+""", name="files.c")
+```
+
+`perror` prints our message followed by the system's description of `errno`
+(here "No such file or directory") on **standard error**. Two details are easy
+to miss: write errors (disk full) may surface only at `fclose`, so its result
+must be checked too; and on Windows, text mode translates `"\n"` to `"\r\n"`
+on output and back on input, while binary mode (`"rb"`, `"wb"`) does not —
+always use binary mode for non-text data (@sec-text-vs-binary).
+
+### Files in C++
+
+C++ wraps files in **stream objects**: `std::ifstream` (input), `std::ofstream`
+(output) and `std::fstream` (both), in `<fstream>`. They work exactly like
+`std::cin` and `std::cout`, and they **close themselves** when the object goes
+out of scope — the RAII principle of @sec-ch-cpp-oop, the C++ counterpart of
+Python's `with` (@sec-context-managers).
+
+```{python}
+run(r"""
+#include <fstream>
+#include <iostream>
+#include <string>
+
+int main() {
+    {
+        std::ofstream out("notes.txt");               // opens (and truncates) for writing
+        if (!out) { std::cerr << "cannot create notes.txt\n"; return 1; }
+        out << "first line\n" << "second line\n";
+    }                                                 // out is destroyed here: flushed and closed
+
+    std::ifstream in("notes.txt");
+    if (!in) { std::cerr << "cannot open notes.txt\n"; return 1; }
+    std::string line;
+    int number = 0;
+    while (std::getline(in, line))                    // false at end of file (or on error)
+        std::cout << ++number << ": " << line << '\n';
+
+    std::ifstream missing("missing.txt");
+    std::cout << "missing.txt opened? " << std::boolalpha << missing.is_open() << '\n';
+}
+""", name="files.cpp")
+```
+
+### A CSV format that survives real data {#sec-csv-cpp}
+
+The project stores customers in a **CSV** file: one record per line, fields
+separated by a delimiter. What if a field *contains* the delimiter — an address
+like `Via Roma 1, Milano` — or a quote, or a newline? RFC 4180 answers
+[@rfc4180]: enclose such a field in double quotes and double every quote inside
+it. In @prp-csv-roundtrip we proved that this encoding can always be decoded
+back to the original fields. Here is an implementation in C++ that the CRM
+reuses:
+
+```{python}
+code_csv = r"""
+#include <iostream>
+#include <string>
+#include <vector>
+
+// Encode one field: quote it if it contains a comma, a quote or a line break.
+std::string csv_escape(const std::string& field) {
+    if (field.find_first_of(",\"\r\n") == std::string::npos) return field;
+    std::string out = "\"";
+    for (char c : field) {
+        if (c == '"') out += '"';              // a quote is written twice
+        out += c;
+    }
+    return out + '"';
+}
+
+std::string csv_join(const std::vector<std::string>& fields) {
+    std::string line;
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (i > 0) line += ',';
+        line += csv_escape(fields[i]);
+    }
+    return line;
+}
+
+// Decode one record (a line without line breaks inside fields). Returns false if malformed.
+bool csv_split(const std::string& line, std::vector<std::string>& fields) {
+    fields.assign(1, "");
+    bool quoted = false;
+    for (std::size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        if (quoted) {
+            if (c == '"' && i + 1 < line.size() && line[i + 1] == '"') { fields.back() += '"'; ++i; }
+            else if (c == '"') quoted = false;            // closing quote
+            else fields.back() += c;
+        } else if (c == '"' && fields.back().empty()) {
+            quoted = true;                                // opening quote at the start of a field
+        } else if (c == ',') {
+            fields.emplace_back();                        // next field
+        } else {
+            fields.back() += c;
+        }
+    }
+    return !quoted;                                       // an unclosed quote is an error
+}
+
+int main() {
+    const std::vector<std::string> record = {"42", "Rossi", "Via Roma 1, Milano", "He said \"yes\"", ""};
+    const std::string line = csv_join(record);
+    std::cout << "encoded: " << line << '\n';
+    std::vector<std::string> back;
+    std::cout << "decoded ok: " << std::boolalpha << csv_split(line, back) << '\n';
+    for (const auto& f : back) std::cout << "  [" << f << "]\n";
+    std::cout << "round trip exact: " << (back == record) << '\n';
+    std::cout << "malformed line accepted? " << csv_split("1,\"unterminated", back) << '\n';
+}
+"""
+run(code_csv, name="csv.cpp")
+```
+
+The decoder is a tiny **state machine** with two states (inside or outside
+quotes), the same structure as the proof of @prp-csv-roundtrip; it rejects an
+unterminated quote instead of guessing. (To keep the format line-oriented, the
+CRM also refuses line breaks inside fields when they are typed — a simple
+validation rule is often better than a more general parser.)
+
+## Practice: a report from a data file {#sec-report-example}
+
+Putting the chapter together: a C++ program that reads policies from a CSV
+file, skips and reports malformed lines (with their line number, on standard
+error), and prints a summary — the robust-loading pattern of the project.
+
+```{python}
+write("policies.csv", '''id,customer,product,premium_cents
+1,Rossi,car,48000
+2,"Bianchi, Anna",home,21050
+3,Verdi,life,not-a-number
+4,Neri,car
+5,Esposito,home,19900
+''')
+main_report = r"""
+// report.cpp — csv_escape, csv_join and csv_split as above, plus:
+#include <charconv>
+#include <fstream>
+#include <map>
+
+int main() {
+    std::ifstream in("policies.csv");
+    if (!in) { std::cerr << "policies.csv not found\n"; return 1; }
+    std::string line;
+    std::getline(in, line);                                    // skip the header
+    std::map<std::string, long long> premium_by_product;       // kept sorted by key
+    int line_no = 1, good = 0;
+    std::vector<std::string> f;
+    while (std::getline(in, line)) {
+        ++line_no;
+        long long cents = 0;
+        bool ok = csv_split(line, f) && f.size() == 4;
+        if (ok) {
+            const std::string& p = f[3];
+            auto [ptr, ec] = std::from_chars(p.data(), p.data() + p.size(), cents);
+            ok = ec == std::errc{} && ptr == p.data() + p.size() && cents >= 0;
+        }
+        if (!ok) { std::cerr << "line " << line_no << " skipped: " << line << '\n'; continue; }
+        premium_by_product[f[2]] += cents;
+        ++good;
+    }
+    std::cout << good << " valid policies\n";
+    for (const auto& [product, cents] : premium_by_product)
+        std::cout << "  " << product << ": " << cents / 100 << '.'
+                  << (cents % 100 < 10 ? "0" : "") << cents % 100 << " EUR\n";
+}
+"""
+show(main_report)
+write("report.cpp", code_csv.split("int main()")[0] + main_report)
+compile_sources(["report.cpp"], "report")
+run_exe("report")
+```
+
+The input file contains a quoted name with a comma, a premium that is not a
+number and a line with a missing field. The two diagnostics, written on
+unbuffered standard error, appear *before* the report, which standard output
+kept in its buffer until the program ended (@sec-buffering). Money is kept in **integer cents** (@sec-c-floats) and printed by integer
+division and remainder.
+
+::: {.project-link}
+**In the project.** Three requirements of the CRM (@sec-crm-brief) are built
+from this chapter. **R8** (persistence): customers and interactions are saved to
+CSV files with the escaping of @sec-csv-cpp and loaded automatically at start;
+a missing file means "first run, empty CRM", and malformed lines are skipped
+and reported with their line number, as in @sec-report-example. **R11** (robust
+input): every value typed by the user goes through `std::getline` and a
+validating parser (`ask_choice`, `ask_text`, `ask_date`, `ask_money`), which re-asks with a
+clear message and treats end of input as "quit and save" — never as a crash.
+And the reading functions take `std::istream&`/`std::ostream&` parameters, so
+that the whole user interface can be driven by a script in the tests
+(@sec-ch-cpp-python).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Expecting a function to modify its argument**: C copies arguments; pass a
+  pointer (or, in C++, a reference).
+- **Returning the address of a local variable**: it dangles after the return.
+- **Ignoring return values**: `scanf`, `fopen`, `fclose`, `strtol`'s `end`
+  pointer — every one of them reports failures you must check.
+- **`scanf("%d")` / `cin >> n` on user input**: invalid text blocks the input
+  or puts the stream in a failure state. Read lines, then parse.
+- **`%s` without a width** in `scanf`: a buffer overflow (@sec-c-strings).
+- **`atoi`**: returns 0 for invalid input, indistinguishable from a real 0. Use
+  `strtol` or `std::from_chars`.
+- **Forgetting to flush** before waiting for input from another program; or,
+  conversely, `std::endl` in hot loops.
+- **Mode `"w"` on the file you meant to read**: it truncates it to zero bytes.
+- **Text mode for binary data on Windows**: `\n` bytes are altered.
+:::
+
+## Summary
+
+- Functions are declared (prototype) and defined; the compiler checks every
+  call. Arguments are passed **by value**; pointers let a function modify the
+  caller's variables or return several results; `const` documents read-only
+  access.
+- Each call has a **stack frame**; frames vanish on return (never return
+  addresses of locals); deep recursion overflows the stack.
+- **Scope** (where a name is visible) and **lifetime** (when the object exists)
+  differ for locals, `static` locals, globals and heap memory.
+- The three **standard streams** are `stdin`/`cin`, `stdout`/`cout`,
+  `stderr`/`cerr`. Output is **buffered**: at most $\lceil n/B\rceil$ system
+  calls for $n$ bytes (@prp-buffering).
+- **Robust input** = read a whole line, then parse it completely and check the
+  range. Parsers detect overflow *before* it happens with
+  $v \le \lfloor (M-d)/10\rfloor$ (@prp-overflow-test). In C: `fgets` +
+  `strtol`; in C++: `std::getline` + `std::from_chars` + `std::optional`.
+- **Files**: `fopen`/`fclose` and the `f…` functions in C, checking `NULL` and
+  `errno`; `std::ifstream`/`std::ofstream` in C++, which close automatically.
+  CSV fields containing commas or quotes must be quoted (RFC 4180).
+
+## Exercises
+
+::: {#exr-cpp5-swap}
+Write a C function `swap(int *a, int *b)` that exchanges two integers, and
+explain why `void swap(int a, int b)` cannot work. What does the call
+`swap(&x, &x)` do with your implementation?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```c
+void swap(int *a, int *b) { int t = *a; *a = *b; *b = t; }
+```
+With `int` parameters the function swaps its own copies, invisible to the
+caller. `swap(&x, &x)` works: `t = x; x = x; x = t` leaves `x` unchanged. (The
+"clever" version without a temporary, `*a ^= *b; *b ^= *a; *a ^= *b;`, sets
+`x` to 0 when both pointers are equal — one more reason to prefer clear code.)
+:::
+
+::: {#exr-cpp5-overflow}
+Using @prp-overflow-test, write a C function `bool parse_u32(const char *s,
+uint32_t *out)` that accepts only non-empty strings of decimal digits whose
+value fits in `uint32_t`, without calling any library parser and without ever
+overflowing.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```c
+#include <stdbool.h>
+#include <stdint.h>
+bool parse_u32(const char *s, uint32_t *out) {
+    const uint32_t M = UINT32_MAX;
+    uint32_t v = 0;
+    if (*s == '\0') return false;
+    for (; *s; ++s) {
+        if (*s < '0' || *s > '9') return false;
+        uint32_t d = (uint32_t)(*s - '0');
+        if (v > (M - d) / 10) return false;      /* 10v + d would exceed M */
+        v = 10 * v + d;                          /* safe by the proposition */
+    }
+    *out = v;
+    return true;
+}
+```
+:::
+
+::: {#exr-cpp5-buffer}
+A program writes 1 000 000 lines of 20 bytes each to a file. How many `write`
+system calls are made with the default 4 096-byte buffer? With a 64 KiB buffer
+set by `setvbuf`? And if the program calls `fflush` after every line?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$n = 2\cdot10^7$ bytes. With $B = 4096$: $\lceil 2\cdot10^7/4096\rceil = 4883$
+calls. With $B = 65\,536$: $\lceil 2\cdot 10^7 / 65\,536\rceil = 306$ calls.
+Flushing after every line defeats the buffer: $10^6$ calls, one per line.
+:::
+
+::: {#exr-cpp5-csv}
+Encode the fields `a"b`, `,`, an empty field and `x y` with `csv_join`, then
+decode the result by hand with the two-state machine of `csv_split`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`a"b` contains a quote → `"a""b"`; `,` → `","`; the empty field stays empty;
+`x y` needs no quotes. The line is `"a""b",",",,x y`. Decoding: `"` at the
+start of a field opens quotes; `a`; `""` → one `"`; `b`; `"` closes; `,` ends
+field 1 (`a"b`). `"` opens; `,` inside quotes is data; `"` closes; `,` ends
+field 2 (`,`). The next `,` ends field 3 (empty). `x y` is field 4. Four
+fields, equal to the originals.
+:::
+
+## Further reading {.unnumbered}
+
+- @kernighan1988, ch. 4 (functions and program structure) and ch. 7 (input and
+  output), Appendix B (the standard library).
+- @stroustrup2013, ch. 12 (functions) and ch. 38 (I/O streams).
+- @kerrisk2010, ch. 4–5 (file I/O at the system-call level) and ch. 13 (file
+  I/O buffering) — what `printf` and `std::cout` do underneath.
+- @rfc4180 — the CSV format.
+- @cppreference — the pages of `std::from_chars`, `std::getline`,
+  `std::optional` and `std::basic_fstream`.

@@ -1,0 +1,708 @@
+# Compiled and interpreted languages {#sec-ch-compiled}
+
+> *"Premature optimization is the root of all evil."* — Donald Knuth
+> [@knuth1974].
+
+```{python}
+from cppbook import run, show, sh, write
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- define precisely what a **compiler**, an **interpreter**, a **virtual
+  machine** and a **just-in-time** (JIT) compiler are, and place C, C++,
+  Python, Java and JavaScript on that spectrum;
+- explain **where the time goes** when a program is interpreted, and measure
+  the speed difference between Python and C++ on the same algorithm;
+- state and **prove Amdahl's law**, and use it to decide whether rewriting part
+  of a program in C++ is worth it;
+- **prove** that the "interpret first, compile when it pays" strategy of JIT
+  compilers is never worse than twice the best possible choice;
+- compare the two models on **portability** (source vs binary, ABIs, data
+  models), **confidentiality** (what a binary reveals) and **development
+  workflow**;
+- choose an execution model that fits the requirements of a project.
+:::
+
+::: {.callout-tip}
+## Topics covered
+The difference between interpreted and compiled languages, and how it affects
+performance, portability, confidentiality and the development process.
+:::
+
+## Intuition: the simultaneous interpreter and the translated book
+
+At an international conference, a **simultaneous interpreter** listens to the
+speaker and renders each sentence as it comes: nothing has to be prepared in
+advance, a correction is heard immediately, but every sentence costs the
+interpreter's effort *every time it is spoken*, and the interpreter must be in
+the room. A **translated book** is the opposite: translating takes time up
+front, but afterwards readers read at full speed, with no translator present —
+and the translation only helps readers of *that* language.
+
+Interpreting and compiling a program are the same two strategies, applied to a
+text written for people (the source code) and a "reader" that understands only
+machine code (@sec-von-neumann). Every property in this chapter — speed,
+portability, confidentiality, comfort of development — follows from this
+picture.
+
+## Definitions {#sec-compile-definitions}
+
+Let us make the picture precise. Call $L$ the language of the source program
+and $M$ the machine language. A program $p$ written in $L$ *means* a function
+$[\![p]\!]_L$ from inputs to outputs (we ignore side effects for the moment).
+
+::: {#def-interpreter}
+## Interpreter and compiler
+- An **interpreter** for $L$ is a program $\mathit{int}$ that receives a
+  program $p$ *and* its input $x$ and produces the output:
+  $\mathit{int}(p, x) = [\![p]\!]_L(x)$.
+- A **compiler** from $L$ to $M$ is a program $\mathit{comp}$ that receives
+  only $p$ and produces a program $p' = \mathit{comp}(p)$ in $M$ with the same
+  meaning: $[\![p']\!]_M = [\![p]\!]_L$. The input $x$ is given later, to $p'$.
+:::
+
+*In one line:* an interpreter does the work *with* the data; a compiler does
+the translation *before* the data arrives, once and for all.
+
+The definition explains the first trade-off: the interpreter must analyse $p$
+while it runs, possibly analysing the same statement millions of times inside a
+loop; the compiler analyses each statement once, but nothing can run until it
+has finished. It also explains the vocabulary of **times**: things that happen
+in $\mathit{comp}$ happen at **compile time**, things that happen in $p'$ at
+**run time**.
+
+::: {.deep}
+## The Futamura projections: a compiler is a specialised interpreter
+In 1971 Yoshihiko Futamura observed that the two notions of
+@def-interpreter are linked by **partial evaluation** [@futamura1999]. A
+*specialiser* $\mathit{spec}$ takes a two-argument program and fixes its first
+argument: $[\![\mathit{spec}(f, a)]\!](b) = [\![f]\!](a, b)$. Then:
+
+1. $\mathit{spec}(\mathit{int}, p)$ is a program that, given $x$, computes
+   $\mathit{int}(p, x) = [\![p]\!](x)$: it is a **compiled version of $p$**;
+2. $\mathit{spec}(\mathit{spec}, \mathit{int})$ maps $p$ to the compiled
+   version of $p$: it is a **compiler**;
+3. $\mathit{spec}(\mathit{spec}, \mathit{spec})$ turns interpreters into
+   compilers: a **compiler generator**.
+
+The first projection follows directly from the definition of $\mathit{spec}$;
+the second and third by applying the same definition twice and three times.
+The idea is not only theoretical: GraalVM's Truffle framework and PyPy build
+fast language implementations by specialising interpreters.
+:::
+
+## The spectrum of implementations {#sec-spectrum}
+
+"Compiled language" and "interpreted language" are convenient shortcuts, but
+the distinction belongs to **implementations**, not to languages: there are C
+interpreters and Python compilers. Real systems sit on a spectrum:
+
+| Strategy | How it runs | Examples |
+|---|---|---|
+| **pure interpretation** | walk the source (or its syntax tree) and execute it | early BASICs, shell scripts |
+| **bytecode + virtual machine** | compile to a compact intermediate code, then interpret it (@sec-python-language) | CPython, early Java |
+| **just-in-time (JIT) compilation** | start interpreting; compile the frequently executed parts to machine code while the program runs | Java HotSpot, JavaScript V8, PyPy |
+| **ahead-of-time (AOT) compilation** | compile everything to machine code before running | C, C++, Rust, Go, Fortran |
+
+: How languages are implemented {#tbl-spectrum}
+
+CPython is in the second row: your `.py` file is compiled to bytecode (cached
+in `__pycache__/*.pyc`), and the bytecode is interpreted by a loop written in
+C. C and C++ are almost always in the last row — the topic of this part. The
+history of the middle rows, from Lisp and APL systems of the 1960s to modern
+JITs, is surveyed by Aycock [@aycock2003].
+
+## Where the time goes {#sec-where-time-goes}
+
+### Measuring the gap
+
+Take one algorithm and implement it in both languages. For every $n$ from 1 to
+300 000 we count the steps of the **Collatz** process — halve $x$ if it is even,
+otherwise replace it by $3x + 1$, until $x = 1$ — and add them up. It is a
+good benchmark because it is pure arithmetic and branching, its running time
+depends on the data (no compiler can precompute it), and nobody knows a
+formula for the result (that every $n$ reaches 1 is the famous unsolved
+**Collatz conjecture** [@lagarias2010]).
+
+```{python}
+#| echo: true
+#| output: true
+import time
+
+def collatz_total(n_max):
+    """Total number of Collatz steps for all starting values 1..n_max."""
+    total = 0
+    for n in range(1, n_max + 1):
+        x = n
+        while x != 1:
+            x = x // 2 if x % 2 == 0 else 3 * x + 1
+            total += 1
+    return total
+
+t0 = time.perf_counter()
+result = collatz_total(300_000)
+t_python = time.perf_counter() - t0
+print(f"Python (CPython): total = {result:,}   time = {t_python:.3f} s")
+```
+
+The same algorithm in C++, compiled twice: without optimisation (`-O0`) and
+with optimisation (`-O2`).
+
+```{python}
+code = r"""
+#include <chrono>
+#include <cstdint>
+#include <iostream>
+
+int main() {
+    auto start = std::chrono::steady_clock::now();
+    std::uint64_t total = 0;                         // 64-bit unsigned integer (@sec-ch-c-intro)
+    for (std::uint64_t n = 1; n <= 300'000; ++n) {
+        std::uint64_t x = n;
+        while (x != 1) {
+            x = (x % 2 == 0) ? x / 2 : 3 * x + 1;
+            ++total;
+        }
+    }
+    std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+    std::cout << "total = " << total << "   time = " << elapsed.count() << " s\n";
+}
+"""
+show(code, name="collatz.cpp")
+write("collatz.cpp", code)
+sh("g++ -std=c++20 -O0 collatz.cpp -o collatz_O0 && ./collatz_O0")
+sh("g++ -std=c++20 -O2 collatz.cpp -o collatz_O2 && ./collatz_O2")
+```
+
+```{python}
+#| echo: true
+#| output: true
+import re, subprocess, cppbook
+def cpp_time(exe):
+    out = subprocess.run(["./" + exe], cwd=cppbook.BUILD, capture_output=True, text=True).stdout
+    return float(re.search(r"time = ([\d.e-]+)", out).group(1))
+t_o0, t_o2 = cpp_time("collatz_O0"), cpp_time("collatz_O2")
+print(f"speed-up of C++ -O0 over Python: {t_python / t_o0:5.1f}x")
+print(f"speed-up of C++ -O2 over Python: {t_python / t_o2:5.1f}x")
+```
+
+The exact numbers depend on the machine (these were measured on the computer
+that built the book), but the order of magnitude — **tens of times** — is
+typical for tight loops of arithmetic.
+
+### Why: the cost of dispatch
+
+Look at what each implementation executes for **one** iteration of the inner
+loop. CPython executes bytecode instructions; we can list those of the loop
+body with `dis` (@sec-python-language):
+
+```{python}
+#| echo: true
+#| output: true
+import dis
+first = collatz_total.__code__.co_firstlineno                 # line of "def"
+loop_lines = {first + 5: "while x != 1", first + 6: "x = ...", first + 7: "total += 1"}
+body = [i for i in dis.get_instructions(collatz_total) if i.positions.lineno in loop_lines]
+for ins in body:
+    print(f"{loop_lines[ins.positions.lineno]:<13} {ins.opname:<22} {ins.argrepr}")
+print(len(body), "instructions in the listing")
+```
+
+The listing shows the loop test twice (CPython 3.13 places a copy at the
+bottom of the loop); one iteration executes 20 or 21 of these instructions,
+depending on the branch taken. For **each** of them the interpreter loop of
+CPython fetches the opcode, jumps to the code that implements it (the
+**dispatch**), checks the types of the operands at run time (is `x` an `int`? a
+`float`? a user object with `__mod__`?), operates on heap-allocated integer
+objects of arbitrary precision, and updates reference counts. Here is the same
+loop, as a C++ function, compiled with `-O2`:
+
+```{python}
+show(r"""
+#include <cstdint>
+
+std::uint64_t collatz_steps(std::uint64_t x) {
+    std::uint64_t steps = 0;
+    while (x != 1) {
+        x = (x % 2 == 0) ? x / 2 : 3 * x + 1;
+        ++steps;
+    }
+    return steps;
+}
+""", name="steps.cpp")
+sh("g++ -std=c++20 -O2 -S steps.cpp -o - | sed -n '/^_Z13collatz_stepsm:/,/\\.size/p' | "
+   "grep -Ev '^\\s*\\.(cfi|p2align|size)'")
+```
+
+The whole loop is a handful of register instructions: test the lowest bit
+(`testb $1`, is $x$ odd?), shift right by one (`shrq`, i.e. $x/2$), compute
+$3x+1$ in a single `leaq` (address arithmetic $x + 2x + 1$ reused for
+arithmetic), add one to the counter, compare with 1, jump. No type checks, no
+memory allocation, no dispatch: the compiler knew at compile time that `x` is
+a 64-bit unsigned integer, and even replaced `% 2` and `/ 2` by bit
+operations.
+
+A simple cost model makes the comparison quantitative. If a computation
+performs $N$ elementary operations, each doing useful work $w$, an AOT-compiled
+program takes about $T_c \approx N w$, and an interpreter about
+$T_i \approx N (w + d)$, where $d$ is the **interpretive overhead** per
+operation (dispatch, type checks, boxing). The ratio
+$$
+\frac{T_i}{T_c} \approx 1 + \frac{d}{w}
+$$
+is large exactly when the operations are **cheap** ($w$ small: integer
+arithmetic, comparisons) and close to 1 when they are **expensive** ($w$
+large: a matrix multiplication, a database query, a network request). This is
+why the gap you measure depends so much on *what* the program does, and why
+Python is fast enough for most programs: its time is spent in expensive
+operations implemented in C (sorting, `dict` lookups, NumPy) or waiting for
+input.
+
+## Amdahl's law: is it worth rewriting? {#sec-amdahl}
+
+Suppose a Python program is too slow. Should we rewrite it in C++? Rewriting
+everything is expensive; usually we rewrite the **hot spot** — the part where
+most time is spent — and call it from Python (@sec-ch-cpp-python). How much
+faster does the *whole* program become?
+
+::: {#thm-amdahl}
+## Amdahl's law
+Let a program run in time $T$, and let a fraction $p \in [0, 1]$ of that time
+be spent in a part that we speed up by a factor $s > 0$, leaving the rest
+unchanged. The overall speed-up is
+$$
+S(p, s) = \frac{T}{T_{\text{new}}} = \frac{1}{(1 - p) + \dfrac{p}{s}},
+$$ {#eq-amdahl}
+and, however large $s$ is, $S(p,s) < \dfrac{1}{1-p}$ whenever $0 < p < 1$.
+:::
+
+*In one line:* the part you do not improve sets a ceiling — if 20% of the time
+is untouched, nothing can make the program more than 5 times faster.
+
+::: {.deep kind="proof"}
+## Proof of @thm-amdahl
+The unchanged part takes $(1-p)T$ before and after; the improved part took $pT$
+and now takes $pT/s$. Hence $T_{\text{new}} = (1-p)T + pT/s$ and
+$S = T / T_{\text{new}} = 1/\big((1-p) + p/s\big)$. For $0 < p < 1$ we have
+$p/s > 0$, so the denominator is strictly greater than $1-p > 0$ and
+$S < 1/(1-p)$. As $s \to \infty$, $p/s \to 0$ and $S \to 1/(1-p)$, so no
+smaller ceiling exists. $\blacksquare$
+:::
+
+Gene Amdahl made the argument in 1967 to warn against expecting too much from
+parallel computers [@amdahl1967]; his paper is in words, and the formula is the
+later standard rendering of it [@hennessy2017, §1.9]. The same reasoning
+applies to any partial improvement.
+
+::: {#exm-amdahl-rewrite}
+## Rewriting a hot spot
+A data-processing script runs in 100 s. Profiling (measuring where the time
+goes, e.g. with Python's `cProfile`) shows 70 s in a parsing loop, 30 s in
+other work. Rewriting the loop in C++ makes it 40 times faster. Then
+$p = 0.7$, $s = 40$ and
+$$
+S = \frac{1}{0.3 + 0.7/40} = \frac{1}{0.3 + 0.0175} = \frac{1}{0.3175} \approx 3.15 .
+$$
+The program now takes about $100/3.15 \approx 31.7$ s. Even an infinitely fast
+loop would give at most $1/0.3 \approx 3.33$, i.e. 30 s: the remaining 30 s of
+"other work" are now the bottleneck. Had profiling shown only 10 s in the loop
+($p = 0.1$), the same rewrite would have gained less than 11%.
+:::
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof amdahlP = Inputs.range([0, 0.99], {step: 0.01, value: 0.7, label: "fraction p of time improved"})
+amdahlCurve = {
+  const out = [];
+  for (let e = 0; e <= 3; e += 0.02) {           // s from 1 to 1000 on a log scale
+    const s = 10 ** e;
+    out.push({s, speedup: 1 / ((1 - amdahlP) + amdahlP / s)});
+  }
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-amdahl
+//| fig-cap: "Amdahl's law: overall speed-up as a function of the speed-up s of the improved part, for the chosen fraction p. The dashed line is the ceiling 1/(1−p)."
+Plot.plot({x: {label: "speed-up s of the improved part", type: "log"}, y: {label: "overall speed-up S", domain: [1, 1 / (1 - amdahlP) * 1.1]},
+  marks: [Plot.line(amdahlCurve, {x: "s", y: "speedup"}), Plot.ruleY([1 / (1 - amdahlP)], {strokeDasharray: "4,4"})]})
+```
+:::
+
+::: {.callout-important}
+## Measure before you rewrite
+Amdahl's law turns Knuth's warning into arithmetic: an optimisation is worth
+exactly as much as the fraction of time it touches. **Profile first**, then
+move to C++ only the parts where the time really goes.
+:::
+
+## Just-in-time compilation: when does compiling pay? {#sec-jit}
+
+A JIT compiler has to decide, *while the program runs*, whether a function is
+worth compiling. Compiling costs time $C$ now; it saves $d = a - b > 0$ on each
+later execution, where $a$ is the cost of an interpreted execution and $b < a$
+that of a compiled one.
+
+::: {#prp-jit-breakeven}
+## Break-even point
+If a function will be executed $k$ more times, compiling it now is worthwhile
+if and only if $k\,d > C$, i.e. $k > C/d$.
+:::
+
+*In one line:* compile when the total saving of the future runs exceeds the
+one-off cost of compiling.
+
+::: {.deep kind="proof"}
+## Proof of @prp-jit-breakeven
+Interpreting the $k$ runs costs $k a$; compiling first costs $C + k b$. The
+second is smaller iff $C + kb < ka$, i.e. $C < k(a - b) = kd$. $\blacksquare$
+:::
+
+The difficulty is that the JIT **does not know $k$**: it cannot see the
+future. A natural strategy, used in essence by real JITs with their
+invocation counters, is to **interpret until the time wasted equals the cost of
+compiling, then compile**. Surprisingly, this simple rule is provably close to
+optimal. It is the computer-science classic known as the **ski-rental
+problem** (rent skis each day, or buy them once?), analysed by Karlin, Manasse,
+Rudolph and Sleator [@karlin1988].
+
+::: {#thm-ski-rental}
+## Interpret-then-compile is 2-competitive
+Let $m = \lfloor C/d \rfloor$, and let the strategy THRESHOLD interpret the
+first $m$ executions and compile before execution $m+1$ (if it happens). For
+every number $k$ of executions, the cost of THRESHOLD is at most **twice** the
+cost of the best choice made with knowledge of $k$.
+:::
+
+*In one line:* by the time THRESHOLD compiles, it has wasted at most $C$ by
+interpreting — the same amount that an all-knowing strategy would have had to
+pay anyway.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ski-rental
+Every execution costs at least $b$ whatever we do, so subtract $kb$ from all
+costs: what remains is $d$ per interpreted execution and $C$ for compiling.
+The best choice in hindsight then costs $\mathrm{OPT}' = \min(kd, C)$.
+
+*Case $k \le m$.* THRESHOLD never compiles and pays $kd$. Since
+$k \le m \le C/d$, $kd \le C$, so $\mathrm{OPT}' = kd$: THRESHOLD is optimal.
+
+*Case $k > m$.* THRESHOLD pays $md + C \le C + C = 2C$ (because $md \le C$).
+Since $k \ge m + 1 > C/d$ (by definition of the floor), $kd > C$ and
+$\mathrm{OPT}' = C$. So THRESHOLD pays at most $2\,\mathrm{OPT}'$.
+
+Adding back $kb$: $\mathrm{ALG} = \mathrm{ALG}' + kb \le 2\,\mathrm{OPT}' + kb
+\le 2(\mathrm{OPT}' + kb) = 2\,\mathrm{OPT}$. $\blacksquare$
+:::
+
+No deterministic strategy can guarantee a factor below 2 by much: an adversary
+who stops the program right after the strategy compiles makes it pay for both
+the interpretation and the compilation [@karlin1988]. Real JITs refine the
+idea with several tiers (a quick, lightly optimising compiler first, an
+aggressive one for the hottest code) and with information gathered while
+interpreting, such as the actual types seen — something an AOT compiler for a
+dynamic language cannot know.
+
+## Portability {#sec-portability}
+
+**Portability** is the ability to run a program on different platforms. It
+comes in two forms, and the two execution models trade one for the other.
+
+- **Source portability**: the *source code* can be compiled or run unchanged on
+  another platform. Python code is highly source-portable: it runs wherever an
+  interpreter exists. Standard C and C++ are source-portable too — that is the
+  purpose of the ISO standards — provided the code avoids platform-specific
+  APIs and the behaviours the standard leaves to the implementation.
+- **Binary portability**: the *compiled file* runs elsewhere. A compiled C++
+  executable is tied to a processor **instruction set** (x86-64, ARM64, …), an
+  **operating system** (the format of the file, the system calls) and an
+  **ABI** (application binary interface: how arguments are passed, how objects
+  are laid out, how names are mangled). Python source and bytecode have no such
+  tie, which is why the *same* `.py` file runs on Windows, Linux and macOS.
+
+The executable produced in @sec-toolchain announces its platform in its
+header:
+
+```{python}
+sh("g++ -std=c++20 -O2 collatz.cpp -o collatz && file collatz | cut -d, -f1-3 && "
+   "readelf -h collatz | grep -E 'Class|Machine|OS/ABI'")
+```
+
+It is a 64-bit ELF file for x86-64 Linux: Windows (which uses the PE format)
+cannot load it, and a Mac with an ARM processor cannot execute its
+instructions. To support three platforms, you build three executables — on
+three machines, or with a **cross-compiler**, which runs on one platform and
+generates code for another.
+
+### Implementation-defined behaviour: the data models
+
+Even *source* portability of C and C++ has traps, because the standards leave
+some choices to the implementation. The best-known is the **size of the integer
+types** (@sec-ch-c-intro): the standard only guarantees minimum ranges, and
+64-bit platforms made different choices:
+
+| Data model | `int` | `long` | `long long` | pointer | Used by |
+|---|---|---|---|---|---|
+| ILP32 | 32 | 32 | 64 | 32 | 32-bit Linux and Windows |
+| LP64 | 32 | **64** | 64 | 64 | 64-bit Linux, macOS, other Unix systems |
+| LLP64 | 32 | **32** | 64 | 64 | 64-bit Windows |
+
+: Sizes in bits of the integer types in common data models {#tbl-data-models}
+
+A program that stores a file size or a pointer in a `long` works on 64-bit
+Linux and silently truncates on 64-bit Windows. The portable fix is to say what
+you mean: the fixed-width types of `<cstdint>` (`std::int64_t`) and the types
+made for the job (`std::size_t` for sizes, @sec-ch-c-intro).
+
+::: {.callout-note}
+## Python inherits the problem one level down
+Pure Python code is portable, but packages with compiled extensions (NumPy,
+PyTorch) must be built separately for each platform and Python version: this is
+why PyPI distributes many **wheels** for one release of such a package, one per
+platform tag (@sec-ch-pip).
+:::
+
+## Confidentiality {#sec-confidentiality}
+
+When you give someone a Python program, you give them the **source**: they can
+read it, change it and copy its ideas. Bytecode files (`.pyc`) are not much
+better, because bytecode keeps names, constants and structure:
+
+```{python}
+#| echo: true
+#| output: true
+import dis
+
+def check_licence(key):
+    SECRET = "ACME-1234-XYZ"                 # an embedded "secret"
+    return key == SECRET
+
+code = check_licence.__code__                # what a .pyc file stores (marshalled)
+print("names:", code.co_varnames, "| constants:", code.co_consts)
+```
+
+A compiled executable distributes machine code, which is much harder to read:
+variable names, comments and the structure of the source are gone. That is a
+real advantage when the algorithm is a trade secret. But compilation is
+**not encryption**. Text constants, the names of external functions, and —
+unless stripped — the names of your own functions survive in the binary:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+bool check_licence(const std::string& key) {
+    static const char secret[] = "ACME-1234-XYZ";    // an embedded "secret"
+    return key == secret;
+}
+
+int main(int argc, char** argv) {
+    std::cout << (argc > 1 && check_licence(argv[1]) ? "licence ok\n" : "invalid licence\n");
+}
+""", name="licence.cpp", args=("WRONG-KEY",))
+sh("strings licence | grep -i acme; nm -C licence | grep check_licence; "
+   "strip licence && echo 'after strip:' && (nm licence 2>&1 | head -1); strings licence | grep -i acme")
+```
+
+`strings` prints every run of printable characters in a file: the "secret" is
+there in plain text, before and after `strip` (which removes the symbol table
+with function names, but not data). An optimising compiler sometimes splits a
+short constant into the operands of a few instructions, so that `strings` sees
+only fragments — a disassembler reassembles it in a minute. And with a **decompiler** such as Ghidra,
+released as open source by the US National Security Agency, an analyst can
+reconstruct readable pseudo-code of `check_licence` from the machine code.
+
+::: {.callout-warning}
+## Never put secrets in a program you distribute
+Passwords, API keys and licence-checking logic shipped inside an executable
+must be assumed **readable** by anyone who has the file. Compiling gives
+*obscurity*, not security. This is Kerckhoffs's principle, formulated in 1883
+for military ciphers [@kerckhoffs1883]: a system must stay secure even if
+everything about it except the key falls into the enemy's hands. Secrets
+belong on a server you control, or in configuration supplied by the user.
+:::
+
+## The development workflow {#sec-dev-workflow}
+
+The two models also feel different to work with:
+
+| | Interpreted (Python) | Compiled (C++) |
+|---|---|---|
+| edit → see the result | immediate; a REPL allows experiments line by line | an extra build step: seconds to minutes in large projects |
+| type errors | found when the line runs (maybe in production) | most found at compile time, before running |
+| performance tuning | limited; move hot spots to compiled code | fine control over memory layout and machine code |
+| debugging | tracebacks with names and values; `pdb` | debugger and sanitizers (@sec-debugging); some errors are silent (undefined behaviour) |
+| distribution | ship sources + dependencies; the user needs an interpreter | ship one executable per platform; no interpreter needed |
+
+: Development workflow in the two models {#tbl-workflow}
+
+Neither column wins everywhere, which is why so much real software — and almost
+all AI software — is **hybrid**: the program logic, experiments and glue are
+written in Python, and the expensive kernels (linear algebra, tensor
+operations, data loading) in C, C++ or CUDA, called from Python. NumPy and
+PyTorch are built this way (@sec-crash-courses). Making a Python program and a
+C++ program cooperate is the subject of @sec-ch-cpp-python.
+
+## Choosing an execution model {#sec-choosing-model}
+
+The four criteria of this chapter give a checklist.
+
+| If the project needs… | Prefer |
+|---|---|
+| maximum speed on cheap, repeated operations (simulation, signal processing, games, numerical kernels) | AOT compilation: C, C++, Rust |
+| fast iteration, exploration, data analysis, glue between systems | an interpreted language: Python |
+| a single file to install on users' machines, with no runtime to install | a compiled executable per platform |
+| one artefact that runs everywhere a runtime exists | Python source, or a bytecode VM (JVM) |
+| to keep the algorithm away from casual readers | compiled code (but never rely on it for secrets) |
+| both speed in a few places and productivity elsewhere | a hybrid: Python + compiled extension or helper process |
+
+: A decision checklist {#tbl-choose-model}
+
+::: {.project-link}
+**In the project.** The CRM of @sec-ch-project-crm is written in C++ because
+the brief asks for it (R1, @sec-crm-brief), and this chapter tells us what we
+gain and what we do not. Performance is **not** the reason: with a few thousand
+customers every operation takes microseconds in any language (@sec-amdahl:
+there is no hot spot worth optimising). The real advantages are a **single
+native executable** that an agency can run without installing an interpreter,
+and a strongly typed code base in which many mistakes are caught at compile
+time. The price is **binary portability**: the README must explain how to build
+the program on each platform (R12), and the code must avoid
+implementation-defined assumptions such as the size of `long`
+(@tbl-data-models).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **"Python is slow, so rewrite everything in C++."** Amdahl's law: only the
+  fraction of time you speed up matters. Profile first.
+- **"C++ is always fast."** Unoptimised builds (`-O0`), poor algorithms or
+  needless copies can make C++ slower than good Python calling NumPy.
+- **Benchmarking a debug build**, or a loop whose result is never used (the
+  optimiser may delete it entirely). Print or otherwise use the result.
+- **Assuming binary portability.** An executable built on Linux does not run on
+  Windows or on another processor; ship one build per platform.
+- **Assuming type sizes**: `long` is 64 bits on Linux and 32 on Windows. Use
+  `<cstdint>` types when the size matters.
+- **Hiding secrets in compiled code.** `strings` finds them in seconds.
+:::
+
+## Summary
+
+- An **interpreter** computes $[\![p]\!](x)$ from $p$ and $x$ together; a
+  **compiler** translates $p$ into an equivalent machine program before $x$ is
+  known. Real implementations sit on a spectrum: pure interpretation, bytecode
+  + VM (CPython), JIT (Java, JavaScript, PyPy), AOT (C, C++).
+- Interpretation adds an overhead $d$ per elementary operation (dispatch, type
+  checks), so the slowdown $\approx 1 + d/w$ is large for cheap operations — tens
+  of times on our Collatz benchmark — and small for expensive ones.
+- **Amdahl's law**: speeding up a fraction $p$ of the time by $s$ gives
+  $S = 1/((1-p) + p/s) < 1/(1-p)$. Profile before optimising.
+- A JIT that interprets until the wasted time equals the compilation cost is
+  **2-competitive** (ski rental).
+- Compiled code is **source-portable** (with care about implementation-defined
+  sizes) but **not binary-portable**; it hides the source but **not** its
+  secrets; it moves many errors to compile time at the price of a build step.
+
+## Exercises
+
+::: {#exr-cpp2-amdahl}
+A training pipeline spends 60% of its time loading and decoding images and 40%
+in the model. (a) What is the overall speed-up if decoding becomes 10 times
+faster? (b) And if instead the model becomes 10 times faster? (c) What is the
+best possible speed-up obtainable by optimising only the decoding?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) $p = 0.6$, $s = 10$: $S = 1/(0.4 + 0.06) = 1/0.46 \approx 2.17$.
+(b) $p = 0.4$: $S = 1/(0.6 + 0.04) = 1/0.64 \approx 1.56$.
+(c) $1/(1-0.6) = 2.5$. Improving the larger fraction helps more, but even an
+infinitely fast decoder leaves the model's 40%.
+:::
+
+::: {#exr-cpp2-inverse}
+Invert Amdahl's law: you need an overall speed-up of $S = 2$ and the part you
+can optimise takes $p = 0.75$ of the time. What speed-up $s$ must that part
+reach? Is $S = 4$ achievable?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+From $1/S = (1-p) + p/s$: $p/s = 1/S - (1-p) = 0.5 - 0.25 = 0.25$, so
+$s = 0.75/0.25 = 3$. For $S = 4$: $1/4 - 0.25 = 0$, so $s$ would have to be
+infinite: $S = 4 = 1/(1-p)$ is exactly the ceiling of @thm-amdahl, which no
+finite $s$ reaches.
+:::
+
+::: {#exr-cpp2-jit}
+A function costs 50 µs per interpreted call and 2 µs per compiled call;
+compiling it costs 12 ms. (a) After how many calls does compiling pay off?
+(b) With THRESHOLD (@thm-ski-rental), what is the worst ratio between its cost
+and the optimum if the function is called exactly 251 times?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) $d = 48$ µs, $C = 12\,000$ µs: compiling pays when $k > C/d = 250$ calls.
+(b) $m = \lfloor 250 \rfloor = 250$; with $k = 251$, THRESHOLD interprets 250
+calls ($250 \cdot 50 = 12\,500$ µs), compiles (12 000 µs) and runs one compiled
+call (2 µs): 24 502 µs. The optimum is $\min(251\cdot 50,\ 12\,000 + 251\cdot 2)
+= \min(12\,550,\ 12\,502) = 12\,502$ µs. Ratio $\approx 1.96 \le 2$, as the
+theorem guarantees: this $k$ is close to the worst case.
+:::
+
+::: {#exr-cpp2-portable}
+Which of these lines are portable between 64-bit Linux and 64-bit Windows, and
+how would you fix the others? (a) `long bytes = file_size;` where the file can
+exceed 4 GiB; (b) `int count = v.size();` for a `std::vector v`;
+(c) `std::int64_t bytes = file_size;`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Not portable: `long` is 32 bits on Windows (LLP64), so sizes above
+$2^{31}-1$ bytes overflow. Use `std::int64_t` or `std::uintmax_t`. (b) Compiles
+everywhere, but `size()` returns `std::size_t` (64 bits on both platforms), so
+a vector with more than $2^{31}-1$ elements would not fit in `int`; use
+`std::size_t` (or `auto`). (c) Portable: the width is fixed by the type.
+:::
+
+::: {#exr-cpp2-measure}
+Rerun the Collatz benchmark of @sec-where-time-goes with `n_max` equal to
+1 000 000 in both languages, and also with PyPy if you can install it. Does the
+ratio stay the same? Explain with the cost model $1 + d/w$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The ratio between CPython and C++ stays roughly constant, because both times
+grow in proportion to the number of elementary operations $N$; the ratio
+$T_i/T_c \approx 1 + d/w$ does not depend on $N$. PyPy, a JIT, typically lands
+between the two: its compiled loops remove most of the dispatch overhead $d$
+once they are "hot" (@sec-jit), but keep some checks that C++ does not need.
+:::
+
+## Further reading {.unnumbered}
+
+- @aho2006, ch. 1 — compilers and interpreters, the phases of a compiler; the
+  standard textbook on the subject ("the Dragon Book").
+- @aycock2003 — a short history of just-in-time compilation, from the 1960s to
+  Java.
+- @amdahl1967 — the original three-page argument; @hennessy2017, §1.9 — the
+  formula and its use in computer architecture.
+- @karlin1988 — competitive analysis and the ski-rental argument.
+- @futamura1999 — the reprint of Futamura's 1971 paper on partial evaluation.
+- @bryant2016, ch. 5 — how to measure and optimise program performance on real
+  hardware.
+- @kerckhoffs1883 — the principle that a system's security must not rest on the
+  secrecy of its design.

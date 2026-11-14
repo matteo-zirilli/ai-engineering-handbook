@@ -1,0 +1,968 @@
+# From C to C++ {#sec-ch-c-vs-cpp}
+
+> *"Within C++, there is a much smaller and cleaner language struggling to get
+> out."* — Bjarne Stroustrup [@stroustrup1994].
+
+```{python}
+from cppbook import run, show, sh, write, compile_sources, run_exe, sanitizer_summary
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what C++ adds to C and the **zero-overhead principle** behind its
+  design, and recognise the few places where valid C is not valid C++;
+- pass arguments **by reference** and by `const` reference, and choose between
+  values, references and pointers;
+- organise names in **namespaces**;
+- define `struct`s, predict their **memory layout**, and **prove** how ordering
+  members minimises padding;
+- use **default arguments** and **function overloading**, and explain how the
+  compiler picks an overload and how **name mangling** makes it work;
+- **encapsulate** data behind member functions;
+- allocate with **`new`/`delete`**, explain what they do that `malloc`/`free`
+  do not, and replace them with **RAII** and `std::unique_ptr`;
+- use the standard containers `std::string`, `std::vector`, `std::map` and
+  `std::unordered_map`, know their costs — **proving** the logarithmic height
+  of the red–black trees behind `std::map` — and avoid **iterator
+  invalidation**;
+- write a first **function template**.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What C++ changes and adds with respect to C: references and passing arguments
+by reference, grouping names, structures, functions with default arguments or
+sharing a name, hiding data behind an interface, and creating and destroying
+objects on the heap.
+:::
+
+## Intuition: same engine, better controls
+
+C gives you the engine of the machine with almost no dashboard: raw memory,
+raw pointers, functions. C++, created by Bjarne Stroustrup at Bell Labs from
+1979 as "C with Classes" and renamed C++ in 1983 [@stroustrup1994;
+@stroustrup2007], keeps the same engine — the same types, the same compilation
+model, the same performance — and adds **controls**: references, namespaces,
+classes with constructors and destructors, overloading, templates, exceptions
+and a large standard library.
+
+The guiding rule is the **zero-overhead principle** [@stroustrup1994; @stroustrup2013, §1.2]:
+
+1. what you don't use, you don't pay for;
+2. what you do use, you couldn't hand-code any better.
+
+A `std::vector<int>` is the hand-written dynamic array of @sec-malloc, with
+the bookkeeping done for you and no extra cost; a class with no virtual
+functions is laid out exactly like a C `struct`. The abstractions exist in the
+source code and the type system; the machine code is what a careful C
+programmer would have written.
+
+## C and C++: compatible, but not identical {#sec-c-cpp-compat}
+
+Almost every C program is a C++ program, but not quite. A few differences
+matter in practice [@stroustrup2013, ch. 44]:
+
+| Construct | C | C++ |
+|---|---|---|
+| `int *p = malloc(n);` (`void *` to `int *`) | allowed | error: needs a cast (and in C++ you would use `new` or a container) |
+| `sizeof('a')` | `sizeof(int)` (a character literal is an `int`) | `1` (it is a `char`) |
+| `struct Point p;` vs `Point p;` | the tag `struct` is required (or a `typedef`) | `Point` is a type name |
+| `bool`, `true`, `false` | macros of `<stdbool.h>` (keywords only since C23) | keywords |
+| `f()` | unspecified parameters (before C23) | no parameters |
+| string literal type | `char[N]` | `const char[N]` |
+| `class`, `new`, `delete`, `template`, … | ordinary identifiers | keywords |
+
+: Selected differences between C and C++ {#tbl-c-vs-cpp}
+
+The `sizeof('a')` line is a nice example of the same source meaning different
+things:
+
+```{python}
+code = r"""
+#include <stdio.h>
+int main(void) { printf("sizeof('a') = %zu\n", sizeof('a')); return 0; }
+"""
+show(code, name="same.c")
+write("same.c", code)
+write("same.cpp", code)
+sh("gcc -std=c17 same.c -o same_c && ./same_c && g++ -std=c++20 same.cpp -o same_cpp && ./same_cpp")
+```
+
+## References {#sec-references}
+
+### What a reference is
+
+::: {#def-reference}
+## Reference
+A **reference** `T& r = x;` is an alternative name (an *alias*) for an existing
+object `x` of type `T`. It must be initialised when declared, it can never be
+made to refer to another object, and there is no null reference. Every use of
+`r` is a use of `x`.
+:::
+
+*In one line:* a reference is a pointer that the compiler dereferences for
+you, and that cannot be null or re-aimed.
+
+```{python}
+run(r"""
+#include <iostream>
+
+int main() {
+    int x = 10;
+    int& r = x;          // r is another name for x
+    r = 20;              // assigns to x
+    std::cout << "x = " << x << ", &x == &r: " << std::boolalpha << (&x == &r) << '\n';
+    int y = 99;
+    r = y;               // NOT re-binding: copies y's value into x
+    std::cout << "after r = y: x = " << x << '\n';
+}
+""", name="reference.cpp")
+```
+
+### Pass by reference {#sec-pass-by-reference}
+
+The C idiom "pass a pointer to let the function modify the argument"
+(@sec-c-functions) becomes simpler and safer with references: the call site
+looks like a normal call, and the function cannot receive a null pointer.
+
+```{python}
+run(r"""
+#include <cctype>
+#include <iostream>
+#include <string>
+#include <vector>
+
+void swap_ints(int& a, int& b) { int t = a; a = b; b = t; }      // modifies the caller's variables
+
+// Read-only access to a large object without copying it: const reference.
+double average(const std::vector<double>& v) {
+    double sum = 0;
+    for (double x : v) sum += x;
+    return v.empty() ? 0 : sum / v.size();
+}
+
+void normalise(std::string& name) {                             // in/out parameter
+    if (!name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+}
+
+int main() {
+    int a = 1, b = 2;
+    swap_ints(a, b);
+    std::cout << "a = " << a << ", b = " << b << '\n';
+    std::vector<double> temps{21.5, 23.0, 19.5};
+    std::cout << "average = " << average(temps) << '\n';
+    std::string n = "rossi";
+    normalise(n);
+    std::cout << n << '\n';
+}
+""", name="byref.cpp")
+```
+
+Passing **by value** copies the argument; for a `std::vector` of a million
+elements that is a million copies, every call. Passing by **`const`
+reference** copies nothing and still forbids modification. The cost difference
+is measurable:
+
+```{python}
+run(r"""
+#include <chrono>
+#include <iostream>
+#include <numeric>
+#include <vector>
+
+long long sum_by_value(std::vector<int> v)            { return std::accumulate(v.begin(), v.end(), 0LL); }
+long long sum_by_cref(const std::vector<int>& v)      { return std::accumulate(v.begin(), v.end(), 0LL); }
+
+template <typename F>
+double seconds(F f) {                                  // time a callable (templates: see the end of the chapter)
+    auto t0 = std::chrono::steady_clock::now();
+    f();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+int main() {
+    std::vector<int> data(1'000'000, 1);
+    long long s1 = 0, s2 = 0;
+    double t1 = seconds([&] { for (int i = 0; i < 200; ++i) s1 += sum_by_value(data); });
+    double t2 = seconds([&] { for (int i = 0; i < 200; ++i) s2 += sum_by_cref(data); });
+    std::cout << "by value: " << t1 << " s, by const&: " << t2 << " s (results equal: "
+              << std::boolalpha << (s1 == s2) << ")\n";
+}
+""", name="copycost.cpp")
+```
+
+Guidelines (@cppcoreguidelines, F.15–F.17):
+
+| Parameter role | Small, cheap to copy (`int`, `double`, pointers) | Large (`std::string`, containers, objects) |
+|---|---|---|
+| input only | by value: `f(int x)` | by `const` reference: `f(const std::string& s)` |
+| input and output | by reference: `f(int& x)` | by reference: `f(std::vector<int>& v)` |
+| "may be absent" | pointer (may be `nullptr`) or `std::optional` | pointer or `std::optional` |
+
+: How to pass parameters {#tbl-param-passing}
+
+::: {.callout-warning}
+## Never return a reference to a local variable
+`int& bad() { int x = 1; return x; }` returns an alias for an object whose
+lifetime ends at the `return` (@sec-call-stack): a **dangling reference**.
+Return by value; C++ compilers avoid the copy (return value optimisation).
+:::
+
+## Namespaces {#sec-namespaces}
+
+In C every global name lives in one shared space, so libraries prefix their
+names (`png_read`, `sqlite3_open`) to avoid clashes. C++ **namespaces** give
+names a family name:
+
+```{python}
+run(r"""
+#include <iostream>
+
+namespace crm {                         // our project's names
+    int version() { return 2; }
+    namespace io {                      // nested namespace: crm::io
+        void print(const char* s) { std::cout << "[crm] " << s << '\n'; }
+    }
+}
+
+namespace legacy {
+    int version() { return 1; }         // same name, different namespace: no clash
+}
+
+int main() {
+    std::cout << crm::version() << ' ' << legacy::version() << '\n';
+    crm::io::print("hello");
+    using crm::io::print;               // using-declaration: bring ONE name into scope
+    print("again");
+}
+""", name="namespaces.cpp")
+```
+
+The whole standard library lives in `std`. A `using namespace std;` directive
+imports *every* name of `std` — hundreds of them, including common words like
+`count`, `distance` or `size` — and may silently change which function a call
+refers to. It is tolerable in a small `.cpp` file, and **never acceptable in a
+header**, where it would leak into every file that includes it. The CRM puts
+its own code in `namespace crm`.
+
+## Structures {#sec-structs}
+
+### `struct` in C and in C++
+
+A **structure** groups named members of possibly different types into one
+object — the C ancestor of a record or a dataclass (@sec-dataclasses).
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+struct Date {                      // in C++, Date is now a type name
+    int year;
+    int month;
+    int day;
+};
+
+struct Appointment {
+    Date when;                     // a struct can contain structs
+    std::string agent;             // ... and C++ objects
+    int duration_min = 30;         // default member initialiser (C++11)
+};
+
+int main() {
+    Date d{2026, 11, 14};                                  // aggregate initialisation
+    Appointment a{{2026, 11, 20}, "M. Bianchi"};           // duration_min keeps its default
+    Appointment b{.when = {2026, 12, 1}, .agent = "L. Verdi", .duration_min = 45};  // designated (C++20)
+    std::cout << d.year << '-' << d.month << '-' << d.day << '\n'
+              << a.agent << " on " << a.when.day << '/' << a.when.month << " for " << a.duration_min << " min\n"
+              << b.agent << " for " << b.duration_min << " min\n";
+}
+""", name="structs.cpp")
+```
+
+In C the same declaration requires writing `struct Date d;` (or a `typedef`),
+cannot contain functions, and cannot have default member values. In C++ a
+`struct` is a **class** (@sec-ch-cpp-oop) whose members are public by default;
+it can have member functions, constructors and so on.
+
+### Memory layout and padding {#sec-padding}
+
+Members are stored **in the order of declaration**, but not necessarily next to
+each other: each type has an **alignment** requirement (`alignof(T)`), and an
+object of type `T` must start at an address that is a multiple of it — on
+x86-64, 8 for `double` and pointers, 4 for `int`, 1 for `char`. The compiler
+inserts **padding** bytes to satisfy it:
+
+```{python}
+run(r"""
+#include <cstddef>
+#include <iostream>
+
+struct Bad  { char c1; double d; char c2; int i; };     // members in a careless order
+struct Good { double d; int i; char c1; char c2; };     // decreasing alignment
+
+int main() {
+    std::cout << "alignof: char " << alignof(char) << ", int " << alignof(int)
+              << ", double " << alignof(double) << '\n';
+    std::cout << "Bad : size " << sizeof(Bad) << ", offsets c1 " << offsetof(Bad, c1) << ", d "
+              << offsetof(Bad, d) << ", c2 " << offsetof(Bad, c2) << ", i " << offsetof(Bad, i) << '\n';
+    std::cout << "Good: size " << sizeof(Good) << ", offsets d " << offsetof(Good, d) << ", i "
+              << offsetof(Good, i) << ", c1 " << offsetof(Good, c1) << ", c2 " << offsetof(Good, c2) << '\n';
+}
+""", name="padding.cpp")
+```
+
+The same four members take 24 bytes in one order and 16 in the other. The
+compiler may not reorder members (their order is observable), but we can:
+
+::: {#prp-padding}
+## Ordering members by decreasing alignment
+Suppose every alignment is a power of two and the size of each type is a
+multiple of its alignment (both true for C and C++ types). If the members of a
+structure are declared in order of **non-increasing alignment**, no padding is
+inserted **between** members; the only padding is at the end, to round the
+size up to a multiple of the largest alignment.
+:::
+
+*In one line:* after placing big-alignment members, the running offset is
+already a multiple of every smaller alignment that follows.
+
+::: {.deep kind="proof"}
+## Proof of @prp-padding
+Let the members have alignments $a_1 \ge a_2 \ge \dots \ge a_k$ (powers of two)
+and sizes $s_i$ with $a_i \mid s_i$. We show by induction that, without any
+padding, the offset $o_j = s_1 + \dots + s_{j-1}$ of member $j$ is a multiple
+of $a_j$. For $j = 1$, $o_1 = 0$. Assume it for all members before $j$. Each
+$s_i$ with $i < j$ is a multiple of $a_i$, and $a_i \ge a_j$ with both powers
+of two, so $a_j \mid a_i \mid s_i$. Hence $a_j$ divides every term of $o_j$,
+and so $o_j$ itself: member $j$ is correctly aligned with no padding before
+it. Finally, so that the elements of an *array* of structures are all aligned,
+the size of the structure must be a multiple of its alignment, which is the
+largest member alignment $a_1$: the compiler adds tail padding to round
+$\sum s_i$ up to a multiple of $a_1$, and nothing else. $\blacksquare$
+:::
+
+For `Good`: $8 + 4 + 1 + 1 = 14$, rounded up to a multiple of 8: 16. Layout
+matters when you store millions of objects (memory and cache use), when you
+write structures to binary files, or when you share them with other languages
+(@sec-ch-cpp-python).
+
+## Default arguments and overloading {#sec-overloading}
+
+### Default arguments
+
+A parameter can have a **default value**, used when the caller omits the
+argument. Defaults must be the **trailing** parameters and are written once,
+in the declaration:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+std::string format_amount(long long cents, const std::string& currency = "EUR", char sep = '.') {
+    return std::to_string(cents / 100) + sep + (cents % 100 < 10 ? "0" : "") +
+           std::to_string(cents % 100) + ' ' + currency;
+}
+
+int main() {
+    std::cout << format_amount(48000) << '\n'               // both defaults
+              << format_amount(48000, "USD") << '\n'        // default separator
+              << format_amount(21050, "EUR", ',') << '\n';
+}
+""", name="defaults.cpp")
+```
+
+### Function overloading
+
+C++ allows several functions with the **same name** and **different
+parameter types**; the compiler chooses one at each call from the types of the
+arguments. Christopher Strachey called this **ad hoc polymorphism**: one name,
+several unrelated implementations, selected by type [@strachey2000;
+@cardelli1985].
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+void describe(int x)                { std::cout << "int " << x << '\n'; }
+void describe(double x)             { std::cout << "double " << x << '\n'; }
+void describe(const std::string& s) { std::cout << "string \"" << s << "\"\n"; }
+void describe(int x, int y)         { std::cout << "two ints " << x << ", " << y << '\n'; }
+
+int main() {
+    describe(42);                     // exact match: int
+    describe(3.5);                    // exact match: double
+    describe(std::string("text"));    // exact match: const std::string&
+    describe('A');                    // char -> int is a promotion: describe(int)
+    describe(2.5f);                   // float -> double is a promotion: describe(double)
+    describe(1, 2);                   // by number of arguments
+}
+""", name="overload.cpp")
+```
+
+**Overload resolution** ranks, for each argument, how good the conversion to
+the parameter type is: an **exact match** beats a **promotion** (`char` →
+`int`, `float` → `double`), which beats a **standard conversion** (`int` →
+`double`, `double` → `int`), which beats a user-defined conversion. The chosen
+function must be at least as good as every other one for all arguments and
+strictly better for at least one; otherwise the call is **ambiguous** and does
+not compile [@stroustrup2013, §12.3]:
+
+```{python}
+run(r"""
+void f(int, double);
+void f(double, int);
+int main() { f(1, 2); }      // (int,double) is better for arg 1, (double,int) for arg 2: ambiguous
+""", name="ambiguous.cpp", expect_error=True)
+```
+
+How can two functions called `describe` coexist in one object file, where the
+linker identifies functions by name? By **name mangling**: the compiler encodes
+the parameter types in the symbol (@sec-toolchain). `nm` shows the raw symbols,
+and `nm -C` ("demangle") translates them back:
+
+```{python}
+sh("g++ -std=c++20 -c overload.cpp -o overload.o && "
+   "nm overload.o | grep describe | awk '{print $3}' > raw.txt && "
+   "c++filt < raw.txt | paste raw.txt -", show_cmd=False)
+```
+
+`_Z8describei` reads: `_Z` (a mangled name), `8describe` (8 characters of
+name), `i` (one `int` parameter); `d` is `double`, `ii` two ints. The scheme is
+the Itanium C++ ABI, shared by GCC and Clang on all non-Windows platforms
+[@itaniumabi]; MSVC uses a different one, which is why C++ object files from
+different compilers usually cannot be linked together. To make a C++ function
+callable from C — or from Python through `ctypes` (@sec-ch-cpp-python) —
+declare it `extern "C"`: it is then compiled with its plain, unmangled C name
+(and cannot be overloaded).
+
+## Encapsulation {#sec-encapsulation-cpp}
+
+A `struct` with public members lets any code put it in an invalid state — a
+`Date` with month 13, a customer with an empty name. **Encapsulation** makes
+the data **private** and offers **public member functions** that keep the
+object valid: the **invariant** idea of @sec-encapsulation, now enforced by the
+compiler.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <stdexcept>
+#include <string>
+
+class Premium {                                   // an amount of money in cents, never negative
+public:
+    explicit Premium(long long cents) { set(cents); }
+    long long cents() const { return cents_; }    // const member function: does not modify the object
+    void set(long long cents) {
+        if (cents < 0) throw std::invalid_argument("a premium cannot be negative");
+        cents_ = cents;                           // the only place where cents_ changes
+    }
+    void increase_percent(int pct) { set(cents_ + cents_ * pct / 100); }
+private:
+    long long cents_ = 0;                         // invariant: cents_ >= 0
+};
+
+int main() {
+    Premium p(48000);
+    p.increase_percent(5);
+    std::cout << p.cents() << " cents\n";
+    try {
+        p.set(-1);
+    } catch (const std::invalid_argument& e) {
+        std::cout << "rejected: " << e.what() << '\n';
+    }
+    // p.cents_ = -1;   // would not compile: 'cents_' is private
+}
+""", name="encapsulation.cpp")
+```
+
+The keywords `public` and `private` (and `protected`, @sec-ch-cpp-oop) are
+**checked at compile time** — unlike Python's leading-underscore convention —
+and cost nothing at run time. The only difference between `struct` and
+`class` in C++ is the default access: public for `struct`, private for
+`class`. By convention, `struct` is used for plain data with no invariant,
+`class` for types that protect one. Errors that make an operation impossible
+are reported with **exceptions** (`throw`, `try`, `catch`), which work like
+Python's (@sec-ch-exceptions).
+
+## Dynamic memory: `new`, `delete` and RAII {#sec-new-delete}
+
+### `new` and `delete`
+
+C++ replaces `malloc`/`free` (@sec-malloc) with two operators that know about
+types and objects:
+
+- `new T(args)` allocates memory for a `T` **and calls its constructor**;
+  `delete p` **calls the destructor** and frees the memory;
+- `new T[n]` creates an array of `n` objects; it must be released with
+  `delete[] p`;
+- on failure `new` throws `std::bad_alloc` instead of returning `NULL`.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+struct Tracer {
+    std::string name;
+    explicit Tracer(std::string n) : name(std::move(n)) { std::cout << "construct " << name << '\n'; }
+    ~Tracer() { std::cout << "destroy " << name << '\n'; }      // destructor: runs on delete
+};
+
+int main() {
+    Tracer* one = new Tracer("single");        // allocate + construct
+    Tracer* many = new Tracer[2]{Tracer("a"), Tracer("b")};
+    delete one;                                // destruct + free
+    delete[] many;                             // arrays: delete[]
+    std::cout << "done\n";
+}
+""", name="newdelete.cpp")
+```
+
+Note that the elements of an array are destroyed in the **reverse** order of
+their construction (`b` before `a`): objects are always torn down in the
+opposite order to the one in which they were built, so that an object can rely
+on everything created before it. Manual `new`/`delete` has all the dangers of `malloc`/`free` — leaks, double
+deletion, use after deletion — plus one more: mixing `new[]` with `delete`
+(or `new` with `delete[]`) is undefined behaviour. AddressSanitizer catches
+these mistakes:
+
+```{python}
+run(r"""
+int main() {
+    int* numbers = new int[100];                  // never deleted: a leak
+    numbers[0] = 1;
+    return numbers[0] - 1;
+}
+""", name="leak.cpp", sanitize="address", flags=("-O0",), filter_lines=sanitizer_summary)
+run(r"""
+#include <iostream>
+
+int main() {
+    int* p = new int(7);
+    delete p;
+    std::cout << *p << '\n';                      // use after delete
+}
+""", name="uaf.cpp", sanitize="address", flags=("-O0",), filter_lines=sanitizer_summary)
+```
+
+The leak is reported when the program ends, with the line of the allocation;
+the use after `delete` stops the program at the faulty read and shows where
+the memory was freed and where it had been allocated.
+
+### RAII: let destructors do the work {#sec-raii}
+
+The C++ answer is not "be careful", but a design principle that Stroustrup
+named **RAII**, *Resource Acquisition Is Initialization* [@stroustrup1994;
+@stroustrup2013, §5.2]: tie every resource (memory, an open file, a lock, a
+network connection) to an object whose **constructor acquires** it and whose
+**destructor releases** it. Since C++ guarantees that the destructor of a local
+object runs when the object goes out of scope — at the end of the block, at a
+`return`, or when an exception passes through — the resource can never be
+forgotten. `std::ofstream` closing its file (@sec-c-files) is RAII; so are the
+standard containers and the **smart pointers**:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+
+struct Tracer {
+    std::string name;
+    explicit Tracer(std::string n) : name(std::move(n)) { std::cout << "construct " << name << '\n'; }
+    ~Tracer() { std::cout << "destroy " << name << '\n'; }
+};
+
+void work(bool fail) {
+    auto t = std::make_unique<Tracer>("in work");   // unique owner of a heap object
+    if (fail) throw std::runtime_error("something went wrong");
+    std::cout << "work finished normally\n";
+}                                                     // t destroyed here -> the Tracer is deleted
+
+int main() {
+    work(false);
+    try { work(true); } catch (const std::exception& e) { std::cout << "caught: " << e.what() << '\n'; }
+    std::unique_ptr<Tracer> a = std::make_unique<Tracer>("moved");
+    std::unique_ptr<Tracer> b = std::move(a);         // ownership transferred; a is now empty
+    std::cout << "a is " << (a ? "full" : "empty") << ", b owns " << b->name << '\n';
+}
+""", name="raii.cpp")
+```
+
+Even when `work` exits through an exception, the `Tracer` is destroyed. A
+`std::unique_ptr<T>` is exactly as large and fast as a raw pointer (zero
+overhead) but cannot be copied, only **moved**: there is always exactly one
+owner. (`std::shared_ptr` allows shared ownership with a reference count, like
+Python objects, at a small cost.) The modern rule is: **no naked `new` and
+`delete` in application code** [@cppcoreguidelines, R.11] — use containers and
+`std::make_unique`.
+
+## The standard library replaces C's containers {#sec-stl}
+
+The C++ standard library — whose containers and algorithms descend from
+Alexander Stepanov's **Standard Template Library** [@stepanov1995] — provides
+the data structures of Part I (@sec-ch-collections) as efficient, type-safe
+templates.
+
+### `std::string`
+
+`std::string` owns its characters, knows its length ($O(1)$ `size()`), grows
+like a dynamic array, and compares with `==` and `<` by content: none of the
+traps of @sec-c-strings. Short strings (up to 15 characters with GCC's
+library) are stored inside the object itself, without any heap allocation —
+the *small-string optimisation*.
+
+### `std::vector`
+
+`std::vector<T>` is the dynamic array of @sec-dynamic-arrays and @sec-malloc.
+GCC's implementation doubles the capacity when it is full:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> v;
+    std::size_t cap = v.capacity();
+    std::cout << "capacities:";
+    for (int i = 0; i < 1000; ++i) {
+        v.push_back(i);                                  // amortised O(1)
+        if (v.capacity() != cap) { cap = v.capacity(); std::cout << ' ' << cap; }
+    }
+    std::cout << "\nsize " << v.size() << ", v[999] = " << v[999] << ", v.at(5) = " << v.at(5) << '\n';
+    try { v.at(1000); }                                  // at() checks the bounds; [] does not
+    catch (const std::out_of_range& e) { std::cout << "out_of_range: " << e.what() << '\n'; }
+}
+""", name="vector.cpp")
+```
+
+By @thm-amortized-append with $g = 2$, $N$ insertions cost at most $2N$ element
+moves. `v[i]` is unchecked like a C array; `v.at(i)` checks and throws.
+
+### Iterator invalidation {#sec-invalidation}
+
+Growth has a consequence that Python hides from you: when a vector
+reallocates, its elements **move** to a new block, and every pointer,
+reference or iterator to the old elements **dangles**:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> v{1, 2, 3};
+    int& first = v[0];               // a reference into the vector's storage
+    v.push_back(4);                  // capacity 3 -> 6: the elements move
+    std::cout << first << '\n';      // reads the OLD, freed block
+}
+""", name="invalid.cpp", sanitize="address", flags=("-O0",), filter_lines=sanitizer_summary)
+```
+
+The rule: do not keep references, pointers or iterators into a container
+across operations that may reallocate or erase (`push_back`, `insert`,
+`erase`, `resize`); keep **indices** or, better, stable **identifiers**. The
+CRM refers to customers by numeric id, never by pointer, for this reason.
+
+### `std::map` and `std::unordered_map`
+
+`std::map<K, V>` keeps its keys **sorted**: iterating visits them in order,
+and search, insertion and deletion cost $O(\log n)$. It is implemented as a
+**red–black tree**, a balanced binary search tree invented by Bayer
+[@bayer1972] and given its red–black formulation by Guibas and Sedgewick
+[@guibas1978]. `std::unordered_map<K, V>` is a **hash table** (@sec-hash-tables):
+$O(1)$ expected per operation, no order.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <map>
+#include <string>
+#include <unordered_map>
+
+int main() {
+    std::map<int, std::string> by_id{{42, "Rossi"}, {7, "Bianchi"}, {19, "Verdi"}};
+    by_id[3] = "Neri";                                  // insert (or overwrite)
+    by_id.erase(19);
+    for (const auto& [id, name] : by_id)                // structured binding; sorted by key
+        std::cout << id << " -> " << name << '\n';
+    if (auto it = by_id.find(7); it != by_id.end())     // find returns an iterator (end() = not found)
+        std::cout << "found 7: " << it->second << '\n';
+    std::cout << "contains 19? " << std::boolalpha << by_id.contains(19) << '\n';   // C++20
+
+    std::unordered_map<std::string, int> word_count;
+    for (const char* w : {"car", "home", "car", "life", "car"}) ++word_count[w];
+    std::cout << "car appears " << word_count["car"] << " times\n";
+}
+""", name="maps.cpp")
+```
+
+Why is a red–black tree always shallow?
+
+::: {#def-red-black}
+## Red–black tree
+A binary search tree whose nodes are coloured red or black so that: (1) the
+root and the empty leaves (`nil`) are black; (2) a red node has no red child;
+(3) every path from a node down to a `nil` leaf contains the same number of
+black nodes — the node's **black-height** $\mathrm{bh}$.
+:::
+
+::: {#thm-red-black-height}
+## Height of a red–black tree
+A red–black tree with $n$ internal nodes has height at most $2\log_2(n+1)$.
+Hence search, insertion and deletion in `std::map` take $O(\log n)$ time.
+:::
+
+*In one line:* rule (3) makes the tree perfectly balanced in black nodes, and
+rule (2) allows at most as many red nodes as black ones on any path.
+
+::: {.deep kind="proof"}
+## Proof of @thm-red-black-height
+*Claim:* the subtree rooted at any node $x$ contains at least
+$2^{\mathrm{bh}(x)} - 1$ internal nodes. By induction on the height of $x$. If
+the height is 0, $x$ is a `nil` leaf, $\mathrm{bh}(x) = 0$ and
+$2^0 - 1 = 0$. Otherwise $x$ has two children, each with black-height at least
+$\mathrm{bh}(x) - 1$ (exactly $\mathrm{bh}(x)$ if the child is red,
+$\mathrm{bh}(x) - 1$ if it is black). By induction each child's subtree has at
+least $2^{\mathrm{bh}(x)-1} - 1$ internal nodes, so $x$'s has at least
+$2(2^{\mathrm{bh}(x)-1} - 1) + 1 = 2^{\mathrm{bh}(x)} - 1$.
+
+*Height.* Let $h$ be the height of the tree. By rule (2), on a root-to-leaf
+path of length $h$ no two red nodes are consecutive, and the root is black, so
+at least half of the nodes below the root are black: $\mathrm{bh}(\text{root})
+\ge h/2$. By the claim, $n \ge 2^{h/2} - 1$, i.e. $h \le 2\log_2(n+1)$.
+
+Search follows one root-to-leaf path: $O(h) = O(\log n)$. Insertion and
+deletion add $O(\log n)$ recolourings and at most a constant number of
+rotations to restore the rules [@cormen2022, ch. 13]. $\blacksquare$
+:::
+
+For a million keys, $2\log_2(10^6 + 1) \approx 40$: a `std::map` lookup visits
+at most 40 nodes, against an expected constant (but unordered) for
+`std::unordered_map`.
+
+| Container | Underlying structure | Access / search | Insert / erase | Ordered | Python analogue |
+|---|---|---|---|---|---|
+| `std::array<T, N>` | fixed C array | $O(1)$ by index | — | by position | tuple |
+| `std::vector<T>` | dynamic array | $O(1)$ by index, $O(n)$ search | $O(1)$ amortised at the end, $O(n)$ elsewhere | by position | `list` |
+| `std::map<K, V>` | red–black tree | $O(\log n)$ | $O(\log n)$ | by key | `dict` + `sorted` |
+| `std::unordered_map<K, V>` | hash table | $O(1)$ expected | $O(1)$ expected | no | `dict` |
+| `std::set<K>`, `std::unordered_set<K>` | as above, keys only | as above | as above | / no | `set` |
+
+: Standard containers and their costs ($n$ = number of elements) {#tbl-std-containers}
+
+## Templates: code for every type {#sec-templates}
+
+`std::vector<int>` and `std::vector<std::string>` are produced from **one**
+definition, a **class template** parameterised by the element type. You can
+write **function templates** too:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+#include <vector>
+
+template <typename T>                         // T is a type parameter
+const T& largest(const std::vector<T>& v) {   // requires: v not empty, T has operator<
+    const T* best = &v[0];
+    for (const T& x : v)
+        if (*best < x) best = &x;
+    return *best;
+}
+
+int main() {
+    std::cout << largest(std::vector<int>{3, 9, 4}) << '\n';                        // T = int
+    std::cout << largest(std::vector<std::string>{"pear", "apple", "plum"}) << '\n'; // T = std::string
+}
+""", name="template.cpp")
+```
+
+The compiler generates a separate, fully typed version of `largest` for each
+`T` used — this is **parametric polymorphism** in Strachey's terms
+[@strachey2000], resolved at compile time with no run-time cost. (Note the
+`const T&` parameter of the loop: no copies of the strings.) Templates are a
+large subject [@stroustrup2013, ch. 23–29]; in this book we mostly *use* them,
+through the standard library.
+
+## Small modern conveniences {#sec-modern-cpp}
+
+A few features that make everyday C++ shorter and safer, all used in the
+project:
+
+| Feature | Example | Instead of |
+|---|---|---|
+| `auto` (C++11) | `auto it = m.find(k);` | spelling out `std::map<int, Customer>::iterator` |
+| range-based `for` | `for (const auto& c : customers)` | index or iterator loops |
+| `nullptr` | `Customer* p = nullptr;` | `NULL` (an integer in C++) |
+| `enum class` | `enum class Product { Car, Home, Life };` | plain `enum`, whose names leak into the scope and convert to `int` |
+| `std::optional<T>` | `std::optional<Customer> find(...)` | "special" return values (`-1`, `NULL`) |
+| structured bindings | `for (const auto& [id, c] : by_id)` | `pair.first`, `pair.second` |
+| `if` with initialiser (C++17) | `if (auto it = m.find(k); it != m.end())` | a variable that outlives its use |
+| `constexpr` | `constexpr int max_len = 100;` | `#define MAX_LEN 100` |
+
+: Modern C++ conveniences {#tbl-modern-cpp}
+
+::: {.project-link}
+**In the project.** The CRM (@sec-ch-project-crm) is built from this chapter's
+tools. All its code lives in `namespace crm` (@sec-namespaces). Customers are
+stored in a **`std::map<std::uint32_t, Customer>`** keyed by a unique id
+(R10, @sec-crm-brief): ids give stable references that survive insertions and
+deletions (@sec-invalidation), the map keeps customers in a predictable order,
+and lookup by id costs $O(\log n)$ (@thm-red-black-height). Classes keep their
+data private behind member functions that enforce invariants — a customer
+always has a non-empty name, a premium is never negative (R9,
+@sec-encapsulation-cpp). Large objects are passed by `const` reference
+(@tbl-param-passing). Interactions are owned through
+`std::unique_ptr` (@sec-raii), so the program contains **no** `delete`, and
+AddressSanitizer reports no leaks.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Passing large objects by value** when a `const&` would do: hidden copies.
+- **Dangling references**: returning a reference to a local; keeping a
+  reference into a vector across `push_back` (@sec-invalidation).
+- **`using namespace std;` in a header.**
+- **Assuming `struct` layout**: padding depends on member order and platform;
+  never write structs to files byte by byte for exchange with other programs.
+- **Ambiguous overloads**, and surprising choices when an argument needs a
+  conversion (`describe(5L)` with `int` and `double` overloads is ambiguous).
+- **Default arguments repeated** in the declaration *and* the definition: an
+  error.
+- **`new` without `delete`** (leak), `delete` twice, `new[]` with `delete`: use
+  containers and `std::unique_ptr`; **never** call `free` on memory from `new`.
+- **`v[i]` out of bounds**: unchecked, like C; use `at()` while debugging or
+  enable the library's debug mode.
+- **`map[key]` to test membership**: it *inserts* a default value when the key
+  is missing. Use `find` or `contains`.
+:::
+
+## Summary
+
+- C++ keeps C's machine model and adds abstractions under the
+  **zero-overhead principle**; a few constructs differ between the two
+  languages (@tbl-c-vs-cpp).
+- A **reference** is a non-null, non-reseatable alias; pass large inputs by
+  `const&`, in/out parameters by `&`.
+- **Namespaces** prevent name clashes; never `using namespace` in headers.
+- A `struct` lays out members in order with **padding** for alignment; sorting
+  members by decreasing alignment leaves only tail padding (@prp-padding).
+- **Default arguments** and **overloading** (ad hoc polymorphism) are resolved
+  at compile time; **name mangling** encodes parameter types in symbols;
+  `extern "C"` disables it.
+- **Encapsulation**: private data, public member functions that keep the
+  invariant, checked at compile time.
+- `new`/`delete` construct and destroy objects; **RAII** ties resources to
+  object lifetimes; `std::unique_ptr` owns heap objects with zero overhead.
+- Containers: `std::string`, `std::vector` (amortised $O(1)$ append, beware
+  **invalidation**), `std::map` (red–black tree, height $\le 2\log_2(n+1)$),
+  `std::unordered_map` (hash table). **Templates** give parametric polymorphism.
+
+## Exercises
+
+::: {#exr-cpp6-layout}
+Compute by hand `sizeof` and the member offsets of
+`struct R { char a; int b; char c; double d; short e; };` on x86-64 (alignments:
+`char` 1, `short` 2, `int` 4, `double` 8). Then reorder the members to minimise
+the size and verify with `offsetof`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`a` at 0; `b` needs a multiple of 4: offset 4 (3 bytes of padding); `c` at 8;
+`d` needs a multiple of 8: offset 16 (7 bytes of padding); `e` at 24; the
+members end at 26, rounded up to a multiple of 8: `sizeof(R) = 32`. Ordered by
+decreasing alignment, `double d; int b; short e; char a; char c;`: offsets 0,
+8, 12, 14, 15; the members end at 16, which is already a multiple of 8:
+`sizeof = 16` (@prp-padding).
+:::
+
+::: {#exr-cpp6-overload}
+Given `void g(long); void g(double);`, which calls compile and which function
+do they call: `g(1L)`, `g(1.0f)`, `g(1)`, `g('x')`?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`g(1L)`: exact match `g(long)`. `g(1.0f)`: `float` → `double` is a promotion,
+better than the conversion `float` → `long`: `g(double)`. `g(1)`: `int` →
+`long` and `int` → `double` are both standard conversions, neither better:
+**ambiguous**. `g('x')`: `char` → `long` and `char` → `double` are both
+conversions (the promotion of `char` is to `int`, not `long`): **ambiguous**.
+:::
+
+::: {#exr-cpp6-raii}
+Write a class `File` that opens a C `FILE*` in its constructor (throwing
+`std::runtime_error` if `fopen` fails), closes it in its destructor, and offers
+a member function `write_line(const std::string&)`. Why should copying a
+`File` be forbidden, and how?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```cpp
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+class File {
+public:
+    File(const char* path, const char* mode) : f_(std::fopen(path, mode)) {
+        if (!f_) throw std::runtime_error(std::string("cannot open ") + path);
+    }
+    ~File() { std::fclose(f_); }
+    File(const File&) = delete;              // no copies
+    File& operator=(const File&) = delete;
+    void write_line(const std::string& s) { std::fputs(s.c_str(), f_); std::fputc('\n', f_); }
+private:
+    std::FILE* f_;
+};
+```
+A copy would hold the same `FILE*`; both destructors would call `fclose` on it
+— a double close, undefined behaviour. Deleting the copy constructor and copy
+assignment (the "rule of three", @sec-ch-cpp-oop) makes such code fail to
+compile. (A move constructor could be added to allow transferring ownership.)
+:::
+
+::: {#exr-cpp6-map-vs-vector}
+The CRM must (a) list customers sorted by surname, (b) find a customer by id,
+(c) delete a customer by id. Compare the costs of storing them in a
+`std::vector<Customer>` and in a `std::map<id, Customer>`, for $n$ customers.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Vector: (a) copy and sort $O(n\log n)$ (or keep it sorted by surname); (b)
+$O(n)$ scan, or $O(\log n)$ binary search if kept sorted *by id*; (c) $O(n)$
+(find, then shift the following elements). Map by id: (a) $O(n \log n)$ to
+sort a list of pointers or ids by surname; (b) $O(\log n)$; (c) $O(\log n)$,
+and erasing does not invalidate references to *other* elements. With a few
+thousand customers all options are instantaneous; the map wins on simplicity
+of (b) and (c) and on stable ids.
+:::
+
+## Further reading {.unnumbered}
+
+- @stroustrup2022 — *A Tour of C++*: the whole language in about 250 pages;
+  ch. 1–2 (basics, user-defined types), ch. 5 (resource management), ch. 12
+  (containers).
+- @stroustrup2013 — the reference by the language's designer: ch. 7
+  (pointers, references), ch. 12 (functions, overloading), ch. 14
+  (namespaces), ch. 31 (containers).
+- @stroustrup1994 — why C++ is the way it is; the origins of RAII and of the
+  zero-overhead principle.
+- @cppcoreguidelines — sections F (functions, parameter passing) and R
+  (resource management).
+- @cormen2022, ch. 13 — red–black trees, with insertion and deletion.
+- @cardelli1985 — the classic taxonomy of polymorphism (ad hoc, parametric,
+  inclusion).

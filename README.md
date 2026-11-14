@@ -33,7 +33,8 @@ repository [`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-p
 | Part | Course | Project | Status |
 |---|---|---|---|
 | I | Programming with Python | Terminal phone-book prototype | ✅ |
-| II–XII | remaining courses of the master | — | 🛠 in preparation |
+| II | High-performance programming with C and C++ | Command-line CRM for an insurance company | ✅ |
+| III–XII | remaining courses of the master | — | 🛠 in preparation |
 
 ## Repository layout
 
@@ -42,6 +43,9 @@ _quarto.yml            book configuration (chapters, theme, crossrefs)
 index.qmd              preface
 how-to-study.qmd       study method, conventions, notation
 python/                Part I — Programming with Python (one .qmd per module + project)
+cpp/                   Part II — C and C++ (one .qmd per module + project)
+cpp/cppbook.py         helper that compiles and runs the C/C++ examples (used by the cells)
+cpp/_crm/              reference implementation of the Part II project (CMake project)
 appendices/            finding and reading the sources
 references.qmd         the bibliography page
 references.bib         all sources (BibTeX), with DOI/arXiv/ISBN/URL and access notes
@@ -55,7 +59,9 @@ _freeze/               stored results of the executed Python cells (do not edit 
 
 Requirements: [Quarto](https://quarto.org/docs/get-started/) ≥ 1.6 and, to
 re-execute the code, Python 3.13 with `jupyter`, `numpy`, `pandas`,
-`matplotlib`, `pillow`, `packaging`.
+`matplotlib`, `pillow`, `packaging`. Re-executing Part II also needs GCC
+(`g++`/`gcc` with C++20 support), GDB, Make, CMake, Ninja, `strace` and the
+binutils (`nm`, `objdump`, `readelf`), on Linux.
 
 ```bash
 quarto preview            # live preview in the browser
@@ -63,7 +69,10 @@ quarto render             # full build into _book/
 ```
 
 Code cells are executed once and their results stored in `_freeze/`
-(`execute: freeze: auto`): the GitHub Action only needs Quarto, not Python.
+(`execute: freeze: auto`): the GitHub Action only needs Quarto, not Python or
+a C++ compiler. In Part II each C/C++ example is a Python cell that calls
+`cpp/cppbook.py` to write, compile and run the program and print its source and
+output as Markdown (`output: asis`, set in `cpp/_metadata.yml`).
 After changing a chapter's code, render it locally and commit the updated
 `_freeze/` folder together with the `.qmd` file.
 

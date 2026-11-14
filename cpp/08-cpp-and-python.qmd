@@ -1,0 +1,917 @@
+# C++ and Python: processes, pipes and exit codes {#sec-ch-cpp-python}
+
+> *"Make each program do one thing well."* — M. D. McIlroy, E. N. Pinson and
+> B. A. Tague [@mcilroy1978].
+
+```{python}
+from cppbook import run, show, sh, write, compile_sources, run_exe
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what a **process** is, and how **file descriptors**, the **standard
+  streams** and **pipes** connect processes;
+- write C++ programs that behave well in a pipeline: data on standard output,
+  diagnostics on standard error, a meaningful **exit status**, and correct
+  behaviour at **end of input**;
+- run a C++ program from Python with `subprocess.run`, pass it input and
+  arguments, read its output, check its exit status, and impose a **timeout**;
+- drive a long-running C++ program interactively with `subprocess.Popen` and a
+  line-based **protocol**, knowing why **flushing** matters;
+- **prove** when two processes connected by pipes **deadlock**, and why
+  `communicate()` cannot;
+- **terminate** processes cleanly (end of input, signals, `terminate`/`kill`)
+  and interpret how a process ended, including `SIGPIPE`;
+- choose between a helper **process** and a **shared library** called through
+  `ctypes`, using a cost model of start-up, round-trip latency and batching.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Communication between C/C++ programs and Python scripts: exchanging data
+through standard streams and pipes, and managing the termination of
+processes.
+:::
+
+## Intuition: two workshops and a conveyor belt
+
+@sec-ch-compiled ended with the hybrid model of AI software: Python for the
+logic and the glue, compiled code for the heavy work. The simplest way to
+combine them needs no special library at all: run the C++ program as a
+**separate process** and connect the two programs with **conveyor belts of
+bytes** — the standard streams of @sec-streams. Python puts the input on the
+C++ program's standard input, the C++ program puts its results on standard
+output, and when it finishes it leaves a short note at the door: its **exit
+status**.
+
+This is the Unix philosophy in its original form [@mcilroy1978]: small
+programs that each do one thing, communicating through text streams, combined
+by a third program — the shell, or a Python script. It costs a little speed
+(bytes must be written, copied by the operating system and parsed again) and
+gains a lot of robustness: the two programs share no memory, can be written,
+tested and crashed independently, and can be swapped for others that speak the
+same format.
+
+## Processes and file descriptors {#sec-processes}
+
+A **process** is a running program: its own memory (code, stack, heap,
+@sec-call-stack), the processor state, and a table of open **file
+descriptors** — small integers that refer to files, terminals, pipes or
+network connections opened by the operating system on its behalf
+[@kerrisk2010, ch. 4 and 6]. Descriptors 0, 1 and 2 are the standard input,
+output and error (@tbl-std-streams). A process is created by another process
+(its **parent**), inherits copies of the parent's descriptors, and ends by
+returning an **exit status** to its parent.
+
+A **pipe** is a one-way channel managed by the kernel: a buffer with a **write
+end** and a **read end**, each a file descriptor. Pipes were added to Unix in
+1973 at Doug McIlroy's urging [@ritchie1984]; the shell's `|` creates one and
+connects the standard output of the left program to the standard input of the
+right one. Their behaviour, fixed by POSIX [@posix2024], is what every
+inter-process protocol must respect:
+
+| Situation | What happens |
+|---|---|
+| reading from an **empty** pipe whose write end is still open | the reader **blocks** (waits) |
+| reading from an empty pipe whose write ends are **all closed** | the read returns 0 bytes: **end of file** |
+| writing to a **full** pipe | the writer **blocks** until the reader makes room |
+| writing to a pipe whose read ends are all **closed** | the writer receives the signal **`SIGPIPE`** (default: termination) |
+| a write of at most `PIPE_BUF` bytes | **atomic**: never interleaved with other writers' data |
+
+: Pipe semantics (POSIX) {#tbl-pipes}
+
+The capacity of a pipe is finite — on Linux 64 KiB by default — and `PIPE_BUF`
+is at least 512 bytes (4 096 on Linux):
+
+```{python}
+#| echo: true
+#| output: true
+import os, fcntl
+r, w = os.pipe()                                   # a pipe, inside this Python process
+print("capacity:", fcntl.fcntl(w, fcntl.F_GETPIPE_SZ), "bytes;",
+      "PIPE_BUF:", os.fpathconf(w, "PC_PIPE_BUF"), "bytes")
+os.close(r); os.close(w)
+```
+
+(`F_GETPIPE_SZ` is Linux-specific. Windows has pipes with the same blocking
+behaviour, created and used by Python's `subprocess` in the same way; it has no
+`SIGPIPE`, and a write to a closed pipe fails with an error instead.)
+
+## A well-behaved C++ filter {#sec-filter}
+
+A program meant to be driven by another program should follow four
+conventions:
+
+1. read its input from **standard input** until **end of file**;
+2. write its results — and only its results — to **standard output**, in a
+   simple, documented format;
+3. write diagnostics to **standard error**;
+4. exit with status **0 on success** and a **non-zero** status on failure,
+   with distinct values for distinct failures.
+
+Here is such a program: it reads one number per line and prints their count,
+mean and maximum as `key=value` lines.
+
+```{python}
+run(r"""
+// stats.cpp — read numbers (one per line) from stdin, print statistics on stdout.
+// Exit status: 0 = ok, 1 = invalid input, 2 = no data.
+#include <charconv>
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string line;
+    long long count = 0, line_no = 0;
+    double sum = 0, max = 0;
+    while (std::getline(std::cin, line)) {               // until end of file
+        ++line_no;
+        if (line.empty()) continue;
+        double x;
+        auto [ptr, ec] = std::from_chars(line.data(), line.data() + line.size(), x);
+        if (ec != std::errc{} || ptr != line.data() + line.size()) {
+            std::cerr << "stats: line " << line_no << ": not a number: '" << line << "'\n";
+            return 1;                                    // invalid input
+        }
+        sum += x;
+        max = (count == 0 || x > max) ? x : max;
+        ++count;
+    }
+    if (count == 0) { std::cerr << "stats: no data\n"; return 2; }
+    std::cout << "count=" << count << "\nmean=" << sum / count << "\nmax=" << max << '\n';
+    return 0;
+}
+""", name="stats.cpp", stdin="3.5\n10\n-2\n")
+```
+
+It is already usable from the shell, where `|` connects it to other programs
+and `$?` shows its exit status (@sec-toolchain):
+
+```{python}
+sh("seq 1 1000 | ./stats; echo \"exit status: $?\"; printf 'abc\\n' | ./stats; echo \"exit status: $?\"")
+```
+
+The error message went to standard error and the status says what happened, so
+a caller can tell the cases apart without parsing messages written for
+humans.
+
+## Running a C++ program from Python {#sec-subprocess-run}
+
+### `subprocess.run`
+
+Python's `subprocess` module (introduced by PEP 324 [@pep324]) starts
+processes and connects their streams. For a "run to completion" exchange,
+`subprocess.run` does everything: it starts the program, writes `input` to its
+standard input and closes it (end of file), collects standard output and
+standard error, waits for the end and returns a `CompletedProcess`:
+
+```{python}
+#| echo: true
+#| output: true
+import subprocess
+from cppbook import path                      # where the book compiled stats.cpp
+
+def stats(numbers):
+    """Run the C++ program on a list of numbers; return a dict of results."""
+    data = "".join(f"{x}\n" for x in numbers)
+    result = subprocess.run([str(path("stats"))], input=data,
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode != 0:
+        raise RuntimeError(f"stats failed with status {result.returncode}: {result.stderr.strip()}")
+    return {k: float(v) for k, v in (line.split("=") for line in result.stdout.splitlines())}
+
+print(stats([2.5, 7, 1, 9.25]))
+for bad in (["4", "four"], []):
+    try:
+        stats(bad)
+    except RuntimeError as err:
+        print("error:", err)
+```
+
+The arguments that matter:
+
+| Argument | Meaning |
+|---|---|
+| `args` | the program and its arguments, **as a list** (no shell involved, so no quoting problems or injection) |
+| `input` | data written to the child's standard input, which is then closed |
+| `capture_output=True` | collect standard output and error (otherwise they go to the terminal) |
+| `text=True` | exchange `str` instead of `bytes`, decoding with an encoding (pass `encoding="utf-8"` to be explicit) |
+| `timeout` | seconds before the child is killed and `TimeoutExpired` is raised |
+| `check=True` | raise `CalledProcessError` on a non-zero exit status |
+| `cwd`, `env` | working directory and environment variables of the child |
+
+: The main arguments of `subprocess.run` {#tbl-subprocess-run}
+
+Two habits make this robust: pass arguments as a **list**, never as one string
+with `shell=True` (a file name containing a space or a `;` would otherwise be
+interpreted by the shell — a classic security hole), and **always** check the
+exit status.
+
+### Exit statuses and how a process ends {#sec-exit-status}
+
+A process ends in one of two ways [@kerrisk2010, ch. 25–26]:
+
+- **normally**, by returning from `main` or calling `exit(code)`: the parent
+  receives the code;
+- **killed by a signal** — a notification sent by the kernel or another
+  process: `SIGSEGV` for an invalid memory access, `SIGABRT` from `abort()` or
+  a failed `assert`, `SIGTERM` (a polite request to terminate), `SIGKILL`
+  (immediate, cannot be caught), `SIGPIPE` (@tbl-pipes).
+
+Python reports the first case as `returncode >= 0` and the second as a
+**negative** `returncode`, minus the signal number. Shells report a death by
+signal $n$ as status $128 + n$. And only the **low 8 bits** of an exit code
+reach the parent:
+
+::: {#prp-exit-status}
+## The parent sees the exit code modulo 256
+On POSIX systems, if a process calls `exit(c)` (or returns `c` from `main`)
+for an integer `c`, the status observed by its parent is $c \bmod 256$, in
+$\{0, \dots, 255\}$.
+:::
+
+*In one line:* the kernel stores the exit code in one byte of the wait status,
+so `exit(256)` looks like success and `exit(-1)` like 255.
+
+::: {.deep kind="proof"}
+## Proof of @prp-exit-status
+POSIX specifies that the value made available to the parent through `wait` is
+`status & 0377`, the low-order 8 bits of the argument of `exit`
+[@posix2024]. For a two's-complement `int` `c`, the low 8 bits are the binary
+representation of $c \bmod 2^8$ (@thm-twos-complement, property 2: the
+pattern's unsigned value is congruent to $c$ modulo $2^n$, and keeping the low
+8 bits reduces modulo $2^8$). $\blacksquare$
+:::
+
+```{python}
+show(r"""
+// ending.cpp — end in different ways depending on the first argument
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
+int main(int argc, char** argv) {
+    std::string how = argc > 1 ? argv[1] : "ok";
+    if (how == "ok")    return 0;
+    if (how == "error") return 3;
+    if (how == "256")   return 256;            // only the low 8 bits survive
+    if (how == "minus") return -1;
+    if (how == "abort") std::abort();           // SIGABRT
+    if (how == "segv")  { volatile int* p = nullptr; return *p; }   // invalid access: SIGSEGV
+    return 0;
+}
+""", name="ending.cpp")
+compile_sources(["ending.cpp"], "ending", flags=("-O0", "-Wall"))
+```
+
+```{python}
+#| echo: true
+#| output: true
+import signal
+for how in ["ok", "error", "256", "minus", "abort", "segv"]:
+    rc = subprocess.run([str(path("ending")), how]).returncode
+    meaning = f"killed by {signal.Signals(-rc).name}" if rc < 0 else f"exit code {rc}"
+    print(f"{how:>6}: returncode = {rc:4d}  ({meaning})")
+```
+
+Use small, documented exit codes (0 for success, 1 for generic failure, 2 for
+wrong usage is a common convention), and let crashes be crashes: a negative
+`returncode` in Python means the program did not finish its job.
+
+### Timeouts
+
+A program that waits for input that never comes, or loops forever, would hang
+its caller. `timeout=` bounds the wait; on expiry `subprocess.run` kills the
+child and raises `TimeoutExpired`:
+
+```{python}
+#| echo: true
+#| output: true
+try:
+    subprocess.run([str(path("stats"))], capture_output=True, text=True,
+                   stdin=subprocess.PIPE, timeout=0.5)   # stdin left open: stats waits forever
+except subprocess.TimeoutExpired as err:
+    print("TimeoutExpired after", err.timeout, "s: the child was killed")
+```
+
+Here `stdin=subprocess.PIPE` without `input` gives the child a pipe that
+Python never writes to nor closes: the child blocks in `getline`, exactly as
+@tbl-pipes predicts. (With `input=""` it would immediately see end of file and
+report "no data".)
+
+## Talking to a long-running program {#sec-popen}
+
+Starting a process costs time — about a millisecond on the machine that built
+this book, many times more on Windows. When Python needs many small answers,
+it is better to start the C++ program **once** and exchange **messages** with
+it. That requires a **protocol**: an agreement on the format of each request
+and reply. The simplest robust one is **one request per line, one reply per
+line**:
+
+```{python}
+run(r"""
+// calc.cpp — a tiny request/response server on stdin/stdout.
+// Request: "<op> <a> <b>" with op in {add, mul, div}; reply: "ok <result>" or "err <reason>".
+#include <iostream>
+#include <sstream>
+#include <string>
+
+int main() {
+    std::string line;
+    while (std::getline(std::cin, line)) {          // until the client closes the pipe
+        std::istringstream in(line);
+        std::string op;
+        double a, b;
+        if (!(in >> op >> a >> b))           std::cout << "err malformed request\n";
+        else if (op == "add")                std::cout << "ok " << a + b << '\n';
+        else if (op == "mul")                std::cout << "ok " << a * b << '\n';
+        else if (op == "div" && b != 0)      std::cout << "ok " << a / b << '\n';
+        else if (op == "div")                std::cout << "err division by zero\n";
+        else                                 std::cout << "err unknown op\n";
+        std::cout.flush();                          // ESSENTIAL: send the reply now
+    }
+    return 0;                                       // end of input: clean exit
+}
+""", name="calc.cpp", stdin="add 2 3\ndiv 1 0\nsqrt 9 0\n")
+```
+
+`subprocess.Popen` starts the process and returns immediately, giving Python
+the other ends of the pipes as file objects:
+
+```{python}
+#| echo: true
+#| output: true
+class Calculator:
+    """Python client for the calc.cpp server: one process, many requests."""
+    def __init__(self):
+        self.proc = subprocess.Popen([str(path("calc"))], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, text=True, bufsize=1)  # line-buffered
+    def ask(self, op, a, b):
+        self.proc.stdin.write(f"{op} {a} {b}\n")    # one request line ...
+        self.proc.stdin.flush()                     # ... sent now
+        reply = self.proc.stdout.readline().split(maxsplit=1)   # ... one reply line
+        if reply[0] != "ok":
+            raise ValueError(reply[1].strip())
+        return float(reply[1])
+    def close(self):
+        self.proc.stdin.close()                     # end of file for the server
+        return self.proc.wait(timeout=5)            # its exit status
+
+calc = Calculator()
+print(calc.ask("add", 2, 3), calc.ask("mul", 1.5, 4), calc.ask("div", 22, 7))
+try:
+    calc.ask("div", 1, 0)
+except ValueError as err:
+    print("server error:", err)
+print("server exit status:", calc.close())
+```
+
+Three details make or break such a protocol:
+
+- **Flushing on both sides.** Standard output connected to a pipe is **fully
+  buffered** (@sec-buffering): without a flush the reply can sit in the C++
+  buffer while Python's `readline` waits forever. (C++ *ties* `std::cin` to
+  `std::cout` — it flushes `std::cout` before every read from `std::cin` — so
+  a server that reads its next request right after answering survives a
+  missing flush by luck; programs that untie the streams for speed, do work
+  between answers, or use C's `stdio` do not.) Python's side needs `flush()`
+  (or `bufsize=1` in text mode, which flushes at each newline) for the same
+  reason.
+- **Framing.** The receiver must know where a message ends. Lines work as long
+  as messages cannot contain newlines; otherwise escape them (as in CSV,
+  @sec-csv-cpp), use a format such as JSON on one line, or send the **length**
+  of each message before it.
+- **Ending.** Closing the client's end of the pipe is the polite way to stop
+  the server: it reads end of file, leaves its loop and exits with status 0.
+
+What happens when the server forgets to flush is easy to show. The `select`
+call waits up to one second for data to become readable on the pipe:
+
+```{python}
+run(r"""
+// noflush.cpp — an echo server that never flushes, with the usual "fast I/O" settings
+#include <iostream>
+#include <string>
+int main() {
+    std::ios::sync_with_stdio(false);   // do not synchronise with C's stdio (faster)
+    std::cin.tie(nullptr);              // do not flush cout before each read from cin (faster)
+    std::string line;
+    while (std::getline(std::cin, line)) std::cout << "echo " << line << '\n';   // no flush
+}
+""", name="noflush.cpp", run_it=False)
+```
+
+```{python}
+#| echo: true
+#| output: true
+import select
+p = subprocess.Popen([str(path("noflush"))], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+p.stdin.write("hello\n"); p.stdin.flush()
+ready, _, _ = select.select([p.stdout], [], [], 1.0)
+print("reply available within 1 s?", bool(ready))      # False: it is stuck in the C++ buffer
+p.stdin.close()                                          # end of file -> the program exits ...
+print("after closing stdin:", p.stdout.read().strip())  # ... and its buffer is flushed at exit
+p.wait()
+```
+
+## Deadlocks {#sec-deadlock}
+
+Pipes have a finite capacity, and full or empty pipes **block**. Two processes
+that each wait for the other can therefore wait forever.
+
+::: {#prp-pipe-deadlock}
+## When two processes deadlock on pipes
+A parent sends data to a child through pipe $P_{\text{in}}$ (capacity $C$) and
+receives the child's output through pipe $P_{\text{out}}$ (capacity $C$). The
+parent writes all its $n$ bytes **before** reading anything; the child writes
+its output while it reads its input. If the child has produced more than $C$
+bytes of output that the parent has not read, at a moment when the parent still
+has more than $C$ bytes to write, then both processes block forever.
+:::
+
+*In one line:* each process waits for the other to empty a pipe, and neither
+will — a circular wait.
+
+::: {.deep kind="proof"}
+## Proof of @prp-pipe-deadlock
+Once more than $C$ unread bytes of output exist, $P_{\text{out}}$ is full, so
+the child's next write blocks (@tbl-pipes); a blocked child reads no more
+input. The parent is still in its writing phase and will not read
+$P_{\text{out}}$ before finishing; since it has more than $C$ bytes left and
+nobody reads $P_{\text{in}}$, after at most $C$ more bytes $P_{\text{in}}$ is
+full and the parent's write blocks too. Now each process waits for an event
+(room in a pipe) that only the other process can cause, and the other is
+blocked: no event ever occurs. This is a **circular wait**, one of the four
+conditions identified by Coffman, Elphick and Shoshani for deadlock
+[@coffman1971]; the other three (exclusive resources, no pre-emption, holding
+while waiting) hold for blocking pipes. $\blacksquare$
+:::
+
+The proposition explains a famous warning of the `subprocess` documentation:
+do not write to `proc.stdin` and then read `proc.stdout` with large data —
+use **`communicate()`**. It avoids the deadlock by never committing to one
+direction: it writes and reads **concurrently** (with `select` or threads), so
+neither pipe stays full while the other side waits. Watch both behaviours on
+1 MiB of data through the `cat` program, which copies its input to its output
+(a child that produces output while reading input):
+
+```{python}
+#| echo: true
+#| output: true
+import threading
+
+data = "x" * 1_000_000                       # far more than the 64 KiB capacity
+
+def naive():                                 # write everything, then read
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    p.stdin.write(data); p.stdin.close()     # blocks forever once both pipes are full
+    p.stdout.read()
+
+t = threading.Thread(target=naive, daemon=True)
+t.start(); t.join(timeout=2)
+print("naive version finished within 2 s?", not t.is_alive())
+
+p = subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+out, _ = p.communicate(data, timeout=10)     # writes and reads concurrently
+print("communicate: received", len(out), "characters, exit status", p.returncode)
+```
+
+The interactive `Calculator` above is safe for a different reason: it sends
+**one line** and reads **one reply** before sending the next, so at most one
+small message is in flight in each direction — far below the capacity of a
+pipe.
+
+## Terminating processes {#sec-terminating}
+
+The ways to end a child, from the most to the least polite:
+
+1. **close its standard input**: a filter or server reads end of file and
+   finishes its work (the `Calculator.close` method);
+2. **`proc.terminate()`**: sends `SIGTERM` on POSIX systems (and calls
+   `TerminateProcess` on Windows); a program may catch it to clean up;
+3. **`proc.kill()`**: sends `SIGKILL`, which cannot be caught — the process
+   disappears at once, and unsaved data are lost.
+
+After any of them, call `wait()` to collect the exit status; otherwise the
+finished child remains in the process table as a "zombie" until the parent
+exits. A C++ program can catch `SIGTERM` to finish properly — for instance, to
+save its data. Inside a signal handler almost nothing is safe to do, so the
+handler only sets a flag of type `volatile std::sig_atomic_t`, and the main
+loop checks it:
+
+```{python}
+run(r"""
+// worker.cpp — processes jobs until told to stop; saves its state on SIGTERM.
+#include <chrono>
+#include <csignal>
+#include <iostream>
+#include <thread>
+
+volatile std::sig_atomic_t stop_requested = 0;
+extern "C" void on_sigterm(int) { stop_requested = 1; }     // only set a flag here
+
+int main() {
+    std::signal(SIGTERM, on_sigterm);
+    int jobs = 0;
+    while (!stop_requested) {
+        ++jobs;                                              // "do some work"
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::cout << "SIGTERM received: saved state after " << (jobs > 0 ? "some" : "no") << " jobs\n";
+    return 0;                                                // a clean, normal exit
+}
+""", name="worker.cpp", run_it=False)
+```
+
+```{python}
+#| echo: true
+#| output: true
+import time
+w = subprocess.Popen([str(path("worker"))], stdout=subprocess.PIPE, text=True)
+time.sleep(0.3)
+w.terminate()                                    # polite: SIGTERM
+print(w.communicate(timeout=5)[0].strip(), "| returncode", w.returncode)
+
+w = subprocess.Popen([str(path("worker"))], stdout=subprocess.PIPE, text=True)
+time.sleep(0.3)
+w.kill()                                         # brutal: SIGKILL, no chance to save
+w.wait()
+print("after kill(): returncode", w.returncode, "=", signal.Signals(-w.returncode).name)
+```
+
+### `SIGPIPE`: when the reader goes away
+
+The opposite situation: the *reader* stops early, and the writer keeps
+writing. By @tbl-pipes the writer receives `SIGPIPE` and, by default, dies. In
+a shell pipeline this is a feature — `./generate | head -3` stops the generator
+as soon as `head` has its three lines:
+
+```{python}
+run(r"""
+// generate.cpp — prints numbers forever (until something stops it)
+#include <iostream>
+int main() {
+    for (long long i = 1; ; ++i) std::cout << i << '\n';
+}
+""", name="generate.cpp", run_it=False)
+sh("./generate | head -3; echo \"statuses of the pipeline: ${PIPESTATUS[*]}\"", show_cmd=True)
+```
+
+The shell variable `PIPESTATUS` lists the exit status of each program of the
+pipeline: `generate` ended with $141 = 128 + 13$, i.e. killed by signal 13,
+`SIGPIPE`, while `head` succeeded. From Python, the same thing:
+
+```{python}
+#| echo: true
+#| output: true
+p = subprocess.Popen([str(path("generate"))], stdout=subprocess.PIPE, text=True)
+print([p.stdout.readline().strip() for _ in range(3)])
+p.stdout.close()                                 # the reader goes away
+print("generate ended with", signal.Signals(-p.wait(timeout=5)).name)
+```
+
+A server that must survive clients
+disconnecting ignores `SIGPIPE` (`std::signal(SIGPIPE, SIG_IGN)`) and checks the
+result of each write instead.
+
+## Exchanging structured and binary data {#sec-binary-exchange}
+
+Text lines are easy to debug — you can run the C++ program by hand and type
+the protocol — but numbers must be printed and parsed, which costs time and
+can lose precision if printed with too few digits (@prp-decimal-digits: 17
+significant digits are needed to round-trip a `double`). For large numeric
+arrays, programs exchange **binary** data: the raw bytes of the values. Then
+both sides must agree on the **type width**, the **byte order** and the
+**layout**:
+
+```{python}
+run(r"""
+// squares.cpp — write n doubles (the squares 0..n-1) as raw bytes on stdout
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+int main(int argc, char** argv) {
+    const int n = argc > 1 ? std::atoi(argv[1]) : 5;
+    std::vector<double> v(n);
+    for (int i = 0; i < n; ++i) v[i] = static_cast<double>(i) * i;
+    std::fwrite(v.data(), sizeof(double), v.size(), stdout);   // 8 * n bytes, native byte order
+    return 0;
+}
+""", name="squares.cpp", run_it=False)
+```
+
+```{python}
+#| echo: true
+#| output: true
+import struct, sys
+raw = subprocess.run([str(path("squares")), "6"], capture_output=True, check=True).stdout
+print(len(raw), "bytes; first 16:", raw[:16].hex(" "))
+print("byte order of this machine:", sys.byteorder)
+print(struct.unpack("<6d", raw))                 # '<' = little-endian, 'd' = 8-byte double
+import numpy as np
+print(np.frombuffer(raw, dtype="<f8"))           # the same, as a NumPy array, without copying
+```
+
+On x86 and ARM machines (little-endian) the least significant byte comes
+first: $1.0$ is stored as `00 00 00 00 00 00 f0 3f`, the bytes of the IEEE 754
+pattern `0x3FF0000000000000` (@sec-floats) in reverse order. A program that
+must work across machines fixes the byte order explicitly ("network byte order"
+is big-endian) and documents the format — or uses a standard one.
+
+## The cost of crossing the boundary {#sec-boundary-cost}
+
+How expensive is it to call C++ from Python this way? Let $S$ be the time to
+**start** a process, $L$ the **latency** of one round trip through the pipes
+(write a request, the other side wakes up, write the reply, wake up again),
+and $c$ the time of the useful work per item.
+
+::: {#prp-batching}
+## Start-up, latency and batching
+Processing $n$ items costs about
+
+- $n(S + L + c)$ with one process per item;
+- $S + n(L + c)$ with one long-running process and one round trip per item;
+- $S + \lceil n/b \rceil L + n c$ with one process and batches of $b$ items per
+  round trip.
+
+The last expression decreases in $b$, and as $b$ grows the cost per item tends
+to $c$: batching makes the overhead negligible when $n c \gg S + (n/b) L$.
+:::
+
+*In one line:* pay the fixed costs as rarely as possible — start once, and send
+many items per message.
+
+::: {.deep kind="proof"}
+## Proof of @prp-batching
+Each line of the statement adds the cost of the events that occur: one start
+per process, one latency per round trip, one $c$ per item. With batches,
+$\lceil n/b \rceil$ round trips are needed for $n$ items, a non-increasing
+function of $b$, so the total cost decreases (weakly) as $b$ grows. Dividing
+by $n$: $S/n + \lceil n/b\rceil L/n + c \to S/n + L/n + c$ for $b \ge n$, and
+$S/n + L/n \to 0$ as $n$ grows. The overhead is negligible exactly when the
+fixed terms are small compared with $nc$. $\blacksquare$
+:::
+
+We can measure $S$ and $L$ on this machine with the programs of this chapter:
+
+```{python}
+#| echo: true
+#| output: true
+import time
+
+t0 = time.perf_counter()
+for _ in range(50):
+    subprocess.run([str(path("stats"))], input="1\n", capture_output=True, text=True)
+S = (time.perf_counter() - t0) / 50
+
+calc = Calculator()
+t0 = time.perf_counter()
+for i in range(2000):
+    calc.ask("add", i, 1)
+L = (time.perf_counter() - t0) / 2000
+calc.close()
+print(f"start-up S ≈ {S * 1e3:.2f} ms,  round trip L ≈ {L * 1e6:.1f} µs  (S/L ≈ {S / L:.0f})")
+```
+
+A round trip is tens of microseconds; a process start-up tens of times more. With @thm-amdahl in mind: moving a computation to a C++ process is worth
+it only if the work moved, $nc$, is much larger than these overheads — a
+numerical simulation, a large file to parse, a model to evaluate on a batch —
+and never for adding two numbers.
+
+## In the same process: shared libraries and `ctypes` {#sec-ctypes}
+
+When the overhead of a process is too high — many tiny calls — the C++ code can
+be loaded **into the Python process** as a **shared library** (`.so` on Linux,
+`.dylib` on macOS, `.dll` on Windows) and called directly. Python's standard
+`ctypes` module calls functions with a **C** interface; so the C++ functions
+are declared `extern "C"` (no name mangling, @sec-overloading) and use only C
+types:
+
+```{python}
+show(r"""
+// fastmath.cpp — a shared library with a C interface
+#include <cstddef>
+
+extern "C" double mean(const double* values, std::size_t n) {
+    double sum = 0;
+    for (std::size_t i = 0; i < n; ++i) sum += values[i];
+    return n ? sum / n : 0.0;
+}
+
+extern "C" int add_ints(int a, int b) { return a + b; }
+""", name="fastmath.cpp")
+sh("g++ -std=c++20 -O2 -shared -fPIC fastmath.cpp -o libfastmath.so && "
+   "nm -D --defined-only libfastmath.so | grep -E ' (mean|add_ints)$'")
+```
+
+```{python}
+#| echo: true
+#| output: true
+import ctypes
+lib = ctypes.CDLL(str(path("libfastmath.so")))
+lib.mean.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]   # declare the C signature
+lib.mean.restype = ctypes.c_double
+lib.add_ints.argtypes = [ctypes.c_int, ctypes.c_int]
+lib.add_ints.restype = ctypes.c_int
+
+values = np.array([2.5, 7.0, 1.0, 9.25])
+ptr = values.ctypes.data_as(ctypes.POINTER(ctypes.c_double))   # NumPy's buffer, no copy
+print("mean:", lib.mean(ptr, len(values)), " add_ints:", lib.add_ints(2, 3))
+
+t0 = time.perf_counter()
+for i in range(100_000):
+    lib.add_ints(i, 1)
+print(f"one ctypes call ≈ {(time.perf_counter() - t0) / 100_000 * 1e6:.2f} µs")
+```
+
+A call costs well under a microsecond — much less than a pipe round trip — but
+the safety net is gone: wrong `argtypes`, a wrong length or a bug in the C++
+code corrupts the memory of the **Python process itself** and can crash it,
+since the two now share one address space. For real projects, binding
+libraries such as **pybind11** generate the glue from C++ declarations,
+convert types automatically and translate C++ exceptions into Python ones
+[@pybind11]; NumPy and PyTorch use this kind of in-process extension for their
+compiled kernels.
+
+| | Separate process + pipes | Shared library (`ctypes`, pybind11) |
+|---|---|---|
+| overhead per call | a round trip, tens of µs (plus start-up, ~1 ms) | well under 1 µs |
+| data exchange | serialised bytes (text or binary) | direct access to memory (arrays without copies) |
+| isolation | complete: a C++ crash is reported as an exit status | none: a C++ crash kills Python |
+| language coupling | any language on either side; only the protocol matters | needs a C ABI and matching types |
+| build and deployment | one executable per platform | a library per platform *and* Python version (wheels, @sec-ch-pip) |
+| best for | coarse-grained jobs, tools, untrusted or unstable code | fine-grained calls, numerical kernels |
+
+: Two ways to call C++ from Python {#tbl-ipc-vs-ffi}
+
+::: {.project-link}
+**In the project.** The CRM (@sec-ch-project-crm) is an interactive console
+program: it reads the user's choices from standard input and writes menus and
+results to standard output, so it can be driven by **another program** through
+pipes exactly like `calc`. The project chapter uses this to **test** it: a
+Python script starts the compiled CRM with `subprocess.run`, feeds it a scripted
+session — including invalid inputs — as standard input, checks its output and
+its **exit status**, and verifies the data files it leaves behind (R8, R11,
+@sec-crm-brief). The CRM follows the conventions of @sec-filter: prompts and
+results on standard output, problems with the data files on standard error,
+status 0 after a normal session, and **end of input treated as "save and
+quit"** — the same clean termination as closing a server's standard input.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Forgetting to flush** in a request/response protocol: the reply waits in a
+  buffer and both sides hang.
+- **Writing everything, then reading** with large data: deadlock
+  (@prp-pipe-deadlock). Use `communicate()` or one message at a time.
+- **Ignoring the exit status** (or `stderr`): a failed run looks like an empty
+  result. Check `returncode`, or use `check=True`.
+- **`shell=True` with untrusted strings**: command injection. Pass a list of
+  arguments.
+- **No timeout**: a stuck child hangs the caller forever.
+- **Results and diagnostics on the same stream**: the caller cannot parse the
+  output reliably. Data on `stdout`, messages on `stderr`.
+- **Exit codes outside 0–255**: only the low 8 bits survive
+  (@prp-exit-status).
+- **Not calling `wait()`**: zombie processes; unknown exit status.
+- **Assuming text encodings or byte orders**: specify `encoding="utf-8"` and an
+  explicit byte order for binary data.
+- **`ctypes` without `argtypes`/`restype`**: arguments are passed with the
+  wrong types and results truncated to `int` — silent garbage or a crash.
+:::
+
+## Summary
+
+- A **process** has its own memory and a table of **file descriptors**; 0, 1, 2
+  are the standard streams. A **pipe** is a one-way kernel buffer (64 KiB on
+  Linux): reads block when empty, writes block when full, end of file arrives
+  when all writers close, `SIGPIPE` hits writers when all readers close.
+- Well-behaved programs read stdin to end of file, write data to stdout and
+  messages to stderr, and return meaningful exit statuses — of which the parent
+  sees the low 8 bits (@prp-exit-status).
+- `subprocess.run(args_list, input=…, capture_output=True, text=True,
+  timeout=…)` runs a program to completion; check `returncode` (negative =
+  killed by a signal).
+- `subprocess.Popen` keeps a process alive for many requests; a line-based
+  protocol needs **flushing** and clear **framing**.
+- Writing all input before reading output can **deadlock** (circular wait,
+  @prp-pipe-deadlock); `communicate()` writes and reads concurrently.
+- End a child by closing its stdin, then `terminate()` (catchable `SIGTERM`),
+  then `kill()`; always `wait()`.
+- Costs: process start-up ≈ 1 ms, pipe round trip ≈ tens of µs, `ctypes` call
+  < 1 µs; batch to amortise fixed costs (@prp-batching). Shared libraries are
+  faster but give up isolation.
+
+## Exercises
+
+::: {#exr-cpp8-wc}
+Write a C++ filter `wordcount` that reads text from standard input and prints
+`lines=…`, `words=…`, `chars=…` (like Unix `wc`), and a Python function that
+runs it on a string and returns a dictionary. What should the program do, and
+which exit status should it return, if standard input contains invalid UTF-8?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```cpp
+#include <iostream>
+#include <sstream>
+#include <string>
+int main() {
+    std::string line, word;
+    long long lines = 0, words = 0, chars = 0;
+    while (std::getline(std::cin, line)) {
+        ++lines;
+        chars += line.size() + 1;                 // bytes, including the newline
+        std::istringstream in(line);
+        while (in >> word) ++words;
+    }
+    std::cout << "lines=" << lines << "\nwords=" << words << "\nchars=" << chars << '\n';
+}
+```
+```python
+def wordcount(text):
+    r = subprocess.run(["./wordcount"], input=text, capture_output=True,
+                       text=True, encoding="utf-8", check=True, timeout=10)
+    return {k: int(v) for k, v in (l.split("=") for l in r.stdout.splitlines())}
+```
+The program counts **bytes**, not characters, so it never needs to decode
+UTF-8 and cannot fail on it (status 0); this must be documented (`chars` is a
+byte count). If it promised Unicode characters, it should validate the input
+and exit with a distinct non-zero status, writing the position of the first
+invalid byte to standard error. Note also that Python's `text=True` would fail
+*on the Python side* when encoding a `str` that cannot be represented — use
+`bytes` for arbitrary data.
+:::
+
+::: {#exr-cpp8-deadlock}
+In @prp-pipe-deadlock, suppose the child reads **all** its input before
+writing anything (like `sort`). Can the naive "write everything, then read"
+parent deadlock? Justify with the pipe semantics.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+No. While the parent writes, the child keeps reading (it writes nothing), so
+$P_{\text{in}}$ never stays full: the parent's writes always eventually
+complete. When the parent closes $P_{\text{in}}$, the child sees end of file and
+starts writing; the parent is now reading, so $P_{\text{out}}$ is drained. No
+circular wait can form, because the child never blocks on a write while the
+parent blocks on a write. (The hypothesis of the proposition — the child
+producing more than $C$ bytes of output before consuming its input — fails.)
+:::
+
+::: {#exr-cpp8-batch}
+Using @prp-batching with $S = 1$ ms, $L = 20$ µs and $c = 2$ µs, compare the
+total time for $n = 10^5$ items with (a) one process per item, (b) one process
+and one round trip per item, (c) batches of $b = 1000$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) $n(S + L + c) = 10^5 \times 1.022$ ms $= 102.2$ s.
+(b) $S + n(L + c) = 0.001 + 10^5 \times 22$ µs $= 2.201$ s.
+(c) $S + (n/b) L + nc = 0.001 + 100 \times 20$ µs $+ 10^5 \times 2$ µs
+$= 0.001 + 0.002 + 0.2 = 0.203$ s — within 2% of the pure computing time
+$nc = 0.2$ s.
+:::
+
+::: {#exr-cpp8-protocol}
+Extend `calc.cpp` so that a request `batch n` is followed by `n` lines of
+requests and answered by `n` reply lines, and modify the Python client to send
+a list of requests in one batch. Why must the client still read the replies as
+they come if `n` can be very large?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+In the server, on `batch n` read the next `n` lines in a loop, answer each,
+and flush once at the end (or every few hundred replies). In the client, write
+`batch n` and the `n` lines, then read `n` reply lines. If `n` is large, the
+replies of the first requests can fill $P_{\text{out}}$ while the client is
+still writing requests: exactly the deadlock of @prp-pipe-deadlock. The client
+must write and read concurrently (a writer thread, or `communicate()` if the
+batch ends the session), or limit the batch so that its replies fit in the pipe
+capacity.
+:::
+
+## Further reading {.unnumbered}
+
+- @kerrisk2010 — the reference on Linux system programming: ch. 6 (processes),
+  ch. 20–22 (signals), ch. 24–26 (process creation, termination, waiting),
+  ch. 44 (pipes and FIFOs).
+- @posix2024 — the specifications of `pipe`, `write` (including `PIPE_BUF`),
+  `exit` and `wait`.
+- @pythonlibrary — the documentation of `subprocess` (in particular the
+  warnings about deadlocks and `communicate`), `signal`, `select`, `struct`
+  and `ctypes`; @pep324, the design of `subprocess`.
+- @ritchie1984 — how Unix's I/O system and pipes were designed.
+- @mcilroy1978 — the Unix philosophy in four rules, in the foreword to the
+  1978 special issue on Unix.
+- @coffman1971 — the four necessary conditions for deadlock.
+- @pybind11 — seamless bindings between C++ and Python.

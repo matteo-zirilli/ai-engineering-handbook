@@ -1,0 +1,580 @@
+# Project: a command-line CRM for an insurance company {#sec-ch-project-crm}
+
+> *"Plan to throw one away; you will, anyhow."* — Frederick P. Brooks
+> [@brooks1995].
+
+```{python}
+import shutil, subprocess
+from pathlib import Path
+import cppbook
+from cppbook import show, sh
+
+SRC = Path("_crm").resolve()                      # the reference implementation, in this repository
+WORK = cppbook.BUILD / "crm"                       # a private copy where the book builds and runs it
+shutil.copytree(SRC, WORK, dirs_exist_ok=True)
+
+def show_file(rel, lang="cpp"):
+    show((SRC / rel).read_text(encoding="utf-8"), name=rel, lang=lang)
+```
+
+::: {.callout-note}
+## What this chapter contains
+1. The **problem statement**, written in my own words.
+2. A **requirements matrix** that maps every requirement to the chapters of
+   this part that teach the necessary skills.
+3. The **design**: responsibilities, class hierarchy, data structures (with
+   their costs), file format, robustness and extensibility.
+4. A complete **reference implementation** in C++20 — about 1 300 lines in
+   fifteen files, plus tests — published in this handbook's repository under
+   [`cpp/_crm`](https://github.com/matteo-zirilli/ai-engineering-handbook/tree/main/cpp/_crm),
+   built here with warnings and sanitizers and **driven from Python** through
+   pipes (@sec-ch-cpp-python) to demonstrate and test it.
+5. **Extensions** to practise further.
+:::
+
+::: {.callout-tip}
+## The author's own solution
+This project was the final assignment of the C++ course of the master, which I
+passed. My submitted solution will be added to the companion repository
+[`ai-projects`](https://github.com/matteo-zirilli/ai-projects); this chapter
+will then gain a walkthrough and a code review of it, as in
+@sec-project-walkthrough for Part I. The reference implementation below is
+written independently for the handbook.
+:::
+
+## The problem {#sec-crm-brief}
+
+::: {.callout-note}
+## About this specification
+The specification below is **my own restatement** of the project
+requirements, written for this handbook; it does not reproduce the course
+material. Where the requirements leave room for interpretation, the choices are
+mine and are stated in @sec-crm-design.
+:::
+
+**Context.** In many insurance companies, what is known about a customer is
+scattered: personal data in one program, the appointments of the sales agents
+in paper diaries or spreadsheets, the signed contracts in yet another archive.
+Nobody has the whole picture of a customer, and service suffers. A **customer
+relationship management** (CRM) system brings these pieces together. The goal
+here is a **lightweight prototype**: an interactive console application in
+**C++** that manages customers and their interactions with the company in one
+place. It will be the base of a real product, so a **solid, extensible
+structure** matters more than features.
+
+**What the prototype must do.**
+
+- **R1 — Console application in C++** driven by a **main menu** of numbered
+  options.
+- **R2 — Add** a customer.
+- **R3 — List** all customers.
+- **R4 — Edit** the data of an existing customer.
+- **R5 — Delete** a customer.
+- **R6 — Search** customers by first name or by last name.
+- **R7 — Interactions**: for each customer, add, list and search its
+  interactions, which come in two kinds: **appointments** arranged by the sales
+  agents and **contracts** signed by the customer.
+- **R8 — Persistence**: customers and interactions are saved to text files
+  (e.g. CSV) and loaded automatically when the program starts.
+- **R9 — Object-oriented design**: well-designed classes with separate
+  responsibilities and encapsulated data.
+- **R10 — A suitable data structure** for customers, interactions, and the
+  links between them.
+- **R11 — A simple, robust interface**: the users are agency staff, not
+  programmers, so wrong input must never crash the program.
+- **R12 — Deliverable**: the source code, a short README explaining how to
+  build and run the program, and a sample data file with a few customers and
+  interactions to try it at once.
+
+## Requirements matrix {#sec-crm-requirements}
+
+| # | Requirement | Skills needed | Chapters |
+|---|---|---|---|
+| R1 | C++ console program with a main menu | toolchain, menu loop with `switch` | @sec-ch-cpp-env, @sec-menu-loop |
+| R2–R5 | add, list, edit, delete customers | classes, containers, references | @sec-ch-c-vs-cpp, @sec-ch-cpp-oop |
+| R6 | search by first or last name | strings, case-insensitive matching, sorting | @sec-c-strings, @sec-strict-weak |
+| R7 | appointments and contracts: add, list, search | inheritance, virtual and pure virtual functions | @sec-virtual, @sec-abstract |
+| R8 | save to and load from CSV files | file streams, CSV escaping, buffering | @sec-c-files, @sec-csv-cpp |
+| R9 | OOP: responsibilities, encapsulation | access control, invariants, RAII, rule of zero | @sec-encapsulation-cpp, @sec-rule-of-three |
+| R10 | suitable data structure with links | `std::map`, `std::vector`, `std::unique_ptr`, ids | @sec-stl, @sec-invalidation, @sec-raii |
+| R11 | robust input | line-based input, parsing, validation, end of input | @sec-robust-input, @sec-cpp-input |
+| R12 | sources, README, sample data | multi-file builds, CMake | @sec-multifile, @sec-build-systems |
+
+: Requirements and where the book teaches them {#tbl-crm-requirements}
+
+## Design {#sec-crm-design}
+
+### Responsibilities
+
+Following the single-responsibility principle (@sec-solid) and the lesson of
+Part I's project (@sec-project-design), the program is split into components
+that each have one reason to change:
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "Architecture of the CRM. Arrows are dependencies; the graph is acyclic and the domain (Crm, Customer, Interaction) depends neither on the user interface nor on the file format."
+flowchart LR
+    MAIN["main.cpp<br/>(wiring)"] --> UI["ConsoleUi<br/>(menus, validated input)"]
+    MAIN --> STORE["CsvStorage<br/>(file format, load/save)"]
+    UI --> CRM["Crm<br/>(customers by id, search)"]
+    UI --> STORE
+    STORE --> CRM
+    CRM --> CUST["Customer<br/>(personal data + interactions)"]
+    CUST --> INT["Interaction<br/>(abstract)"]
+    APP["Appointment"] --> INT
+    CON["Contract"] --> INT
+```
+
+- **`Interaction`** (abstract), **`Appointment`**, **`Contract`** — what
+  happened between the company and a customer (R7).
+- **`Customer`** — personal data, validated, and the customer's interactions,
+  which it **owns**.
+- **`Crm`** — the collection: unique ids, lookup, search, sorted listing. No
+  input or output.
+- **`CsvStorage`** — the only component that knows the file format
+  (information hiding, @sec-modularity).
+- **`ConsoleUi`** — the only component that talks to the user; it reads from
+  and writes to *any* pair of streams, so tests can drive it.
+- **`main`** — creates the objects, loads, runs the interface, saves.
+
+### The class hierarchy
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "UML class diagram of the domain. A Customer owns (filled diamond) any number of Interactions through std::unique_ptr; Appointment and Contract override the pure virtual functions of Interaction."
+classDiagram
+    class Crm {
+      -customers_ : map~uint32, Customer~
+      +add_customer(data) uint32
+      +remove_customer(id) bool
+      +find(id) Customer* or null
+      +search(text) vector~const Customer*~
+      +customers() vector~const Customer*~
+    }
+    class Customer {
+      -id_ : uint32
+      -data_ : CustomerData
+      -interactions_ : vector~unique_ptr~Interaction~~
+      +update(data)
+      +add_interaction(i)
+      +find_interactions(text)
+      +validate(data)$ CustomerData
+    }
+    class Interaction {
+      <<abstract>>
+      -id_ : uint32
+      -date_ : Date
+      -notes_ : string
+      +kind()* string
+      +details()* string
+      +matches(text) bool
+      +to_record() Record
+      #add_fields(record)*
+    }
+    class Appointment {
+      -time_ : TimeOfDay
+      -agent_ : string
+      -place_ : string
+    }
+    class Contract {
+      -policy_number_ : string
+      -product_ : Product
+      -premium_cents_ : int64
+      -end_date_ : Date
+    }
+    Crm "1" *-- "many" Customer
+    Customer "1" *-- "many" Interaction
+    Interaction <|-- Appointment
+    Interaction <|-- Contract
+```
+
+`Interaction` uses the **template method** pattern [@gamma1994]: the
+non-virtual `to_record()` writes the fields common to all interactions and then
+calls the pure virtual `add_fields()`, which each subclass implements for its
+own fields. The rest of the program — listing, searching, saving — only uses
+the base class interface, polymorphically (@sec-virtual).
+
+### What is stored
+
+The brief leaves the content of the records open; these are my assumptions,
+the kind of questions one would confirm with the business:
+
+| Entity | Fields | Rules (class invariants) |
+|---|---|---|
+| customer | id, first name, last name, phone, e-mail, city | names required; phone: digits, spaces, `+ - /`, at least 6 digits; e-mail: one `@` followed by a dot; no line breaks |
+| appointment | id, date, time, agent, place, notes | valid date and time; agent required |
+| contract | id, signing date, policy number, product (car, home, life, health, other), annual premium, end date, notes | policy number required and unique; premium $> 0$; end date after signing date |
+
+: Data model {#tbl-crm-data}
+
+Amounts are stored as **integer cents** (`std::int64_t`), never as `double`
+(@sec-c-floats); dates are validated calendar dates in ISO 8601 form
+(`YYYY-MM-DD`), which sorts correctly as text and as a `Date` object (the
+defaulted `<=>` of @sec-operator-overloading compares year, month, day in that
+order). Every class establishes its invariant in its constructor and throws
+`std::invalid_argument` otherwise (@sec-ctors), so an invalid customer or
+contract **cannot exist** in memory.
+
+### Data structures and their costs {#sec-crm-structures}
+
+Requirement R10 asks for a structure that also represents the **links** between
+customers and interactions. The design:
+
+- customers in a **`std::map<std::uint32_t, Customer>`** keyed by a unique id;
+- each `Customer` owns its interactions in a
+  **`std::vector<std::unique_ptr<Interaction>>`**, kept sorted by date;
+- interaction ids are unique in the whole CRM.
+
+The link customer → interactions is **ownership** (deleting a customer destroys
+its interactions automatically, by RAII, @sec-raii); the link interaction →
+customer exists only in the file, as the `customer_id` column. Ids, rather than
+pointers or positions, are what the user types and what the files store: they
+are stable across insertions and deletions (@sec-invalidation) and across
+program runs. With $n$ customers, $k$ interactions for the customer at hand, and
+names of bounded length:
+
+| Operation | Cost | Why |
+|---|---|---|
+| find a customer by id (edit, delete, open interactions) | $O(\log n)$ | red–black tree (@thm-red-black-height) |
+| add a customer | $O(\log n)$ | map insertion |
+| delete a customer | $O(\log n + k)$ | map erase + destruction of its interactions |
+| list customers sorted by name | $O(n \log n)$ | `std::sort` with a strict weak order (@thm-strict-weak) |
+| search by name | $O(n)$ | substring test on every customer |
+| add an interaction | $O(\log k + k)$ | binary search for the position + vector insertion |
+| list / search interactions of a customer | $O(k)$ | linear scan |
+
+: Costs of the CRM operations {#tbl-crm-costs}
+
+For an agency with a few thousand customers every operation takes microseconds,
+so — as in Part I (@sec-project-design) — the decisive arguments are
+**clarity** and **stability of references**, not speed. An `std::unordered_map`
+would make lookups $O(1)$ expected, but the ordered map also gives files and
+listings a predictable order for free.
+
+### File format and robustness
+
+Two CSV files with a header line (@sec-csv-cpp): `customers.csv` and
+`interactions.csv`. Interactions of every kind share one table with a fixed set
+of columns; the columns that do not apply to a kind stay empty. This keeps the
+file readable in a spreadsheet and lets new kinds add columns without breaking
+old files. Loading follows the robust pattern of @sec-report-example:
+
+- **no files** → first run, empty CRM (not an error);
+- a line with the wrong number of fields or an invalid value → **skipped**,
+  with a warning naming file and line on **standard error**; the rest is
+  loaded;
+- if anything was skipped, the original files are copied to `*.bak` before the
+  first save, so a damaged file never causes silent data loss;
+- saving is **atomic**: each file is written to a temporary file and then
+  renamed over the old one (@sec-atomic-writes), so a crash during a save never
+  leaves a half-written file;
+- data are saved **after every change** and once more at exit.
+
+On the user side (R11), every answer goes through `std::getline` and a
+validating parser (@sec-cpp-input) in a loop that re-asks with an explanation;
+choosing an option by id is preceded by a list that shows the ids; deletions
+ask for confirmation; and **end of input** (Ctrl+D, Ctrl+Z, the end of a
+script) is turned into an `InputClosed` exception that unwinds to the main loop,
+which ends the program normally — after which `main` saves. Nothing can leave
+the program half-way through an operation with unsaved or inconsistent data.
+
+### Extensibility
+
+The brief stresses that the prototype is the base of a product. Two examples
+of changes and their cost in this design:
+
+- **a new kind of interaction** (say, a *claim*): one new class derived from
+  `Interaction`, one branch in `interaction_from_record`, its columns in the
+  storage, and a menu entry. Listing, searching and deleting work unchanged —
+  the open–closed principle (@sec-solid);
+- **a different storage** (a database instead of CSV files): a new class with
+  `load` and `save`; neither the domain nor the interface changes.
+
+## Reference implementation {#sec-crm-reference}
+
+The code is organised as in @sec-multifile: one header (the interface) and one
+source file (the implementation) per component, in `namespace crm`. Each block
+below is one file of
+[`cpp/_crm`](https://github.com/matteo-zirilli/ai-engineering-handbook/tree/main/cpp/_crm).
+
+### Interactions {.deep}
+
+```{python}
+show_file("include/crm/interaction.hpp")
+show_file("src/interaction.cpp")
+```
+
+### Customers and the CRM {.deep}
+
+```{python}
+show_file("include/crm/customer.hpp")
+show_file("src/customer.cpp")
+show_file("include/crm/crm.hpp")
+show_file("src/crm.cpp")
+```
+
+### Storage {.deep}
+
+```{python}
+show_file("include/crm/storage.hpp")
+show_file("src/storage.cpp")
+```
+
+### User interface and `main` {.deep}
+
+```{python}
+show_file("include/crm/console_ui.hpp")
+show_file("src/console_ui.cpp")
+show_file("src/main.cpp")
+```
+
+### Utilities: text and dates {.deep}
+
+```{python}
+show_file("include/crm/text.hpp")
+show_file("src/text.cpp")
+show_file("include/crm/date.hpp")
+show_file("src/date.cpp")
+```
+
+### Build files, README and sample data {.deep}
+
+```{python}
+show_file("CMakeLists.txt", lang="cmake")
+show_file("README.md", lang="markdown")
+show_file("data/customers.csv", lang="default")
+show_file("data/interactions.csv", lang="default")
+```
+
+### Building
+
+The project is built exactly as the README says, here with the strictest
+settings of @sec-flags: warnings as errors and AddressSanitizer plus
+UndefinedBehaviorSanitizer, so that any memory error or leak during the
+demonstration and the tests would stop the program with a report.
+
+```{python}
+sh("cd crm && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug "
+   "-DCMAKE_CXX_FLAGS='-Werror -fsanitize=address,undefined -fno-omit-frame-pointer' > /dev/null && "
+   "cmake --build build | tail -3")
+```
+
+## Demonstration {#sec-crm-demo}
+
+To make the demonstration reproducible we do not type at a keyboard: a Python
+script starts the compiled program with `subprocess.run`, writes a scripted
+session to its standard input, and collects its output and exit status —
+the technique of @sec-subprocess-run. The `--echo` option makes the program
+repeat each input line, so the output reads like a real session. The first
+session starts from the sample data and makes several deliberate mistakes.
+
+```{python}
+#| echo: true
+#| output: true
+import shutil, subprocess
+DATA = WORK / "demo-data"                         # a fresh copy of the sample data
+shutil.rmtree(DATA, ignore_errors=True)
+shutil.copytree(WORK / "data", DATA)
+
+def crm_session(lines, show_from=0):
+    """Run the CRM on scripted input; print its output (from a given line) and exit status."""
+    result = subprocess.run([str(WORK / "build" / "crm"), str(DATA), "--echo"],
+                            input="".join(l + "\n" for l in lines),
+                            capture_output=True, text=True, timeout=30)
+    out = result.stdout.replace(str(DATA), "demo-data")
+    print("\n".join(out.splitlines()[show_from:]))
+    if result.stderr:
+        print("--- standard error ---\n" + result.stderr.replace(str(DATA), "demo-data"))
+    print("--- exit status:", result.returncode)
+
+session_1 = [
+    "7", "abc",                                          # invalid menu choices
+    "2", "Elena", "", "Marino", "12ab", "+39 06 5550 9876", "elena@", "elena.marino@example.it", "Roma",
+    "6", "99", "5",                                      # unknown customer id, then Elena (id 5)
+    "2", "2026-11-31", "2026-11-25", "9.30", "09:30", "", "Sara Conti", "Roma Eur agency", "Quote for a home policy",
+    "3", "CAR-2026-0007", "HOME-2026-0141", "house", "home", "2026-12-01", "2026-11-30", "2027-11-30",
+    "-100", "312,40", "",
+    "1", "0",                                            # list Elena's interactions, back
+    "3", "MAR",                                          # search: Marino (last name), Marco (first name)
+    "0",
+]
+crm_session(session_1)
+```
+
+Every mistake was caught with an explanation and a new prompt: menu choices out
+of range or not numbers, an empty last name, a phone with letters, an
+incomplete e-mail, an unknown customer id, 31 November, a time without the
+colon, an empty agent, a policy number that already belongs to another
+customer, an unknown product, an end date before the signing date, a negative
+premium. The amount `312,40` with a decimal comma was accepted. The search for
+`MAR` matched *Marino* and *Marco* — first and last names, case-insensitively
+(R6).
+
+The second session reloads the data saved by the first, edits a customer
+(keeping some fields with Enter and clearing one with `-`), searches
+interactions, deletes a customer with all its interactions, and then the input
+**ends abruptly**, in the middle of the main menu, as if the user had pressed
+Ctrl+D. We show only the part after loading and the first menu:
+
+```{python}
+#| echo: true
+#| output: true
+session_2 = [
+    "4", "2", "", "", "-", "marco.russo@example.com", "",      # edit Marco Russo
+    "6", "1", "4", "car", "0",                                  # Giulia Ferrari: search "car"
+    "5", "3", "maybe", "y",                                     # delete Chiara Esposito (after an invalid answer)
+    "1",                                                        # list, then the input ends
+]
+crm_session(session_2, show_from=10)
+```
+
+The program reported end of input, saved and exited with status 0 (R11). The
+files on disk now contain the changes of both sessions; quoting protects the
+note containing a comma (R8):
+
+```{python}
+#| echo: true
+#| output: true
+print((DATA / "customers.csv").read_text(encoding="utf-8"))
+print((DATA / "interactions.csv").read_text(encoding="utf-8"))
+```
+
+Customer 3 and its life-insurance contract are gone; Elena Marino (id 5) has
+an appointment and a contract with new interaction ids 6 and 7; Marco Russo's
+phone was cleared and his e-mail added.
+
+## Tests {#sec-crm-tests}
+
+### Unit tests in C++
+
+`tests/tests.cpp` checks the parts of the program in isolation — text
+utilities, dates, invariants of every class, the `Crm` operations, a
+save/load round trip with commas and quotes in the data, the handling of damaged
+lines, and the user interface driven by an `std::istringstream` (including
+input that ends in the middle of a form). It uses no testing library: a
+`CHECK` macro counts failures, and the program's exit status tells `ctest` or a
+CI system whether everything passed (@sec-filter).
+
+```{python}
+show_file("tests/tests.cpp")
+sh("cd crm && ./build/crm_tests && echo \"exit status: $?\"")
+```
+
+All checks pass under AddressSanitizer and UndefinedBehaviorSanitizer, which
+also verified that no memory leaks at exit.
+
+### End-to-end tests from Python
+
+The Python side checks the behaviours that only the complete program shows:
+exit statuses, files on disk, messages on standard error.
+
+```{python}
+#| echo: true
+#| output: true
+import tempfile
+
+def run_crm(folder, lines, *extra_args):
+    return subprocess.run([str(WORK / "build" / "crm"), str(folder), *extra_args],
+                          input="".join(l + "\n" for l in lines),
+                          capture_output=True, text=True, timeout=30)
+
+tests = {}
+tmp = Path(tempfile.mkdtemp())
+
+# First run in an empty folder: no crash, files created with only the headers.
+r = run_crm(tmp / "new", ["0"])
+tests["first run: status 0"] = r.returncode == 0 and "empty CRM" in r.stdout
+tests["first run: files created"] = (tmp / "new" / "customers.csv").read_text().startswith("id,first_name")
+
+# Wrong usage: status 2 and a message on stderr.
+r = run_crm(tmp / "new", ["0"], "--verbose")
+tests["wrong option: status 2"] = r.returncode == 2 and "usage" in r.stderr
+
+# Damaged data: bad lines skipped with line numbers, good ones kept, backup made.
+bad = tmp / "bad"; bad.mkdir()
+shutil.copy(WORK / "data" / "interactions.csv", bad)
+(bad / "customers.csv").write_text(
+    "id,first_name,last_name,phone,email,city\n"
+    "1,Giulia,Ferrari,,,Milano\n"
+    "2,Marco,,,,Torino\n"                       # empty last name -> invalid
+    "3,\"Chiara,Esposito,,,Napoli\n"            # unterminated quote
+    "4,Luca,Bianchi,,,Bologna\n", encoding="utf-8")
+r = run_crm(bad, ["0"])
+damaged_report = r.stderr
+tests["damaged: still status 0"] = r.returncode == 0
+tests["damaged: 2 customers loaded"] = "Loaded 2 customer(s)" in r.stdout
+tests["damaged: warnings with line numbers"] = "customers.csv line 3" in r.stderr and "line 4" in r.stderr
+tests["damaged: interactions of skipped customers reported"] = "unknown customer 2" in r.stderr
+tests["damaged: backup kept"] = (bad / "customers.csv.bak").exists()
+tests["second run on the saved files: no warnings"] = run_crm(bad, ["0"]).stderr == ""
+
+# End of input while typing a new customer: nothing half-added, data saved, status 0.
+r = run_crm(tmp / "new", ["2", "Grace"])
+tests["eof mid-form: status 0, nothing added"] = (r.returncode == 0 and
+    (tmp / "new" / "customers.csv").read_text().count("\n") == 1)
+
+for name, ok in tests.items():
+    print(f"{'PASS' if ok else 'FAIL'}  {name}")
+print(f"{sum(tests.values())}/{len(tests)} end-to-end tests passed")
+print("--- standard error of the run on the damaged files ---")
+print(damaged_report.strip())
+```
+
+Note the consequence of the design checked by the second-to-last test: after
+the run on the damaged files, the CRM saved only what it could read — the
+originals are preserved in `*.bak` for a human to inspect — so the next run
+starts clean.
+
+### How the reference implementation meets the requirements
+
+| Requirement | Where |
+|---|---|
+| R1 menu-driven C++ console program | `ConsoleUi::run`, `interactions_menu` (menu loops with `switch`) |
+| R2–R5 add, list, edit, delete customers | `ConsoleUi::add_customer`, `list_customers`, `edit_customer`, `delete_customer`; `Crm` |
+| R6 search by first or last name | `Crm::search` (case-insensitive substring, sorted result) |
+| R7 appointments and contracts: add, list, search | `Interaction` hierarchy; `Customer::add_interaction`, `find_interactions`; sub-menu |
+| R8 CSV persistence, automatic loading | `CsvStorage::load` at start, `save` after each change and at exit; atomic writes, backups |
+| R9 OOP with encapsulation | private data, validating constructors, `const` accessors, abstract base, rule of zero |
+| R10 data structure with links | `std::map<id, Customer>`, owned `std::vector<std::unique_ptr<Interaction>>`, global ids (@tbl-crm-costs) |
+| R11 robust interface | `read_line` + validators, `InputClosed`, confirmations; tested in C++ and from Python |
+| R12 sources, README, sample data | `cpp/_crm`: CMake project, `README.md`, `data/` |
+
+: Requirements and their implementation {#tbl-crm-coverage}
+
+## Extensions {#sec-crm-extensions}
+
+1. **A third kind of interaction.** Add `Claim` (date of the event, amount
+   requested, status: open/accepted/rejected) as described in
+   @sec-crm-design, with tests. Count how many existing lines you had to
+   change.
+2. **Reminders.** List the contracts that expire in the next 30 days, across
+   all customers, sorted by end date. Which data structure would make this
+   $O(\log n + m)$ for $m$ results? (Hint: an ordered index such as
+   `std::multimap<Date, id>`, kept up to date.)
+3. **Undo.** Keep a stack of inverse operations and add an *undo* option, as
+   suggested for Part I (@sec-project-extensions).
+4. **Unicode-aware search.** `to_lower` only folds ASCII letters, so searching
+   `élena` does not find `Élena`. Find out what Unicode case folding is and
+   which library (e.g. ICU) provides it.
+5. **A Python report tool.** Write a Python script that reads the two CSV
+   files with the `csv` module (@sec-csv) and produces, with pandas, the total
+   annual premium per product and per city. Because the file format is
+   documented, the two programs cooperate without sharing any code.
+6. **A batch mode.** Add command-line options such as
+   `crm data --export-json` that print the whole CRM as JSON lines on standard
+   output and exit, so that other programs can consume it through a pipe
+   (@sec-ch-cpp-python).
+7. **SQLite storage.** Implement a `SqliteStorage` with the same `load`/`save`
+   interface, extract an abstract base class `Storage`, and switch backends with
+   a command-line option.
+
+## Further reading {.unnumbered}
+
+- The reference implementation:
+  [`cpp/_crm`](https://github.com/matteo-zirilli/ai-engineering-handbook/tree/main/cpp/_crm)
+  in this handbook's repository (CMake project, README, sample data, tests).
+- @stroustrup2022 — the C++ used in this project, in compact form.
+- @gamma1994 — the *template method* pattern used by `Interaction::to_record`.
+- @martin2003 — the design principles behind the split into components.
+- @brooks1995 — on prototypes, and on why "the" design rarely survives the
+  first contact with real users.

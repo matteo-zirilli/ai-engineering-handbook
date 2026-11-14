@@ -1,0 +1,1036 @@
+# Object-oriented programming in C++ {#sec-ch-cpp-oop}
+
+> *"I made up the term 'object-oriented' … I did not have C++ in mind."* —
+> Alan Kay [@kay1997].
+
+```{python}
+from cppbook import run, show, sh, write, compile_sources, run_exe, sanitizer_summary
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- define **classes** with data members, member functions, `const` member
+  functions and `static` members, and explain `this`;
+- write **constructors** (default, parameterised, with member initialiser
+  lists) and **destructors**, predict the **order** of construction and
+  destruction, and **prove** why the reverse order is the safe one;
+- control access with `public`, `protected` and `private`, and know when a
+  **friend** function or class is justified;
+- use **inheritance**, **override** member functions, and understand **multiple**
+  and **virtual** inheritance — **proving** how many copies of a base class an
+  object contains;
+- obtain **polymorphism** with **virtual functions**, explain how **vtables**
+  implement it, and define **abstract classes** with **pure virtual**
+  functions;
+- avoid **object slicing**, the missing **virtual destructor**, and the shallow
+  copies that the **rule of three/five/zero** prevents;
+- **overload operators** with their natural meaning, and **prove** that a
+  comparator must be a **strict weak order** for `std::sort`, `std::set` and
+  `std::map` to work.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Building object-oriented programs in C++: classes and the special functions
+that create and destroy objects, access control and friendship, derived classes
+(with one or several bases, and shared bases), redefining and overriding
+functions, polymorphism through virtual and abstract functions, and giving
+operators a meaning for new types.
+:::
+
+## Intuition: the same blueprints, a stricter builder
+
+The ideas of object-oriented programming — **abstraction**, **encapsulation**,
+**inheritance**, **polymorphism** — are the ones of @sec-ch-oop, and they come
+from the same place: Simula 67, which Stroustrup used before designing C++
+[@dahl1968; @stroustrup1994]. What changes is the builder. Python decides
+almost everything **at run time**: an object is a dictionary of attributes,
+any method may be added or replaced, every call is looked up by name. C++
+decides as much as possible **at compile time**: the members of a class and
+their layout are fixed, access is checked by the compiler, an ordinary member
+call is a direct jump to known code, and only functions declared `virtual` are
+looked up at run time — through a table, in constant time.
+
+The result is the C++ deal again (@sec-ch-c-vs-cpp): more rules to learn, more
+errors caught before running, objects as compact as C structures, and you pay
+for dynamic dispatch only where you ask for it.
+
+## Classes and objects {#sec-cpp-classes}
+
+A **class** declares data members (the state) and member functions (the
+behaviour). Here is a first version of the customer class of the project:
+
+```{python}
+run(r"""
+#include <cstdint>
+#include <iostream>
+#include <string>
+
+class Customer {
+public:
+    Customer(std::uint32_t id, std::string name, std::string surname)   // constructor
+        : id_(id), name_(std::move(name)), surname_(std::move(surname)) {}
+
+    std::uint32_t id() const { return id_; }                 // const: does not modify *this
+    const std::string& surname() const { return surname_; }
+    std::string full_name() const { return name_ + ' ' + surname_; }
+    void rename(const std::string& name, const std::string& surname) {
+        name_ = name;
+        surname_ = surname;
+    }
+
+private:
+    std::uint32_t id_;
+    std::string name_;
+    std::string surname_;
+};
+
+int main() {
+    Customer c(1, "Ada", "Lovelace");
+    const Customer& view = c;                    // a read-only view of c
+    std::cout << view.id() << ": " << view.full_name() << '\n';
+    c.rename("Augusta Ada", "King");
+    std::cout << view.full_name() << '\n';       // view sees the change: it is the same object
+    // view.rename("x", "y");                    // error: rename is not const
+}
+""", name="customer.cpp")
+```
+
+Things to notice:
+
+- **Member functions** are declared inside the class; short ones are defined
+  there too. Inside a member function, the members of the current object are
+  used by name (`name_`), and `this` is a pointer to the object itself — the
+  `self` of Python, implicit.
+- A member function marked **`const`** promises not to modify the object; only
+  `const` member functions can be called through a `const` reference or
+  pointer. Marking every non-modifying function `const` ("const correctness")
+  lets the compiler enforce read-only views.
+- The trailing underscore in `id_` is a common naming convention for private
+  data members; it is not a language rule.
+
+### `static` members
+
+A `static` data member belongs to the **class**, not to each object — like a
+Python class attribute (@sec-classes). A typical use is a counter shared by all
+instances:
+
+```{python}
+run(r"""
+#include <iostream>
+
+class Ticket {
+public:
+    Ticket() : number_(++issued_) {}
+    int number() const { return number_; }
+    static int issued() { return issued_; }      // static member function: no 'this'
+private:
+    int number_;
+    inline static int issued_ = 0;               // one variable for the whole class (C++17 'inline')
+};
+
+int main() {
+    Ticket a, b, c;
+    std::cout << a.number() << b.number() << c.number() << ", issued: " << Ticket::issued() << '\n';
+}
+""", name="static_member.cpp")
+```
+
+## Constructors and destructors {#sec-ctors}
+
+### Constructors
+
+A **constructor** has the name of the class and no return type; it runs when an
+object is created and must leave it in a valid state (its invariant holds,
+@sec-encapsulation). A class may have several, distinguished by their
+parameters (overloading, @sec-overloading):
+
+- the **default constructor** takes no arguments; the compiler generates one
+  if you declare no constructor at all;
+- **parameterised constructors** take the values needed to build the object;
+- the **member initialiser list** (`: id_(id), name_(…)`) initialises members
+  *before* the body runs. Use it: members are constructed exactly once, and
+  `const` members, references and members without a default constructor
+  *can only* be initialised there.
+
+```{python}
+run(r"""
+#include <cstdio>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+
+class Date {
+public:
+    Date() : Date(1970, 1, 1) {}                          // default: delegates to the other constructor
+    Date(int y, int m, int d) : y_(y), m_(m), d_(d) {
+        if (m < 1 || m > 12 || d < 1 || d > days_in_month(y, m))
+            throw std::invalid_argument("invalid date");  // never build an invalid Date
+    }
+    std::string str() const {
+        char buf[11];
+        std::snprintf(buf, sizeof buf, "%04d-%02d-%02d", y_, m_, d_);
+        return buf;
+    }
+    static int days_in_month(int y, int m) {
+        static const int days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+        bool leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;     // Gregorian rule
+        return m == 2 && leap ? 29 : days[m - 1];
+    }
+private:
+    int y_, m_, d_;
+};
+
+int main() {
+    Date epoch, d(2028, 2, 29);
+    std::cout << epoch.str() << ' ' << d.str() << '\n';
+    try { Date bad(2026, 2, 29); }
+    catch (const std::invalid_argument& e) { std::cout << "2026-02-29: " << e.what() << '\n'; }
+}
+""", name="date.cpp")
+```
+
+A constructor that cannot establish the invariant **throws**: then the object
+never exists, and no code can ever see an invalid `Date`. (The leap-year rule
+is the one of @prp-leap-equivalence.) A constructor with one parameter can be
+used by the compiler for **implicit conversions** (`Premium p = 500;`); mark it
+`explicit` to forbid that, as in @sec-encapsulation-cpp.
+
+### Destructors and the order of destruction
+
+The **destructor** `~ClassName()` runs when the object's lifetime ends: at the
+end of the enclosing block for local objects, at `delete` for heap objects,
+when the owning object is destroyed for members. It releases whatever the
+object acquired — the RAII principle (@sec-raii). The order is fixed by the
+language:
+
+- **construction**: base classes first, then data members in **declaration
+  order**, then the constructor body;
+- **destruction**: the exact **reverse** — destructor body, members in reverse
+  order, then bases; and local objects of a block are destroyed in the reverse
+  of the order in which they were created.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+struct Noisy {
+    std::string name;
+    explicit Noisy(std::string n) : name(std::move(n)) { std::cout << "  + " << name << '\n'; }
+    ~Noisy() { std::cout << "  - " << name << '\n'; }
+};
+
+struct Logger : Noisy {                              // inherits from Noisy (next section)
+    Noisy file{"log file"};                          // a member
+    Noisy buffer{"buffer"};                          // declared after file
+    Logger() : Noisy("logger base") { std::cout << "  (Logger body)\n"; }
+};
+
+int main() {
+    std::cout << "enter block\n";
+    {
+        Noisy first("first local");
+        Logger log;
+        Noisy last("last local");
+    }
+    std::cout << "left block\n";
+}
+""", name="order.cpp")
+```
+
+::: {#prp-reverse-destruction}
+## Why the reverse order is safe
+Number objects $1, 2, \dots, n$ in order of construction, and suppose each
+object may use (refer to) only objects constructed **before** it. If objects
+are destroyed in reverse order $n, n-1, \dots, 1$, then whenever an object is
+destroyed, every object it may use is still alive.
+:::
+
+*In one line:* last in, first out — an object is torn down while everything it
+was built on still stands.
+
+::: {.deep kind="proof"}
+## Proof of @prp-reverse-destruction
+When object $j$ is destroyed, the objects already destroyed are exactly
+$n, n-1, \dots, j+1$, i.e. those with numbers greater than $j$. The objects $j$
+may use have numbers $i < j$, none of which is among them: all are alive.
+Any other order destroys some $i$ before some $j > i$ while $j$ is still alive;
+if $j$ uses $i$ (in its destructor, say), it would touch a dead object. So the
+reverse order is the only one that is safe for *every* such dependency
+pattern. $\blacksquare$
+:::
+
+In the output, `last local` is destroyed first; inside `log`, the members go
+in reverse declaration order (`buffer` before `log file`), then the base. The
+assumption "use only what was built before you" is exactly what the
+construction order guarantees for members and bases — a member's initialiser
+can use earlier members and the bases, never later ones.
+
+## Access control and friends {#sec-access}
+
+| Specifier | Accessible from | Typical use |
+|---|---|---|
+| `public` | everywhere | the interface: what users of the class may call |
+| `protected` | the class, its friends and **derived classes** | hooks for subclasses |
+| `private` | the class and its friends only | the representation and its invariant |
+
+: Access specifiers {#tbl-access}
+
+Access is checked by the compiler and applies to **classes**, not objects: a
+member function can access the private members of *another* object of the
+same class (useful in comparisons and copies).
+
+A **friend** is a function or class, declared inside a class with the keyword
+`friend`, that gets access to its private members although it is not a member.
+Friendship is granted by the class, not taken; it is not inherited and not
+transitive. The classic legitimate use is a pair of tightly coupled pieces of
+code that belong together but cannot be member functions — such as the output
+operator `<<`, whose left operand is a stream, not our object:
+
+```{python}
+run(r"""
+#include <iostream>
+
+class Money {
+public:
+    explicit Money(long long cents) : cents_(cents) {}
+    friend std::ostream& operator<<(std::ostream& os, const Money& m);   // a friend function
+    friend class Ledger;                                                  // a friend class
+private:
+    long long cents_;
+};
+
+std::ostream& operator<<(std::ostream& os, const Money& m) {             // may read m.cents_
+    return os << m.cents_ / 100 << '.' << (m.cents_ % 100 < 10 ? "0" : "") << m.cents_ % 100 << " EUR";
+}
+
+class Ledger {
+public:
+    static void apply_fee(Money& m, long long fee) { m.cents_ -= fee; }  // may modify private data
+};
+
+int main() {
+    Money m(48000);
+    Ledger::apply_fee(m, 250);
+    std::cout << m << '\n';
+}
+""", name="friends.cpp")
+```
+
+Every friend weakens encapsulation: the invariant is now the responsibility of
+the class **and** its friends. Use friends for operators and for a "partner"
+class that is part of the same abstraction (an iterator for its container, a
+builder for its product); do not use them as a shortcut around a missing public
+function.
+
+## Inheritance {#sec-cpp-inheritance}
+
+### Deriving and overriding
+
+A class can **derive** from a base class, inheriting its members and adding or
+redefining some (@sec-inheritance). In C++ the base is listed after a colon,
+with an access specifier — almost always `public`, which means "is-a": a
+`Contract` *is an* `Interaction`, and can be used wherever an `Interaction` is
+expected.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+class Interaction {
+public:
+    Interaction(int customer_id, std::string date) : customer_id_(customer_id), date_(std::move(date)) {}
+    std::string summary() const { return date_ + " customer #" + std::to_string(customer_id_); }
+protected:
+    int customer_id_;                      // visible in derived classes
+    std::string date_;
+};
+
+class Appointment : public Interaction {
+public:
+    Appointment(int customer_id, std::string date, std::string agent)
+        : Interaction(customer_id, std::move(date)), agent_(std::move(agent)) {}   // base constructor first
+    std::string summary() const {          // redefines (hides) Interaction::summary
+        return Interaction::summary() + " with " + agent_;                         // call the base version
+    }
+private:
+    std::string agent_;
+};
+
+int main() {
+    Appointment a(7, "2026-11-20", "M. Bianchi");
+    std::cout << a.summary() << '\n';
+    const Interaction& base = a;           // an Appointment IS an Interaction
+    std::cout << base.summary() << '\n';   // but which summary is called?
+}
+""", name="inherit.cpp")
+```
+
+The last line calls `Interaction::summary`, not `Appointment::summary`: the
+function is chosen from the **static type** of the expression
+(`const Interaction&`), at compile time. This is *redefinition*, not
+polymorphism. To have the call depend on the actual object, the function must
+be **virtual** (@sec-virtual).
+
+### Multiple inheritance
+
+A C++ class may have several base classes. Unlike Python, C++ does not compute
+a method resolution order (@sec-mro): if two bases provide the same name, an
+unqualified use is **ambiguous** and does not compile; you disambiguate by
+naming the base.
+
+```{python}
+run(r"""
+#include <iostream>
+
+struct Printable { void describe() const { std::cout << "printable\n"; } };
+struct Storable  { void describe() const { std::cout << "storable\n"; } };
+
+struct Report : Printable, Storable {};      // two bases (struct: public by default)
+
+int main() {
+    Report r;
+    r.Printable::describe();                 // explicit: fine
+    r.Storable::describe();
+    r.describe();                            // which one? -> ambiguous
+}
+""", name="multiple.cpp", expect_error=True)
+```
+
+### The diamond and virtual inheritance {#sec-virtual-inheritance}
+
+When two bases share a common base, the object would contain the common base
+**twice**:
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "The diamond: Account derives from Customer and from Agent, which both derive from Person. Without virtual inheritance an Account contains two Person subobjects."
+flowchart BT
+    C["Customer"] --> P["Person"]
+    A["Agent"] --> P
+    AC["Account (customer who is also an agent)"] --> C
+    AC --> A
+```
+
+::: {#prp-subobjects}
+## How many copies of a base?
+In a hierarchy that uses only ordinary (non-virtual) inheritance, an object of
+class $D$ contains exactly one subobject of a base class $A$ **for each
+distinct path** from $D$ to $A$ in the inheritance graph. With **virtual**
+inheritance on every path into $A$, it contains exactly one.
+:::
+
+*In one line:* each path of "derives from" arrows embeds its own copy, unless
+the base is declared virtual, which makes all paths share one.
+
+::: {.deep kind="proof"}
+## Proof of @prp-subobjects
+Without virtual bases, an object of $D$ is laid out as one subobject for each
+*direct* base $B$, followed by $D$'s own members; each $B$ subobject is, in
+turn, a complete layout of $B$. Let $N(D, A)$ be the number of $A$
+subobjects in a $D$ object and $P(D, A)$ the number of paths from $D$ to $A$.
+For $D = A$ both are 1 (the empty path; the object is itself). For $D \ne A$
+with direct bases $B_1, \dots, B_k$:
+$N(D, A) = \sum_i N(B_i, A)$, because the $A$ subobjects of $D$ are exactly
+those inside its direct-base subobjects; and
+$P(D, A) = \sum_i P(B_i, A)$, because every path from $D$ starts with an edge
+to one $B_i$. The inheritance graph is acyclic (a class cannot derive from
+itself), so induction along it (@thm-toposort) gives $N = P$ everywhere. With
+virtual inheritance the standard requires that all virtual occurrences of $A$
+denote a single shared subobject [@iso14882, §class.mi], so $N = 1$.
+$\blacksquare$
+:::
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+struct Person { std::string name = "?"; };
+
+struct Customer1 : Person {};
+struct Agent1    : Person {};
+struct Account1  : Customer1, Agent1 {};            // two Person subobjects
+
+struct Customer2 : virtual Person {};               // virtual inheritance
+struct Agent2    : virtual Person {};
+struct Account2  : Customer2, Agent2 {};            // one shared Person
+
+int main() {
+    Account1 a1;
+    a1.Customer1::name = "as customer";
+    a1.Agent1::name = "as agent";                    // a different string!
+    std::cout << "non-virtual: " << a1.Customer1::name << " / " << a1.Agent1::name << '\n';
+    // a1.name = "x";                               // error: ambiguous (two names)
+
+    Account2 a2;
+    a2.name = "Ada";                                 // unambiguous: one Person
+    std::cout << "virtual: " << a2.Customer2::name << " / " << a2.Agent2::name << '\n';
+    std::cout << "sizeof(Account1) = " << sizeof(Account1)
+              << ", sizeof(Account2) = " << sizeof(Account2) << '\n';
+}
+""", name="diamond.cpp")
+```
+
+`Account1` holds two `std::string`s (32 bytes each with GCC); `Account2` holds
+one, plus two hidden pointers (8 bytes each) that its `Customer2` and `Agent2`
+parts use to find the shared `Person`. With virtual inheritance the shared `Person` is reached through an extra
+indirection (a pointer or offset stored in the object), and the most derived
+class becomes responsible for constructing it. Multiple inheritance of classes
+with state is rarely the best design; the common, safe use is inheriting from
+several **interfaces** — abstract classes without data (@sec-abstract) — which
+is also what Java and C# allow.
+
+## Polymorphism and virtual functions {#sec-virtual}
+
+### Virtual functions
+
+A member function declared **`virtual`** in a base class is chosen at run time
+from the **dynamic type** of the object — the type it was created with —
+whenever it is called through a pointer or reference to the base. A derived
+class **overrides** it by declaring a function with the same signature; the
+keyword `override` (C++11) asks the compiler to check that it really overrides
+something.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+class Interaction {
+public:
+    explicit Interaction(std::string date) : date_(std::move(date)) {}
+    virtual ~Interaction() = default;                       // see "virtual destructors" below
+    virtual std::string kind() const { return "interaction"; }
+    std::string describe() const { return date_ + " " + kind(); }   // non-virtual, but calls a virtual
+protected:
+    std::string date_;
+};
+
+class Appointment : public Interaction {
+public:
+    using Interaction::Interaction;                         // inherit the constructor
+    std::string kind() const override { return "appointment"; }
+};
+
+class Contract : public Interaction {
+public:
+    using Interaction::Interaction;
+    std::string kind() const override { return "contract"; }
+};
+
+int main() {
+    std::vector<std::unique_ptr<Interaction>> history;      // a polymorphic collection
+    history.push_back(std::make_unique<Appointment>("2026-11-20"));
+    history.push_back(std::make_unique<Contract>("2026-11-27"));
+    history.push_back(std::make_unique<Interaction>("2026-12-01"));
+    for (const auto& item : history)
+        std::cout << item->describe() << '\n';              // dynamic dispatch on kind()
+}
+""", name="virtual.cpp")
+```
+
+One loop treats appointments and contracts **uniformly**; each object answers
+`kind()` in its own way. This is **subtype** (or inclusion) **polymorphism**,
+the third kind in Cardelli and Wegner's classification after ad hoc
+(overloading) and parametric (templates) [@cardelli1985]. It is what lets the
+CRM list, search and save "interactions" without knowing in advance how many
+kinds there are. For the design to be sound, every override must honour the
+base class's contract — the Liskov substitution principle of @sec-lsp.
+
+### How it works: vtables {#sec-vtables .deep}
+
+C++ implementations realise virtual calls with a **virtual table** [@lippman1996;
+@itaniumabi]. For each class with virtual functions the compiler builds one
+table of function addresses, one slot per virtual function; each object
+contains a hidden pointer to its class's table (the **vptr**), set by the
+constructor. A call `p->kind()` becomes: load the vptr from `*p`, load the
+address in the slot of `kind`, call it — three steps, whatever the size of
+the hierarchy. The price is one pointer per object and an indirect call that
+the processor cannot inline:
+
+```{python}
+run(r"""
+#include <iostream>
+
+struct Plain   { int x; void f() {} };
+struct Virtual { int x; virtual void f() {} virtual ~Virtual() = default; };
+
+int main() {
+    std::cout << "sizeof(Plain) = " << sizeof(Plain) << ", sizeof(Virtual) = " << sizeof(Virtual) << '\n';
+}
+""", name="vptr.cpp")
+show(r"""
+struct Shape { virtual double area() const = 0; virtual ~Shape() = default; };
+double total_area(const Shape& s) { return s.area(); }      // one virtual call
+""", name="call.cpp")
+sh("g++ -std=c++20 -O2 -S call.cpp -o - | sed -n '/^_Z10total_areaRK5Shape:/,/\\.cfi_endproc/p' | "
+   "grep -Ev '\\.cfi|endbr'")
+```
+
+`Virtual` grows from 4 to 16 bytes: an 8-byte vptr plus `x`, padded to a
+multiple of 8 (@prp-padding). The function body is the whole mechanism: load
+the vptr from the object (`movq (%rdi), %rax`) and jump to the address stored
+in the first slot of the table (`jmp *(%rax)`). When the compiler can prove the
+dynamic type — for example for a `final` class or a local object — it
+**devirtualises** the call into a direct one.
+
+### Object slicing and virtual destructors
+
+Polymorphism works through **pointers and references**. Copying a derived
+object into a base-class *value* **slices** it: only the base part is copied,
+and the copy is a genuine base object.
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+struct Interaction { virtual ~Interaction() = default; virtual std::string kind() const { return "interaction"; } };
+struct Contract : Interaction { std::string kind() const override { return "contract"; } };
+
+void by_value(Interaction i)          { std::cout << "by value:     " << i.kind() << '\n'; }
+void by_reference(const Interaction& i) { std::cout << "by reference: " << i.kind() << '\n'; }
+
+int main() {
+    Contract c;
+    by_value(c);         // sliced: the copy is an Interaction
+    by_reference(c);     // polymorphic
+}
+""", name="slicing.cpp")
+```
+
+The second trap concerns destruction. If a derived object is deleted through
+a pointer to a base whose destructor is **not** virtual, only the base
+destructor runs — undefined behaviour that in practice leaks the derived part:
+
+```{python}
+run(r"""
+#include <iostream>
+#include <string>
+
+struct Base    { ~Base() { std::cout << "~Base\n"; } };                 // NOT virtual
+struct Derived : Base {
+    std::string data = std::string(100, 'x');                          // owns heap memory
+    ~Derived() { std::cout << "~Derived\n"; }
+};
+
+int main() {
+    Base* p = new Derived;
+    delete p;                       // only ~Base runs
+}
+""", name="nonvirtual_dtor.cpp")
+```
+
+**Rule:** a class meant to be used as a polymorphic base must have a
+**public virtual destructor** (or a protected non-virtual one, if deletion
+through the base must be forbidden) [@cppcoreguidelines, C.35]. GCC warns with
+`-Wdelete-non-virtual-dtor` when it can see the problem, and AddressSanitizer
+reports it as a `new-delete-type-mismatch`.
+
+### Abstract classes and pure virtual functions {#sec-abstract}
+
+Often the base class has no sensible implementation of a function: what is the
+"kind" or the "file format" of a generic interaction? A **pure virtual**
+function, declared with `= 0`, has no implementation in the base and **must**
+be overridden; a class with at least one pure virtual function is **abstract**
+and cannot be instantiated. An abstract class with only pure virtual functions
+and no data is an **interface** — the C++ counterpart of Python's abstract base
+classes (@sec-inheritance).
+
+```{python}
+run(r"""
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+class Interaction {                                         // abstract base
+public:
+    virtual ~Interaction() = default;
+    virtual std::string kind() const = 0;                   // pure virtual
+    virtual std::string details() const = 0;
+    virtual bool matches(const std::string& text) const {   // virtual with a default
+        return details().find(text) != std::string::npos;
+    }
+};
+
+class Appointment : public Interaction {
+public:
+    Appointment(std::string when, std::string agent) : when_(std::move(when)), agent_(std::move(agent)) {}
+    std::string kind() const override { return "appointment"; }
+    std::string details() const override { return when_ + ", agent " + agent_; }
+private:
+    std::string when_, agent_;
+};
+
+class Contract : public Interaction {
+public:
+    Contract(std::string number, long long premium_cents) : number_(std::move(number)), premium_(premium_cents) {}
+    std::string kind() const override { return "contract"; }
+    std::string details() const override {
+        return "policy " + number_ + ", premium " + std::to_string(premium_ / 100) + " EUR";
+    }
+private:
+    std::string number_;
+    long long premium_;
+};
+
+int main() {
+    std::vector<std::unique_ptr<Interaction>> v;
+    v.push_back(std::make_unique<Appointment>("2026-11-20 10:00", "M. Bianchi"));
+    v.push_back(std::make_unique<Contract>("CAR-0042", 48000));
+    for (const auto& i : v)
+        std::cout << i->kind() << ": " << i->details()
+                  << (i->matches("Bianchi") ? "   <- matches 'Bianchi'" : "") << '\n';
+    // Interaction i;   // error: cannot declare a variable of abstract type
+}
+""", name="abstract.cpp")
+```
+
+This is, in miniature, the design of the CRM's interactions (@sec-crm-design).
+
+## Copying objects: the rule of three, five and zero {#sec-rule-of-three}
+
+When an object is copied (`Customer b = a;`, pass by value, return by value,
+`push_back` into a vector), C++ calls its **copy constructor**; when it is
+assigned (`b = a;`), its **copy assignment operator**. If you do not write
+them, the compiler generates versions that copy each member. That is right for
+members that manage themselves (`int`, `std::string`, `std::vector`), and
+**wrong** for a class that owns a raw resource: two objects end up owning the
+same memory, and both destructors free it.
+
+```{python}
+run(r"""
+#include <cstring>
+
+class Buffer {                                   // owns a raw array: needs care
+public:
+    explicit Buffer(std::size_t n) : size_(n), data_(new char[n]) { std::memset(data_, 0, n); }
+    ~Buffer() { delete[] data_; }
+    // no copy constructor / copy assignment written: the compiler copies the POINTER
+private:
+    std::size_t size_;
+    char* data_;
+};
+
+int main() {
+    Buffer a(16);
+    Buffer b = a;                                // b.data_ == a.data_
+}                                                // ~b frees the array, then ~a frees it again
+""", name="double_free.cpp", sanitize="address", flags=("-O0",), filter_lines=sanitizer_summary)
+```
+
+Hence the classic **rule of three**, a piece of C++ folklore from the early
+1990s popularised by Meyers [@meyers2005]: if a class needs a user-written destructor, copy constructor or
+copy assignment, it almost certainly needs all three. C++11 added **move**
+operations (transfer ownership instead of copying, as `std::unique_ptr` does,
+@sec-raii), making it the **rule of five**. The modern advice is the **rule of
+zero** [@cppcoreguidelines, C.20]: design classes so that they need **none**
+of the five — let members that already manage their resources
+(`std::string`, `std::vector`, `std::unique_ptr`) do the work. The CRM's
+classes follow the rule of zero: none of them declares a destructor or a copy
+operation, except the virtual destructor of the abstract base.
+
+## Operator overloading {#sec-operator-overloading}
+
+C++ lets a class define the meaning of most operators for its objects:
+`a + b` becomes a call `operator+(a, b)` (or `a.operator+(b)`). This is what
+makes `std::string`'s `+` and `==`, and `std::cout << x`, possible. Overloaded
+operators should **behave like the built-in ones** (`+` should not subtract,
+`==` should be an equivalence): readers rely on the usual laws.
+
+```{python}
+run(r"""
+#include <compare>
+#include <iostream>
+#include <set>
+#include <string>
+
+class Money {
+public:
+    explicit Money(long long cents = 0) : cents_(cents) {}
+    Money& operator+=(Money other) { cents_ += other.cents_; return *this; }
+    friend Money operator+(Money a, Money b) { return a += b; }          // defined via +=
+    friend Money operator*(Money a, int k) { return Money(a.cents_ * k); }
+    friend auto operator<=>(const Money&, const Money&) = default;     // C++20: <, <=, >, >=, ==, !=
+    friend std::ostream& operator<<(std::ostream& os, Money m) {
+        return os << m.cents_ / 100 << '.' << (m.cents_ % 100 < 10 ? "0" : "") << m.cents_ % 100;
+    }
+private:
+    long long cents_;
+};
+
+int main() {
+    Money premium(21050), fee(250);
+    Money total = premium + fee * 2;
+    std::cout << "total: " << total << " EUR\n";
+    std::cout << std::boolalpha << (premium < total) << ' ' << (premium == Money(21050)) << '\n';
+    std::set<Money> distinct{Money(500), Money(100), Money(500)};       // uses operator<
+    std::cout << distinct.size() << " distinct amounts, smallest " << *distinct.begin() << '\n';
+}
+""", name="operators.cpp")
+```
+
+C++20's defaulted `operator<=>` ("spaceship") compares the members in
+declaration order — lexicographically, which is a strict total order whenever
+the members' orders are (@thm-lex-order) — and generates all six comparison
+operators.
+
+### What a comparator must satisfy {#sec-strict-weak}
+
+`std::sort`, `std::set` and `std::map` accept a custom "less than". The CRM,
+for instance, sorts customers by surname **ignoring case**, so that `rossi`
+and `Rossi` come together. Such a comparator does not distinguish all distinct
+values (`"rossi" != "Rossi"`), so it is not a strict total order; the standard
+requires only a weaker property [@iso14882, §alg.sorting]:
+
+::: {#def-strict-weak}
+## Strict weak order
+A relation $\prec$ on a set $S$ is a **strict weak order** if it is
+irreflexive (never $a \prec a$), transitive, and **incomparability is
+transitive**: writing $a \sim b$ when neither $a \prec b$ nor $b \prec a$,
+$a \sim b$ and $b \sim c$ imply $a \sim c$.
+:::
+
+::: {#thm-strict-weak}
+## A strict weak order is a total order of equivalence classes
+If $\prec$ is a strict weak order on $S$, then $\sim$ is an equivalence
+relation (@def-equivalence), and $\prec$ is well defined on the equivalence
+classes, where it is a strict total order. Sorting with $\prec$ therefore
+groups equivalent elements together and orders the groups.
+:::
+
+*In one line:* "neither is smaller" behaves like "equal", so the comparator
+sorts *groups* of equivalent elements as a total order would.
+
+::: {.deep kind="proof"}
+## Proof of @thm-strict-weak
+*$\sim$ is an equivalence.* Reflexive: $a \prec a$ is false, so $a \sim a$.
+Symmetric: the definition of $a \sim b$ is symmetric in $a$ and $b$.
+Transitive: this is the third axiom.
+
+*Well defined on classes.* Suppose $a \prec b$, $a \sim a'$ and $b \sim b'$; we
+show $a' \prec b'$. First, $a' \prec b$: otherwise either $b \prec a'$, and
+then $a \prec b \prec a'$ gives $a \prec a'$ by transitivity, contradicting
+$a \sim a'$; or $b \sim a'$, and then $a \sim a'$ and $a' \sim b$ give
+$a \sim b$, contradicting $a \prec b$. By the symmetric argument on the right,
+$a' \prec b$ and $b \sim b'$ give $a' \prec b'$.
+
+*Total on classes.* For two different classes $[a] \ne [b]$ we have
+$a \not\sim b$, i.e. $a \prec b$ or $b \prec a$; irreflexivity and
+transitivity carry over from $\prec$. $\blacksquare$
+:::
+
+Comparing `tolower(surname)` strings, for example, is a strict weak order: it
+is the strict total order of strings applied to a *key*, and any comparator of
+the form "compare $k(a) < k(b)$" for a key function $k$ is a strict weak order
+whose classes are the elements with equal keys. A comparator that breaks the
+axioms is **undefined behaviour** for the standard algorithms — `std::sort` may
+produce garbage or read outside the range. The commonest mistake is using
+`<=`, which is not irreflexive. The debug mode of GCC's library
+(`-D_GLIBCXX_DEBUG`) checks the axioms on the elements it compares:
+
+```{python}
+run(r"""
+#include <algorithm>
+#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> v{5, 3, 5, 1, 5, 2};
+    std::sort(v.begin(), v.end(), [](int a, int b) { return a <= b; });   // NOT a strict weak order
+    for (int x : v) std::cout << x << ' ';
+    std::cout << '\n';
+}
+""", name="bad_comparator.cpp", flags=("-O0", "-D_GLIBCXX_DEBUG"),
+    filter_lines=lambda l: "Error:" in l)
+```
+
+## Designing class hierarchies {#sec-cpp-design}
+
+The design principles of @sec-solid apply unchanged; C++ adds a few concrete
+rules that follow from this chapter [@cppcoreguidelines, section C]:
+
+| Situation | C++ rule |
+|---|---|
+| a type with an invariant | `class` with private data; constructors establish the invariant, `const` member functions read it |
+| plain data with no invariant | `struct` with public members |
+| a family of types used uniformly | an abstract base class with pure virtual functions and a public virtual destructor; derived classes `override` |
+| several "abilities" | inherit from several interfaces (abstract classes without data); avoid multiple inheritance of state |
+| "has-a" relationship | a data member (composition, @sec-composition), not inheritance |
+| owning a polymorphic object | `std::unique_ptr<Base>`; containers of `std::unique_ptr<Base>` |
+| resources | rule of zero; RAII members |
+
+: Class design rules in C++ {#tbl-cpp-design}
+
+::: {.project-link}
+**In the project.** The CRM's object model (@sec-crm-design, requirement R9 of
+@sec-crm-brief) is this chapter applied: an abstract class `Interaction` with a
+public virtual destructor and pure virtual functions (`kind`, `details`, and
+`add_fields`, which `to_record` calls when saving), a virtual `matches` with a
+default implementation for searching, and two concrete classes `Appointment`
+and `Contract` that `override` them. A `Customer` **owns** its
+interactions in a `std::vector<std::unique_ptr<Interaction>>`, so they are
+listed, searched and saved polymorphically, and destroyed automatically when
+the customer is deleted (rule of zero, R5). `Customer` keeps its data private
+behind `const` accessors and a validating `update`; dates compare with a
+defaulted `operator<=>`; and the listing sorts customers with a case-insensitive
+comparator — a strict weak order, as @thm-strict-weak requires.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Forgetting `virtual`**: the base version is called through base pointers
+  (redefinition is not overriding). Write `override` on every override, and
+  the compiler will catch mismatched signatures.
+- **No virtual destructor** in a polymorphic base: derived destructors are
+  skipped.
+- **Object slicing**: passing or storing polymorphic objects by value. Use
+  references, pointers, or `std::unique_ptr`.
+- **Calling virtual functions from constructors or destructors**: during
+  construction the object is still of the base type, so the base version runs.
+- **Rule of three violations**: a raw owning pointer member with the default
+  copy operations → double free. Prefer the rule of zero.
+- **Initialiser list order**: members are initialised in *declaration* order,
+  not in the order of the list (GCC warns with `-Wreorder`).
+- **Comparators that are not strict weak orders** (`<=`, inconsistent keys):
+  undefined behaviour in `std::sort`, `std::set`, `std::map`.
+- **Overloaded operators with surprising meaning**, or `==` without the
+  matching `!=` and `<` (C++20 `<=>` and `= default` avoid this).
+- **Friends as a shortcut** around encapsulation.
+:::
+
+## Summary
+
+- A class bundles private data with public member functions; `const` member
+  functions promise not to modify; `static` members belong to the class.
+- Constructors (default, parameterised, delegating, with initialiser lists)
+  establish the invariant or throw; destructors release resources. Destruction
+  runs in the **reverse** order of construction, the only order safe for every
+  dependency (@prp-reverse-destruction).
+- `public`/`protected`/`private` are checked at compile time; **friends** get
+  private access, granted by the class.
+- Inheritance (`: public Base`) models "is-a". Without `virtual`, functions are
+  chosen by the static type. Multiple inheritance is resolved by explicit
+  qualification; an object holds one base subobject per inheritance path, or
+  one in total with **virtual inheritance** (@prp-subobjects).
+- **Virtual functions** give run-time polymorphism through **vtables** (one
+  pointer per object, constant-time dispatch); **pure virtual** functions make
+  **abstract classes**. Polymorphic bases need **virtual destructors**; beware
+  **slicing**.
+- Rule of three/five, and better the **rule of zero**.
+- **Operator overloading** should respect the usual laws; comparators must be
+  **strict weak orders** (@thm-strict-weak).
+
+## Exercises
+
+::: {#exr-cpp7-order}
+Predict the output of
+```cpp
+struct A { A() { std::cout << "A"; } ~A() { std::cout << "a"; } };
+struct B { B() { std::cout << "B"; } ~B() { std::cout << "b"; } };
+struct C : A { B b1, b2; C() { std::cout << "C"; } ~C() { std::cout << "c"; } };
+int main() { C c; }
+```
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Construction: base `A`, then members `b1`, `b2` in declaration order, then the
+body: `ABBC`. Destruction in reverse: body of `~C`, members `b2`, `b1`, then
+base: `cbba`. Output: `ABBCcbba`.
+:::
+
+::: {#exr-cpp7-paths}
+Classes: `A`; `B : A`; `C : A`; `D : B, C`; `E : D, A`. How many `A`
+subobjects does an `E` contain? Which declarations would you make `virtual` to
+have exactly one?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Paths from `E` to `A`: E→D→B→A, E→D→C→A, E→A: three, so three `A` subobjects
+(@prp-subobjects). (GCC also warns that the direct base `A` of `E` is
+inaccessible due to ambiguity.) To have one, every path must enter `A`
+virtually: `B : virtual A`, `C : virtual A`, `E : D, virtual A`.
+:::
+
+::: {#exr-cpp7-comparator}
+Which of these are strict weak orders on strings? (a) `a.size() < b.size()`;
+(b) `a.size() <= b.size()`; (c) `a < b || a.size() < b.size()`;
+(d) `tolower_string(a) < tolower_string(b)`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Yes: a key comparison with key = length; classes = strings of equal
+length. (b) No: `a <= a` is true, violating irreflexivity. (c) No: take
+`a = "b"`, `b = "aa"`: `a < b` is false but `a.size() < b.size()` is true, so
+`a ≺ b`; and `b < a` (`"aa" < "b"`) is true, so `b ≺ a` as well — both
+directions hold, which contradicts irreflexivity via transitivity
+($a \prec b \prec a$ gives $a \prec a$). (d) Yes: a key comparison with key =
+lower-case version (@thm-strict-weak).
+:::
+
+::: {#exr-cpp7-shapes}
+Write an abstract class `Policy` with pure virtual functions
+`long long annual_premium_cents() const` and `std::string product() const`,
+and two concrete classes `CarPolicy` (premium = base + 10% per accident in the
+last five years) and `HomePolicy` (premium proportional to the insured value).
+Store some policies in a `std::vector<std::unique_ptr<Policy>>` and print the
+total premium. Where is the virtual destructor needed, and why?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```cpp
+class Policy {
+public:
+    virtual ~Policy() = default;                 // needed: unique_ptr<Policy> deletes through the base
+    virtual long long annual_premium_cents() const = 0;
+    virtual std::string product() const = 0;
+};
+class CarPolicy : public Policy {
+public:
+    CarPolicy(long long base, int accidents) : base_(base), accidents_(accidents) {}
+    long long annual_premium_cents() const override { return base_ + base_ * 10 * accidents_ / 100; }
+    std::string product() const override { return "car"; }
+private:
+    long long base_; int accidents_;
+};
+class HomePolicy : public Policy {
+public:
+    explicit HomePolicy(long long insured_cents) : insured_(insured_cents) {}
+    long long annual_premium_cents() const override { return insured_ / 1000; }   // 0.1%
+    std::string product() const override { return "home"; }
+private:
+    long long insured_;
+};
+// std::vector<std::unique_ptr<Policy>> v; v.push_back(std::make_unique<CarPolicy>(50000, 2)); ...
+// long long total = 0; for (const auto& p : v) total += p->annual_premium_cents();
+```
+The virtual destructor is needed in `Policy`, because each `std::unique_ptr<Policy>`
+deletes a `CarPolicy` or `HomePolicy` through a `Policy*`.
+:::
+
+## Further reading {.unnumbered}
+
+- @stroustrup2022, ch. 4–6 — classes, essential operations (copy, move,
+  rule of zero), templates, in the designer's own compact words.
+- @stroustrup2013, ch. 16–17 (classes, construction, destruction), ch. 18
+  (operator overloading), ch. 20–21 (derived classes, hierarchies).
+- @meyers2005 — *Effective C++*: items on virtual destructors, copying,
+  and the design of class interfaces.
+- @lippman1996 — how objects, vtables and virtual inheritance are laid out in
+  memory.
+- @cppcoreguidelines, section C (classes and class hierarchies).
+- @cardelli1985 — the kinds of polymorphism, and how they relate.

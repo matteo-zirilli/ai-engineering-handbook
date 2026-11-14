@@ -1,0 +1,8 @@
+jupyter: python3
+# Part II: almost every cell is a Python cell that compiles and runs a C/C++
+# program through cppbook.py and prints Markdown (source + output). Hence, by
+# default, cells are hidden and their output is inserted as-is. Cells whose
+# Python code must be shown (Chapter 8) override these options.
+execute:
+  echo: false
+  output: asis

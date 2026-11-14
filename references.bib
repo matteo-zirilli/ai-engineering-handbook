@@ -1598,6 +1598,630 @@
   url          = {https://x.com/karpathy/status/1886192184808149383}
 }
 
+% -----------------------------------------------------------------------------
+% Part II — High-performance programming with C and C++
+% -----------------------------------------------------------------------------
+
+% ---- Languages, standards, compilers (Chapters 1, 3, 6) ---------------------
+
+@book{kernighan1988,
+  author    = {Kernighan, Brian W. and Ritchie, Dennis M.},
+  title     = {The {C} Programming Language},
+  edition   = {2},
+  publisher = {Prentice Hall},
+  address   = {Englewood Cliffs, NJ},
+  year      = {1988},
+  isbn      = {978-0-13-110362-7},
+  note      = {"K\&R". Libraries and publisher. Ch. 2 (types and conversions), 3 (control flow), 4 (functions), 5 (pointers and arrays), 7 (input and output), Appendices A and B}
+}
+
+@book{kernighan1978,
+  author    = {Kernighan, Brian W. and Plauger, P. J.},
+  title     = {The Elements of Programming Style},
+  edition   = {2},
+  publisher = {McGraw-Hill},
+  address   = {New York},
+  year      = {1978},
+  isbn      = {978-0-07-034207-4},
+  note      = {Libraries. Source of the epigraph of Chapter 1 on debugging}
+}
+
+@book{kernighan1999,
+  author    = {Kernighan, Brian W. and Pike, Rob},
+  title     = {The Practice of Programming},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1999},
+  isbn      = {978-0-201-61586-9},
+  note      = {Libraries and publisher. Ch. 5 (debugging) is used in Chapter 1}
+}
+
+@inproceedings{ritchie1993,
+  author    = {Ritchie, Dennis M.},
+  title     = {The Development of the {C} Language},
+  booktitle = {History of Programming Languages Conference ({HOPL-II})},
+  pages     = {201--208},
+  publisher = {ACM},
+  year      = {1993},
+  doi       = {10.1145/154766.155580},
+  note      = {Free copy on the Nokia Bell Labs history pages. The origins of C's types, pointers and arrays}
+}
+
+@misc{iso9899,
+  author       = {{ISO/IEC JTC1/SC22/WG14}},
+  title        = {{ISO/IEC} 9899:2018 -- Programming languages -- {C}},
+  howpublished = {International standard ("C17")},
+  year         = {2018},
+  url          = {https://www.open-std.org/jtc1/sc22/wg14/},
+  note         = {Sold by ISO; the final committee draft N2176 is freely circulated and the WG14 site lists the working drafts. Clauses used: 3.4.3 (undefined behaviour), 5.2.4.2 (limits), 6.2.5 (types), 6.3 (conversions), 6.5.2.1 (subscripting), 6.8 (statements)}
+}
+
+@misc{iso9899c23,
+  author       = {{ISO/IEC JTC1/SC22/WG14}},
+  title        = {{ISO/IEC} 9899:2024 -- Programming languages -- {C}},
+  howpublished = {International standard ("C23"), published October 2024},
+  year         = {2024},
+  url          = {https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3220.pdf},
+  note         = {The URL is the free working draft N3220, almost identical to the published standard. New in C23: bool and nullptr keywords, two's complement required}
+}
+
+@misc{iso14882,
+  author       = {{ISO/IEC JTC1/SC22/WG21}},
+  title        = {{ISO/IEC} 14882:2024 -- Programming languages -- {C++}},
+  howpublished = {International standard ("C++23"), published October 2024},
+  year         = {2024},
+  url          = {https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/n4950.pdf},
+  note         = {The URL is the free working draft N4950, essentially the published text. Sections are cited by their stable names: basic.def.odr (one-definition rule), class.mi (multiple and virtual base classes), alg.sorting (requirements on comparators)}
+}
+
+@misc{sutter2026,
+  author       = {Sutter, Herb},
+  title        = {When a Language's Creator and Its Owners Strongly Disagree: {C++26} Post-{DIS}, Historical Experience, and Paths Forward},
+  howpublished = {WG21 paper P4454R0},
+  year         = {2026},
+  month        = oct,
+  url          = {https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p4454r0.pdf},
+  note         = {Free. Records the completion of the technical work on C++26 in March 2026 and the failed international ballot of October 2026 (status at the time of writing, November 2026)}
+}
+
+@misc{gccmanual,
+  author       = {{Free Software Foundation}},
+  title        = {Using the {GNU} Compiler Collection ({GCC})},
+  howpublished = {Online manual},
+  year         = {2026},
+  url          = {https://gcc.gnu.org/onlinedocs/gcc/},
+  note         = {Free. Chapter "GCC Command Options": warnings, debugging, optimisation and program instrumentation (sanitizers); accessed November 2026}
+}
+
+@misc{gcc16,
+  author       = {{GCC developers}},
+  title        = {{GCC} 16 Release Series},
+  howpublished = {Release page},
+  year         = {2026},
+  url          = {https://gcc.gnu.org/gcc-16/},
+  note         = {GCC 16.1 was released on 30 April 2026 and switched the default C++ dialect to C++20; accessed November 2026}
+}
+
+@misc{llvm23,
+  author       = {{LLVM Project}},
+  title        = {The {LLVM} Compiler Infrastructure},
+  howpublished = {Project home page},
+  year         = {2026},
+  url          = {https://llvm.org/},
+  note         = {LLVM/Clang 23.1.0 was released on 25 August 2026; accessed November 2026}
+}
+
+@inproceedings{lattner2004,
+  author    = {Lattner, Chris and Adve, Vikram},
+  title     = {{LLVM}: A Compilation Framework for Lifelong Program Analysis and Transformation},
+  booktitle = {International Symposium on Code Generation and Optimization ({CGO})},
+  pages     = {75--86},
+  publisher = {IEEE},
+  year      = {2004},
+  doi       = {10.1109/CGO.2004.1281665},
+  note      = {Free author copy on llvm.org. The paper that introduced LLVM}
+}
+
+@misc{vscodecpp,
+  author       = {{Microsoft}},
+  title        = {{C/C++} for {Visual Studio Code}},
+  howpublished = {Documentation},
+  year         = {2026},
+  url          = {https://code.visualstudio.com/docs/languages/cpp},
+  note         = {Free. Tutorials "GCC on Windows via MinGW" (MSYS2, UCRT64 toolchain), "Microsoft C++ on Windows", "GCC on Linux"; pages on tasks.json, launch.json and c\_cpp\_properties.json; accessed November 2026}
+}
+
+@book{bryant2016,
+  author    = {Bryant, Randal E. and O'Hallaron, David R.},
+  title     = {Computer Systems: A Programmer's Perspective},
+  edition   = {3},
+  publisher = {Pearson},
+  address   = {Boston},
+  year      = {2016},
+  isbn      = {978-0-13-409266-9},
+  note      = {Libraries and publisher. Ch. 1 (the toolchain), 2 (data representation), 3 (machine-level programs), 5 (performance), 7 (linking)}
+}
+
+@book{levine1999,
+  author    = {Levine, John R.},
+  title     = {Linkers and Loaders},
+  publisher = {Morgan Kaufmann},
+  address   = {San Francisco},
+  year      = {1999},
+  isbn      = {978-1-55860-496-4},
+  note      = {Libraries and publisher; a draft is freely available from the author's site. Symbols, relocation, libraries}
+}
+
+@article{feldman1979,
+  author  = {Feldman, Stuart I.},
+  title   = {Make -- A Program for Maintaining Computer Programs},
+  journal = {Software: Practice and Experience},
+  volume  = {9},
+  number  = {4},
+  pages   = {255--265},
+  year    = {1979},
+  doi     = {10.1002/spe.4380090402},
+  note    = {Libraries; free copies of the Bell Labs version circulate. The original description of Make}
+}
+
+@inproceedings{serebryany2012,
+  author    = {Serebryany, Konstantin and Bruening, Derek and Potapenko, Alexander and Vyukov, Dmitry},
+  title     = {{AddressSanitizer}: A Fast Address Sanity Checker},
+  booktitle = {{USENIX} Annual Technical Conference ({ATC})},
+  pages     = {309--318},
+  year      = {2012},
+  url       = {https://www.usenix.org/conference/atc12/technical-sessions/presentation/serebryany},
+  note      = {Open access at the URL. Shadow memory, typical 2x slowdown}
+}
+
+% ---- Compiled versus interpreted (Chapter 2) ----------------------------------
+
+@article{knuth1974,
+  author  = {Knuth, Donald E.},
+  title   = {Structured Programming with go to Statements},
+  journal = {ACM Computing Surveys},
+  volume  = {6},
+  number  = {4},
+  pages   = {261--301},
+  year    = {1974},
+  doi     = {10.1145/356635.356640},
+  note    = {Libraries; free copies widely available. Source of "premature optimization is the root of all evil" (p. 268) and of disciplined uses of goto}
+}
+
+@book{aho2006,
+  author    = {Aho, Alfred V. and Lam, Monica S. and Sethi, Ravi and Ullman, Jeffrey D.},
+  title     = {Compilers: Principles, Techniques, and Tools},
+  edition   = {2},
+  publisher = {Addison-Wesley},
+  address   = {Boston},
+  year      = {2006},
+  isbn      = {978-0-321-48681-3},
+  note      = {"The Dragon Book". Ch. 1 (compilers, interpreters, phases)}
+}
+
+@article{futamura1999,
+  author  = {Futamura, Yoshihiko},
+  title   = {Partial Evaluation of Computation Process -- An Approach to a Compiler-Compiler},
+  journal = {Higher-Order and Symbolic Computation},
+  volume  = {12},
+  number  = {4},
+  pages   = {381--391},
+  year    = {1999},
+  doi     = {10.1023/A:1010095604496},
+  note    = {Reprint of the 1971 paper (Systems, Computers, Controls 2(5)). The three Futamura projections}
+}
+
+@article{aycock2003,
+  author  = {Aycock, John},
+  title   = {A Brief History of Just-in-Time},
+  journal = {ACM Computing Surveys},
+  volume  = {35},
+  number  = {2},
+  pages   = {97--113},
+  year    = {2003},
+  doi     = {10.1145/857076.857077},
+  note    = {Libraries; free author copy}
+}
+
+@inproceedings{amdahl1967,
+  author    = {Amdahl, Gene M.},
+  title     = {Validity of the Single Processor Approach to Achieving Large Scale Computing Capabilities},
+  booktitle = {Proceedings of the {AFIPS} Spring Joint Computer Conference},
+  pages     = {483--485},
+  year      = {1967},
+  doi       = {10.1145/1465482.1465560},
+  note      = {Three pages, in words: the formula known as Amdahl's law is a later rendering}
+}
+
+@book{hennessy2017,
+  author    = {Hennessy, John L. and Patterson, David A.},
+  title     = {Computer Architecture: A Quantitative Approach},
+  edition   = {6},
+  publisher = {Morgan Kaufmann},
+  address   = {Cambridge, MA},
+  year      = {2017},
+  isbn      = {978-0-12-811905-1},
+  note      = {Libraries and publisher. §1.9 (quantitative principles, Amdahl's law)}
+}
+
+@article{karlin1988,
+  author  = {Karlin, Anna R. and Manasse, Mark S. and Rudolph, Larry and Sleator, Daniel D.},
+  title   = {Competitive Snoopy Caching},
+  journal = {Algorithmica},
+  volume  = {3},
+  pages   = {79--119},
+  year    = {1988},
+  doi     = {10.1007/BF01762111},
+  note    = {Libraries. Competitive analysis; the rent-or-buy (ski-rental) argument behind Theorem "interpret-then-compile is 2-competitive"}
+}
+
+@article{kerckhoffs1883,
+  author  = {Kerckhoffs, Auguste},
+  title   = {La cryptographie militaire},
+  journal = {Journal des sciences militaires},
+  volume  = {9},
+  pages   = {5--38, 161--191},
+  year    = {1883},
+  url     = {https://www.petitcolas.net/kerckhoffs/},
+  note    = {Scans and transcription freely available at the URL. The second of the six principles}
+}
+
+% ---- C: types, undefined behaviour, strings (Chapter 3) ------------------------
+
+@inproceedings{wang2013,
+  author    = {Wang, Xi and Zeldovich, Nickolai and Kaashoek, M. Frans and Solar-Lezama, Armando},
+  title     = {Towards Optimization-Safe Systems: Analyzing the Impact of Undefined Behavior},
+  booktitle = {Proceedings of the 24th {ACM} Symposium on Operating Systems Principles ({SOSP})},
+  pages     = {260--275},
+  year      = {2013},
+  doi       = {10.1145/2517349.2522728},
+  note      = {Open access. How optimisers exploit undefined behaviour and remove security checks}
+}
+
+@misc{lattner2011,
+  author       = {Lattner, Chris},
+  title        = {What Every {C} Programmer Should Know About Undefined Behavior},
+  howpublished = {LLVM Project Blog, three parts},
+  year         = {2011},
+  url          = {https://blog.llvm.org/2011/05/what-every-c-programmer-should-know.html},
+  note         = {Free. The compiler writer's view}
+}
+
+@article{matula1968,
+  author  = {Matula, David W.},
+  title   = {In-and-Out Conversions},
+  journal = {Communications of the ACM},
+  volume  = {11},
+  number  = {1},
+  pages   = {47--50},
+  year    = {1968},
+  doi     = {10.1145/362851.362887},
+  note    = {Libraries. How many digits are needed to convert between bases without loss; origin of FLT\_DIG and DECIMAL\_DIG formulas}
+}
+
+@misc{rfc20,
+  author       = {Cerf, Vinton G.},
+  title        = {{ASCII} Format for Network Interchange},
+  howpublished = {RFC 20},
+  year         = {1969},
+  doi          = {10.17487/RFC0020},
+  url          = {https://www.rfc-editor.org/rfc/rfc20},
+  note         = {Free. The ASCII code table (USA Standard X3.4-1968)}
+}
+
+@misc{spolsky2001,
+  author       = {Spolsky, Joel},
+  title        = {Back to Basics},
+  howpublished = {Joel on Software},
+  year         = {2001},
+  url          = {https://www.joelonsoftware.com/2001/12/11/back-to-basics/},
+  note         = {Free. "Shlemiel the painter" and the cost of null-terminated strings}
+}
+
+@book{seacord2013,
+  author    = {Seacord, Robert C.},
+  title     = {Secure Coding in {C} and {C++}},
+  edition   = {2},
+  publisher = {Addison-Wesley},
+  address   = {Upper Saddle River, NJ},
+  year      = {2013},
+  isbn      = {978-0-321-82213-0},
+  note      = {Libraries and publisher. Ch. 2 (strings, buffer overflows)}
+}
+
+@article{spafford1989,
+  author  = {Spafford, Eugene H.},
+  title   = {The Internet Worm Program: An Analysis},
+  journal = {ACM SIGCOMM Computer Communication Review},
+  volume  = {19},
+  number  = {1},
+  pages   = {17--57},
+  year    = {1989},
+  doi     = {10.1145/66093.66095},
+  note    = {Free Purdue technical report version (CSD-TR-823). The fingerd buffer overflow exploited by the Morris worm}
+}
+
+@misc{miller2019,
+  author       = {Miller, Matt},
+  title        = {Trends, Challenges, and Strategic Shifts in the Software Vulnerability Mitigation Landscape},
+  howpublished = {Talk at BlueHat IL, Microsoft Security Response Center},
+  year         = {2019},
+  url          = {https://msrc.microsoft.com/blog/2019/07/a-proactive-approach-to-more-secure-code},
+  note         = {The URL is the MSRC blog post that reports the talk's finding: about 70\% of the vulnerabilities fixed by Microsoft each year are memory-safety issues}
+}
+
+% ---- Control flow, functions, files (Chapters 4--5) ---------------------------
+
+@misc{langley2014,
+  author       = {Langley, Adam},
+  title        = {Apple's {SSL/TLS} Bug},
+  howpublished = {ImperialViolet blog},
+  year         = {2014},
+  url          = {https://www.imperialviolet.org/2014/02/22/applebug.html},
+  note         = {Free. The duplicated "goto fail;" line}
+}
+
+@misc{dijkstra1975,
+  author       = {Dijkstra, Edsger W.},
+  title        = {How Do We Tell Truths That Might Hurt?},
+  howpublished = {EWD 498},
+  year         = {1975},
+  url          = {https://www.cs.utexas.edu/~EWD/transcriptions/EWD04xx/EWD498.html},
+  note         = {Free transcription in the E. W. Dijkstra Archive}
+}
+
+@book{kerrisk2010,
+  author    = {Kerrisk, Michael},
+  title     = {The {Linux} Programming Interface},
+  publisher = {No Starch Press},
+  address   = {San Francisco},
+  year      = {2010},
+  isbn      = {978-1-59327-220-3},
+  note      = {Libraries and publisher; the man7.org pages by the same author are free. Ch. 4--5 and 13 (file I/O and buffering), 6 (processes), 20--22 (signals), 24--26 (process creation, termination, waiting), 44 (pipes)}
+}
+
+% ---- From C to C++, OOP (Chapters 6--7) -----------------------------------------
+
+@book{stroustrup1994,
+  author    = {Stroustrup, Bjarne},
+  title     = {The Design and Evolution of {C++}},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1994},
+  isbn      = {978-0-201-54330-8},
+  note      = {Libraries. Why C++ is the way it is: C with Classes, the zero-overhead principle, RAII, multiple inheritance}
+}
+
+@inproceedings{stroustrup2007,
+  author    = {Stroustrup, Bjarne},
+  title     = {Evolving a Language in and for the Real World: {C++} 1991--2006},
+  booktitle = {History of Programming Languages Conference ({HOPL-III})},
+  publisher = {ACM},
+  year      = {2007},
+  doi       = {10.1145/1238844.1238848},
+  note      = {Free author copy on stroustrup.com}
+}
+
+@book{stroustrup2013,
+  author    = {Stroustrup, Bjarne},
+  title     = {The {C++} Programming Language},
+  edition   = {4},
+  publisher = {Addison-Wesley},
+  address   = {Upper Saddle River, NJ},
+  year      = {2013},
+  isbn      = {978-0-321-56384-2},
+  note      = {The reference by the designer (C++11). Ch. 1 (design), 5.2 (resource management), 7 (pointers and references), 12 (functions, overloading), 14 (namespaces), 16--18 (classes, operators), 20--21 (derived classes), 23--29 (templates), 31 (containers), 38 (streams), 44 (compatibility)}
+}
+
+@book{stroustrup2022,
+  author    = {Stroustrup, Bjarne},
+  title     = {A Tour of {C++}},
+  edition   = {3},
+  publisher = {Addison-Wesley},
+  address   = {Boston},
+  year      = {2022},
+  isbn      = {978-0-13-681648-5},
+  note      = {Libraries and publisher. The whole of C++20 in about 250 pages: modules (§3.2.2), classes, essential operations, templates, containers}
+}
+
+@misc{stroustrup2025,
+  author       = {Stroustrup, Bjarne},
+  title        = {Bjarne Stroustrup Quotes},
+  howpublished = {Web page, modified 6 December 2025},
+  year         = {2025},
+  url          = {https://www.stroustrup.com/quotes.html},
+  note         = {Free. The author's own confirmation of quotes attributed to him}
+}
+
+@misc{cppcoreguidelines,
+  editor       = {Stroustrup, Bjarne and Sutter, Herb},
+  title        = {{C++} Core Guidelines},
+  howpublished = {Living document},
+  year         = {2026},
+  url          = {https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines},
+  note         = {Free. Rules cited by their identifiers: F.15--F.17 (parameter passing), R.11 (no naked new/delete), C.20 (rule of zero), C.35 (virtual destructors); accessed November 2026}
+}
+
+@misc{cppreference,
+  author       = {{cppreference.com contributors}},
+  title        = {{C++} reference},
+  howpublished = {Wiki},
+  year         = {2026},
+  url          = {https://en.cppreference.com/},
+  note         = {Free. The most practical reference for the standard library; accessed November 2026}
+}
+
+@misc{itaniumabi,
+  author       = {{Itanium C++ ABI contributors}},
+  title        = {{Itanium C++ ABI}},
+  howpublished = {Specification},
+  year         = {2026},
+  url          = {https://itanium-cxx-abi.github.io/cxx-abi/abi.html},
+  note         = {Free. Name mangling, virtual tables and object layout used by GCC and Clang on non-Windows platforms}
+}
+
+@techreport{stepanov1995,
+  author      = {Stepanov, Alexander and Lee, Meng},
+  title       = {The Standard Template Library},
+  institution = {Hewlett-Packard Laboratories},
+  number      = {HPL-95-11 (R.1)},
+  year        = {1995},
+  note        = {Free copies circulate. The design of containers, iterators and algorithms adopted by C++98}
+}
+
+@article{bayer1972,
+  author  = {Bayer, Rudolf},
+  title   = {Symmetric Binary {B}-Trees: Data Structure and Maintenance Algorithms},
+  journal = {Acta Informatica},
+  volume  = {1},
+  number  = {4},
+  pages   = {290--306},
+  year    = {1972},
+  doi     = {10.1007/BF00289509},
+  note    = {Libraries. The ancestor of red-black trees}
+}
+
+@inproceedings{guibas1978,
+  author    = {Guibas, Leonidas J. and Sedgewick, Robert},
+  title     = {A Dichromatic Framework for Balanced Trees},
+  booktitle = {19th Annual Symposium on Foundations of Computer Science ({FOCS})},
+  pages     = {8--21},
+  publisher = {IEEE},
+  year      = {1978},
+  doi       = {10.1109/SFCS.1978.3},
+  note      = {Libraries. The red-black formulation}
+}
+
+@article{cardelli1985,
+  author  = {Cardelli, Luca and Wegner, Peter},
+  title   = {On Understanding Types, Data Abstraction, and Polymorphism},
+  journal = {ACM Computing Surveys},
+  volume  = {17},
+  number  = {4},
+  pages   = {471--523},
+  year    = {1985},
+  doi     = {10.1145/6041.6042},
+  note    = {Free author copy on lucacardelli.name. §1.3: ad hoc, parametric and inclusion polymorphism}
+}
+
+@article{strachey2000,
+  author  = {Strachey, Christopher},
+  title   = {Fundamental Concepts in Programming Languages},
+  journal = {Higher-Order and Symbolic Computation},
+  volume  = {13},
+  pages   = {11--49},
+  year    = {2000},
+  doi     = {10.1023/A:1010000313106},
+  note    = {Publication of the 1967 Copenhagen lecture notes; §3.6.4 introduces ad hoc and parametric polymorphism}
+}
+
+@book{lippman1996,
+  author    = {Lippman, Stanley B.},
+  title     = {Inside the {C++} Object Model},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1996},
+  isbn      = {978-0-201-83454-3},
+  note      = {Libraries. How compilers lay out objects, vtables and virtual base classes}
+}
+
+@book{meyers2005,
+  author    = {Meyers, Scott},
+  title     = {Effective {C++}: 55 Specific Ways to Improve Your Programs and Designs},
+  edition   = {3},
+  publisher = {Addison-Wesley},
+  address   = {Upper Saddle River, NJ},
+  year      = {2005},
+  isbn      = {978-0-321-33487-9},
+  note      = {Libraries and publisher. Items on construction, copying, virtual destructors and interfaces}
+}
+
+@misc{kay1997,
+  author       = {Kay, Alan},
+  title        = {The Computer Revolution Hasn't Happened Yet},
+  howpublished = {Keynote at OOPSLA '97, Atlanta},
+  year         = {1997},
+  url          = {https://www.youtube.com/watch?v=oKg1hTOQXoY},
+  note         = {Video, free. The remark about C++ is about ten minutes in}
+}
+
+% ---- C++ and Python (Chapter 8) -------------------------------------------------
+
+@article{mcilroy1978,
+  author  = {McIlroy, M. Douglas and Pinson, E. N. and Tague, B. A.},
+  title   = {{UNIX} Time-Sharing System: Foreword},
+  journal = {The Bell System Technical Journal},
+  volume  = {57},
+  number  = {6},
+  pages   = {1899--1904},
+  year    = {1978},
+  doi     = {10.1002/j.1538-7305.1978.tb02135.x},
+  note    = {Free scans on archive.org. The four maxims of the Unix philosophy}
+}
+
+@article{ritchie1984,
+  author  = {Ritchie, Dennis M.},
+  title   = {The Evolution of the {Unix} Time-Sharing System},
+  journal = {AT\&T Bell Laboratories Technical Journal},
+  volume  = {63},
+  number  = {8},
+  pages   = {1577--1593},
+  year    = {1984},
+  doi     = {10.1002/j.1538-7305.1984.tb00054.x},
+  note    = {Free copy on the Nokia Bell Labs history pages. The introduction of pipes in 1973}
+}
+
+@misc{posix2024,
+  author       = {{IEEE and The Open Group}},
+  title        = {The Open Group Base Specifications Issue 8 ({IEEE} Std 1003.1-2024)},
+  howpublished = {POSIX standard},
+  year         = {2024},
+  url          = {https://pubs.opengroup.org/onlinepubs/9799919799/},
+  note         = {Free online. The pages of pipe(), write() (PIPE\_BUF, SIGPIPE), exit() and wait()}
+}
+
+@misc{pep324,
+  author = {Åstrand, Peter},
+  title  = {{PEP} 324 -- subprocess -- New process module},
+  year   = {2003},
+  url    = {https://peps.python.org/pep-0324/},
+  note   = {Free. The design of the subprocess module}
+}
+
+@article{coffman1971,
+  author  = {Coffman, E. G. and Elphick, M. and Shoshani, A.},
+  title   = {System Deadlocks},
+  journal = {ACM Computing Surveys},
+  volume  = {3},
+  number  = {2},
+  pages   = {67--78},
+  year    = {1971},
+  doi     = {10.1145/356586.356588},
+  note    = {Libraries. The four necessary conditions for deadlock}
+}
+
+@misc{pybind11,
+  author       = {Jakob, Wenzel and Rhinelander, Jason and Moldovan, Dean},
+  title        = {pybind11 -- Seamless operability between {C++11} and {Python}},
+  howpublished = {Software and documentation},
+  year         = {2017},
+  url          = {https://github.com/pybind/pybind11},
+  note         = {Free, open source}
+}
+
+% ---- Project (Chapter 9) ----------------------------------------------------------
+
+@book{brooks1995,
+  author    = {Brooks, Frederick P., Jr.},
+  title     = {The Mythical Man-Month: Essays on Software Engineering},
+  edition   = {Anniversary},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1995},
+  isbn      = {978-0-201-83595-3},
+  note      = {Libraries. Ch. 11, "Plan to Throw One Away" (and the author's second thoughts in ch. 19)}
+}
+
 % ---- Appendix: finding sources -------------------------------------------------
 
 @misc{pep1,

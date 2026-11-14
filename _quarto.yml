@@ -43,6 +43,17 @@ book:
         - python/13-virtual-environments.qmd
         - python/14-ai-coding-tools.qmd
         - python/15-project-phone-book.qmd
+    - part: cpp/index.qmd
+      chapters:
+        - cpp/01-environment.qmd
+        - cpp/02-compiled-vs-interpreted.qmd
+        - cpp/03-c-types-pointers-arrays.qmd
+        - cpp/04-control-flow.qmd
+        - cpp/05-functions-input-files.qmd
+        - cpp/06-from-c-to-cpp.qmd
+        - cpp/07-oop-in-cpp.qmd
+        - cpp/08-cpp-and-python.qmd
+        - cpp/09-project-crm.qmd
   appendices:
     - appendices/finding-sources.qmd
     - references.qmd

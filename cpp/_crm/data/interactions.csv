@@ -1,0 +1,6 @@
+id,customer_id,kind,date,time,agent,place,policy_number,product,premium_cents,end_date,notes
+1,1,appointment,2026-10-05,10:30,Sara Conti,Milano Centro agency,,,,,First meeting: wants car and home cover
+2,1,contract,2026-10-12,,,,CAR-2026-0007,car,48000,2027-10-11,"Includes theft cover, no-claims bonus class 3"
+3,1,contract,2026-10-12,,,,HOME-2026-0003,home,21050,2027-10-11,
+4,2,appointment,2026-11-20,15:00,Paolo Greco,Video call,,,,,Renewal of life policy
+5,3,contract,2025-03-01,,,,LIFE-2025-0112,life,96000,2035-02-28,Ten-year term

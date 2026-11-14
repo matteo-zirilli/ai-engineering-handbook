@@ -1,0 +1,1046 @@
+# Introduction to C: types, pointers and arrays {#sec-ch-c-intro}
+
+> *"C is quirky, flawed, and an enormous success."* — Dennis Ritchie
+> [@ritchie1993].
+
+```{python}
+from cppbook import run, show, sh, sanitizer_summary
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- write, compile and run a C program, and print values with `printf` and its
+  format specifiers;
+- choose among C's **integer types**, state their guaranteed ranges, use the
+  fixed-width types of `<stdint.h>`, and **prove** that unsigned arithmetic is
+  arithmetic modulo $2^n$;
+- explain **undefined behaviour**, show how signed overflow lets the optimiser
+  produce surprising code, and predict the **usual arithmetic conversions**
+  (why `-1 < 0u` is false);
+- use `float` and `double` knowing how many decimal digits each carries — and
+  **prove** where the numbers 7 and 16 come from;
+- treat `char` as a small integer encoding a character, and `bool` as the
+  result of comparisons;
+- explain **memory, addresses and pointers**; use `&`, `*`, `NULL` and pointer
+  arithmetic, and **prove** that `a[i]` and `*(a + i)` are the same thing;
+- work with **arrays** and **C strings**, explain why `strlen` is $O(n)$, and
+  **prove** that building a string with repeated `strcat` is quadratic;
+- recognise the memory errors — out-of-bounds access, dangling pointers,
+  buffer overflows — that make C powerful and dangerous.
+:::
+
+::: {.callout-tip}
+## Topics covered
+The data types of C (integers, floating-point numbers, characters, booleans),
+pointers, and the basic containers of C: arrays and strings.
+:::
+
+## Intuition: boxes with a size, an address and no labels
+
+In Python a variable is a **sticky note** attached to an object that carries
+its own type (@sec-variables). C is closer to the machine. A C variable *is*
+a **box**: a fixed number of bytes at a fixed place in memory. The box has
+
+- a **size**, decided by its type (4 bytes for a typical `int`);
+- an **address**, the number of its first byte in memory;
+- a **content**, a pattern of bits — and *no* label saying what the bits mean.
+
+The **type** exists only in the source code: it tells the compiler how many
+bytes to reserve and how to interpret the bits (as an unsigned number, a
+signed number, a floating-point number, a character code…). At run time there
+are only bytes. Everything in this chapter — overflow, conversions, pointers,
+arrays, strings — follows from this picture.
+
+## A first C program {#sec-first-c}
+
+C was created by Dennis Ritchie at Bell Labs between 1969 and 1973 to rewrite
+the Unix operating system [@ritchie1993]; its classic description is the book
+by Kernighan and Ritchie, "K&R" [@kernighan1988]. C++ (@sec-ch-c-vs-cpp) is
+built on it: almost every C program is also a C++ program, and the types of
+this chapter are the same in both languages.
+
+```{python}
+run(r"""
+/* hello.c — a first C program */
+#include <stdio.h>                 /* declarations of printf, scanf, fopen, ... */
+
+int main(void)                     /* main returns an int: the exit status */
+{
+    int year = 1972;               /* a variable: type, name, initial value */
+    double pi = 3.14159;
+    printf("C was born around %d.\n", year);
+    printf("pi is about %.2f, and %d / %d = %d (integer division)\n", pi, 7, 2, 7 / 2);
+    return 0;
+}
+""", name="hello.c")
+```
+
+Every statement ends with `;`, blocks are delimited by `{ }` (indentation is
+for humans only), comments are `/* … */` or `// …`, and every variable must be
+**declared with its type** before use. `printf` ("print formatted") writes its
+first argument, replacing each **conversion specification** starting with `%`
+by the next argument:
+
+| Specifier | Type of the argument | Example output |
+|---|---|---|
+| `%d`, `%i` | `int` | `-42` |
+| `%u` | `unsigned int` | `42` |
+| `%ld`, `%lld` | `long`, `long long` | `9000000000` |
+| `%zu` | `size_t` (sizes) | `8` |
+| `%x` | `unsigned int`, in hexadecimal | `2a` |
+| `%f`, `%.2f` | `double` (`float` is converted to `double`) | `3.141593`, `3.14` |
+| `%e`, `%g` | `double`, scientific / shortest | `3.141593e+00`, `3.14159` |
+| `%c` | a character (`int`) | `A` |
+| `%s` | a string (`char *`) | `hello` |
+| `%p` | a pointer (`void *`) | `0x7ffd5e8c` |
+
+: The most common `printf` conversion specifications {#tbl-printf}
+
+::: {.callout-warning}
+## The format must match the argument
+`printf` cannot check its arguments at run time: printing a `double` with
+`%d` is **undefined behaviour** (@sec-ub) and prints garbage. Compile with
+`-Wall`: GCC checks format strings against the arguments and warns.
+:::
+
+## Integer types {#sec-c-integers}
+
+### Sizes and ranges
+
+C offers integer types of several sizes, each in a **signed** and an
+**unsigned** version. The standard does not fix their sizes; it fixes
+**minimum ranges** and an order: `char` ≤ `short` ≤ `int` ≤ `long` ≤
+`long long` [@iso9899, §5.2.4.2.1 and §6.2.5]. `sizeof` gives the size of a
+type in bytes; `<limits.h>` gives the actual limits:
+
+```{python}
+run(r"""
+#include <limits.h>
+#include <stdio.h>
+
+int main(void)
+{
+    printf("%-20s %5s %22s %22s\n", "type", "bytes", "min", "max");
+    printf("%-20s %5zu %22d %22d\n", "signed char", sizeof(signed char), SCHAR_MIN, SCHAR_MAX);
+    printf("%-20s %5zu %22d %22d\n", "short", sizeof(short), SHRT_MIN, SHRT_MAX);
+    printf("%-20s %5zu %22d %22d\n", "int", sizeof(int), INT_MIN, INT_MAX);
+    printf("%-20s %5zu %22ld %22ld\n", "long", sizeof(long), LONG_MIN, LONG_MAX);
+    printf("%-20s %5zu %22lld %22lld\n", "long long", sizeof(long long), LLONG_MIN, LLONG_MAX);
+    printf("%-20s %5zu %22u %22u\n", "unsigned int", sizeof(unsigned), 0u, UINT_MAX);
+    printf("%-20s %5zu %22u %22llu\n", "unsigned long long", sizeof(unsigned long long), 0u, ULLONG_MAX);
+    return 0;
+}
+""", name="limits.c")
+```
+
+These are the values of 64-bit Linux (the LP64 data model of
+@tbl-data-models). The pattern is no accident:
+
+::: {#prp-int-ranges}
+## Ranges of $n$-bit integers
+With $n$ bits, an unsigned integer type represents exactly the integers
+$0, 1, \dots, 2^n - 1$, and a signed type in two's complement exactly
+$-2^{n-1}, \dots, 2^{n-1}-1$.
+:::
+
+*In one line:* $n$ bits give $2^n$ patterns; unsigned uses them all for
+non-negative numbers, two's complement gives half of them to negative numbers.
+
+This is @thm-bit-strings and @thm-twos-complement of Part I; for $n = 32$ the
+signed range is $[-2\,147\,483\,648,\ 2\,147\,483\,647]$, which you can check in
+the table. Since C23, two's complement is *required* for signed integers; C17
+still allowed two other representations that no current machine uses.
+
+### Fixed-width types
+
+When the size matters — file formats, network protocols, hashing, portability
+between Linux and Windows (@tbl-data-models) — use the types of
+`<stdint.h>` (C99), whose names say their width: `int8_t`, `int16_t`,
+`int32_t`, `int64_t` and the unsigned `uint8_t` … `uint64_t`. For sizes and
+counts of objects in memory, use `size_t`, the unsigned type returned by
+`sizeof` and by functions like `strlen`.
+
+### Unsigned arithmetic wraps around {#sec-unsigned-wrap}
+
+What is `UINT_MAX + 1`? For unsigned types the C standard gives a precise
+answer: arithmetic is performed **modulo $2^n$** [@iso9899, §6.2.5]. The result
+wraps around to 0, like a car's odometer:
+
+```{python}
+run(r"""
+#include <stdint.h>
+#include <stdio.h>
+
+int main(void)
+{
+    uint8_t  small = 250;
+    uint32_t big   = 4294967295u;            /* 2^32 - 1 */
+    small = small + 10;                      /* 260 mod 256 */
+    big   = big + 1;                         /* 2^32 mod 2^32 */
+    uint32_t x = 3000000000u, y = 2000000000u;
+    printf("small = %u, big = %u\n", small, big);
+    printf("x + y = %u   (5000000000 mod 2^32 = %llu)\n", x + y, 5000000000ull % 4294967296ull);
+    printf("0u - 1 = %u\n", 0u - 1);         /* wraps to UINT_MAX */
+    return 0;
+}
+""", name="wrap.c")
+```
+
+Why is this well defined and useful? Because computing modulo $2^n$ at every
+step gives the same result as computing exactly and reducing at the end.
+
+::: {#thm-mod-arith}
+## Reduction modulo $m$ commutes with $+$ and $\times$
+For integers $a, b$ and $m \ge 1$, writing $a \bmod m$ for the remainder of
+the Euclidean division (@lem-division):
+$$
+(a + b) \bmod m = \big((a \bmod m) + (b \bmod m)\big) \bmod m, \qquad
+(a b) \bmod m = \big((a \bmod m)(b \bmod m)\big) \bmod m .
+$$
+Consequently, any expression built from $+$, $-$ and $\times$ and evaluated in
+`uint32_t` (resp. `uint64_t`) gives the exact mathematical value reduced
+modulo $2^{32}$ (resp. $2^{64}$), whatever wrap-arounds happen along the way.
+:::
+
+*In one line:* the low $n$ bits of a sum or product depend only on the low $n$
+bits of the operands, so throwing away the high bits early loses nothing that
+the low bits of the final result need.
+
+::: {.deep kind="proof"}
+## Proof of @thm-mod-arith
+Write $a = q_a m + r_a$ and $b = q_b m + r_b$ with $r_a = a \bmod m$ and
+$r_b = b \bmod m$. Then $a + b = (q_a + q_b) m + (r_a + r_b)$, so $a + b$ and
+$r_a + r_b$ differ by a multiple of $m$ and have the same remainder modulo $m$.
+Likewise
+$ab = (q_a q_b m + q_a r_b + q_b r_a)\, m + r_a r_b$, so $ab$ and $r_a r_b$
+have the same remainder. Subtraction is addition of $-b$, and
+$(-b) \bmod m = (m - r_b) \bmod m$, so it is covered too.
+
+For the consequence, induct on the structure of the expression: a constant or
+variable is stored reduced; if two sub-expressions evaluate to the reductions
+of their exact values, the identities above show that the machine operation —
+which computes the exact result of the reduced operands and reduces it —
+yields the reduction of the exact value of the whole expression.
+$\blacksquare$
+:::
+
+This is why hash functions and random-number generators are written with
+unsigned types: their formulas are *defined* modulo $2^{32}$ or $2^{64}$, and
+the hardware computes exactly that for free.
+
+### Signed overflow is undefined behaviour {#sec-ub}
+
+For **signed** types the standard says the opposite: if the mathematical
+result does not fit, the behaviour is **undefined**.
+
+::: {#def-ub}
+## Undefined behaviour
+**Undefined behaviour** (UB) is behaviour "for which this document imposes no
+requirements" [@iso9899, §3.4.3]: if a program executes an operation with
+undefined behaviour, the standard says nothing about what the *whole* program
+does — it may crash, print garbage, or appear to work.
+:::
+
+Signed overflow, reading an uninitialised variable, dividing by zero, accessing
+an array out of bounds, and dereferencing a null or dangling pointer are all
+undefined. UB exists so that compilers can generate fast code on every
+machine: the optimiser is allowed to **assume it never happens**. The
+consequences can be startling:
+
+```{python}
+run(r"""
+#include <limits.h>
+#include <stdio.h>
+
+int will_not_overflow(int x) { return x + 1 > x; }   /* "obviously" true... unless x == INT_MAX */
+
+int main(void)
+{
+    printf("will_not_overflow(INT_MAX) = %d\n", will_not_overflow(INT_MAX));
+    return 0;
+}
+""", name="ub.c")
+sh("gcc -std=c17 -O2 -S ub.c -o - | sed -n '/^will_not_overflow:/,/ret/p' | grep -v '\\.cfi'")
+```
+
+With two's complement wrap-around, `INT_MAX + 1` would be `INT_MIN` and the
+comparison false. But the optimiser reasoned: "signed overflow cannot happen,
+so `x + 1 > x` is always true", and compiled the function to `return 1`
+(`movl $1, %eax`). Wang et al. found such optimisations silently removing
+security checks in real systems software [@wang2013]; Lattner's essay explains
+the compiler writer's side [@lattner2011]. The defence is to **test before**
+computing (`if (x == INT_MAX) …`), to use unsigned types when wrap-around is
+intended, and to run tests with `-fsanitize=undefined` (@sec-flags), which
+reports the overflow at run time:
+
+```{python}
+run(r"""
+#include <limits.h>
+#include <stdio.h>
+
+int main(void)
+{
+    int x = INT_MAX;
+    int y = x + 1;                 /* signed overflow */
+    printf("%d\n", y);
+    return 0;
+}
+""", name="overflow.c", sanitize="undefined", flags=("-O0",))
+```
+
+### Mixing types: promotions and the usual arithmetic conversions {#sec-conversions}
+
+An arithmetic operator needs operands of the **same** type. When they differ,
+C converts them implicitly, following rules that every C and C++ programmer
+must know [@iso9899, §6.3.1]:
+
+1. **Integer promotion**: operands smaller than `int` (`char`, `short`,
+   `uint8_t`, …) are first converted to `int`.
+2. **Usual arithmetic conversions**: if one operand is floating-point, the
+   other is converted to that floating type (the larger one if both are);
+   otherwise, the operand of lower **rank** is converted to the type of higher
+   rank (`int` < `long` < `long long`), and if a signed and an unsigned operand
+   have the same rank, **the signed one is converted to unsigned**.
+
+Rule 2's last clause causes one of C's classic traps:
+
+::: {#exm-minus-one}
+## Why `-1 < 0u` is false
+In `-1 < 0u` the operands are `int` and `unsigned int`, of the same rank, so
+`-1` is converted to `unsigned int`. Conversion to an unsigned type is
+reduction modulo $2^{32}$: $-1 \bmod 2^{32} = 2^{32} - 1 = 4\,294\,967\,295$.
+The comparison evaluated is $4\,294\,967\,295 < 0$: false. The same happens in
+`for (int i = 0; i < v_size; ++i)` when `v_size` is a `size_t` and `i` becomes
+negative — which is why GCC warns about signed/unsigned comparisons
+(@sec-flags).
+:::
+
+```{python}
+run(r"""
+#include <stdio.h>
+#include <string.h>
+
+int main(void)
+{
+    printf("-1 < 0u        : %d\n", -1 < 0u);
+    printf("(unsigned)-1   : %u\n", (unsigned)-1);
+    printf("7 / 2 = %d, 7 / 2.0 = %g, (double)7 / 2 = %g\n", 7 / 2, 7 / 2.0, (double)7 / 2);
+    printf("-7 / 2 = %d, -7 %% 2 = %d   (C truncates toward zero)\n", -7 / 2, -7 % 2);
+    if (strlen("abc") - 4 > 0)                          /* size_t arithmetic: 3 - 4 wraps! */
+        printf("strlen(\"abc\") - 4 > 0 is true: %zu\n", strlen("abc") - 4);
+    return 0;
+}
+""", name="conversions.c", flags=("-O2",))
+```
+
+Note also that **integer division truncates toward zero** in C (`-7 / 2` is
+`-3`), unlike Python's `//`, which floors (`-7 // 2` is `-4`, @eq-floor-div).
+An explicit **cast** `(double)x` converts a value on purpose.
+
+## The bits behind a type {.deep}
+
+The same 8, 16 or 32 bits mean different numbers depending on the type through
+which they are read. Choose a width and a bit pattern (as an unsigned value)
+and compare the unsigned and two's-complement readings (@eq-twos):
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof bitsN = Inputs.radio([8, 16, 32], {value: 8, label: "width n (bits)"})
+viewof bitsU = Inputs.range([0, 2 ** bitsN - 1], {step: 1, value: Math.min(200, 2 ** bitsN - 1), label: "unsigned value"})
+```
+
+```{ojs}
+//| echo: false
+bitsRow = {
+  const n = bitsN, u = Math.min(bitsU, 2 ** n - 1);
+  const pattern = u.toString(2).padStart(n, "0").replace(/(.{4})(?=.)/g, "$1 ");
+  const signed = u >= 2 ** (n - 1) ? u - 2 ** n : u;
+  return [{"bit pattern": pattern, "as unsigned": u, "as signed (two's complement)": signed,
+           "hexadecimal": "0x" + u.toString(16).padStart(n / 4, "0")}];
+}
+Inputs.table(bitsRow, {layout: "auto"})
+```
+:::
+
+Try $n = 8$ with values 127, 128 and 255: the signed reading jumps from $127$ to
+$-128$ and reaches $-1$ — wrap-around and the conversion of
+@exm-minus-one, seen from the bits.
+
+
+
+## Floating-point types {#sec-c-floats}
+
+C has three floating-point types: `float`, `double` and `long double`. On all
+common platforms `float` and `double` are the IEEE 754 **binary32** and
+**binary64** formats [@ieee754]; Python's `float` *is* a C `double`
+(@sec-floats). Their significands have $p = 24$ and $p = 53$ bits respectively.
+How many decimal digits is that?
+
+::: {#prp-decimal-digits}
+## Decimal precision of a binary format
+In a binary floating-point format with a $p$-bit significand, the gap between
+a normal number $x$ and the next one is between $2^{-p}|x|$ and
+$2^{1-p}|x|$. The format therefore carries about $p \log_{10} 2$ significant
+decimal digits: $7.22$ for `float` and $15.95$ for `double`.
+:::
+
+*In one line:* each significand bit is worth $\log_{10} 2 \approx 0.301$
+decimal digits, so 24 bits ≈ 7 digits and 53 bits ≈ 16 digits.
+
+::: {.deep kind="proof"}
+## Proof of @prp-decimal-digits
+Let $2^E \le |x| < 2^{E+1}$. As in the proof of @thm-rounding-error, the
+numbers of the format in $[2^E, 2^{E+1}]$ are equally spaced with gap
+$g = 2^{E - (p-1)} = 2^{E+1-p}$. Dividing by $|x|$ and using
+$2^E \le |x| < 2^{E+1}$ gives $2^{-p} < g/|x| \le 2^{1-p}$. A relative
+resolution of $2^{-p}$ corresponds to $q$ decimal digits when $10^{-q} = 2^{-p}$,
+i.e. $q = p \log_{10} 2$; with $\log_{10} 2 \approx 0.30103$ this is
+$24 \times 0.30103 = 7.22$ and $53 \times 0.30103 = 15.95$. $\blacksquare$
+:::
+
+The C standard publishes two related constants, derived by Matula
+[@matula1968]: `FLT_DIG` / `DBL_DIG`, the number of decimal digits that
+survive a decimal → binary → decimal round trip,
+$\lfloor (p-1)\log_{10} 2 \rfloor$ (6 and 15); and `FLT_DECIMAL_DIG` /
+`DBL_DECIMAL_DIG`, the digits needed to print a binary number so that reading
+it back gives the same bits, $\lceil 1 + p \log_{10} 2 \rceil$ (9 and 17). The
+practical lesson: use **`double`** unless memory is tight (as in GPU tensors,
+where `float` and even 16-bit formats are common); `float` runs out of digits
+quickly.
+
+```{python}
+run(r"""
+#include <float.h>
+#include <stdio.h>
+
+int main(void)
+{
+    printf("FLT_DIG = %d, DBL_DIG = %d, FLT_DECIMAL_DIG = %d, DBL_DECIMAL_DIG = %d\n",
+           FLT_DIG, DBL_DIG, FLT_DECIMAL_DIG, DBL_DECIMAL_DIG);
+    float f = 0.1f;
+    double d = 0.1;
+    printf("0.1 as float : %.20f\n0.1 as double: %.20f\n", f, d);
+
+    float fsum = 0.0f;
+    double dsum = 0.0;
+    for (int i = 0; i < 10000000; ++i) {     /* add 0.1 ten million times */
+        fsum += 0.1f;
+        dsum += 0.1;
+    }
+    printf("sum in float : %.6f\nsum in double: %.6f   (exact: 1000000)\n", fsum, dsum);
+    printf("16777216.0f + 1.0f = %.1f\n", 16777216.0f + 1.0f);   /* 2^24 + 1 is not a float */
+    return 0;
+}
+""", name="floats.c", flags=("-O2",))
+```
+
+The `float` sum is off by almost 9%. Each addition is rounded to a multiple of
+the gap between consecutive floats near the running total (@prp-decimal-digits):
+between $2^{18}$ and $2^{19}$ the gap is $1/32$ and $0.1$ is effectively added
+as $3/32 = 0.09375$; between $2^{19}$ and $2^{20}$ the gap is $1/16$ and $0.1$
+becomes $2/16 = 0.125$. The errors no longer cancel. From
+$2^{24} \approx 1.7\times 10^7$ on, the gap is 2 and even adding 1 has no
+effect, as the last line shows. The rules
+of @sec-floats — never compare floats for exact equality, beware of
+accumulated error — apply unchanged in C.
+
+## Characters: `char` {#sec-c-char}
+
+A `char` is a **one-byte integer**. What makes it a "character" is only the
+convention that its value is a code in a character set — on every current
+system an extension of **ASCII**, the 1963 American standard that assigns codes
+0–127 to letters, digits, punctuation and control characters [@rfc20]. A
+character literal like `'A'` is just a way of writing the integer 65:
+
+```{python}
+run(r"""
+#include <ctype.h>
+#include <stdio.h>
+
+int main(void)
+{
+    char c = 'A';
+    printf("'%c' has code %d; next is '%c'\n", c, c, c + 1);
+    printf("'7' - '0' = %d   (digit character -> number)\n", '7' - '0');
+    printf("toupper('q') = '%c', isdigit('5') = %d, isalpha('5') = %d\n",
+           toupper('q'), isdigit('5') != 0, isalpha('5') != 0);
+    printf("newline = %d, tab = %d, NUL = %d\n", '\n', '\t', '\0');
+    return 0;
+}
+""", name="chars.c")
+```
+
+Two facts matter in practice:
+
+- `'0'`, `'1'`, …, `'9'` have **consecutive** codes (the standard guarantees
+  it), so `c - '0'` converts a digit character to its value — the core of
+  every hand-written number parser;
+- whether plain `char` is signed or unsigned is **implementation-defined**
+  (signed on x86, unsigned on ARM Linux). Bytes above 127, such as the UTF-8
+  encoding of `è` (@sec-utf8), may thus become negative numbers. Pass
+  characters to the `<ctype.h>` functions as `unsigned char`.
+
+A C `char` is a **byte**, not a Unicode character: `"è"` is a string of *two*
+`char`s in UTF-8. C and C++ programs that handle international text either
+treat strings as opaque UTF-8 bytes (as the project does) or use a dedicated
+library.
+
+## Booleans {#sec-c-bool}
+
+Early C had no Boolean type: comparisons and logical operators produce the
+`int` values `1` (true) and `0` (false), and in a condition **any non-zero
+scalar is true** — like Python's truthiness, but only for numbers and
+pointers (@sec-truthiness). C99 added the type `_Bool` and the header
+`<stdbool.h>` with the names `bool`, `true`, `false`; since C23 they are
+keywords, as they always were in C++.
+
+```{python}
+run(r"""
+#include <stdbool.h>
+#include <stdio.h>
+
+int main(void)
+{
+    bool ok = (3 < 5);
+    printf("3 < 5 is %d, 3 > 5 is %d, sizeof(bool) = %zu\n", ok, 3 > 5, sizeof(bool));
+    bool b = 42;                        /* conversion to bool: any non-zero value -> 1 */
+    printf("(bool)42 = %d\n", b);
+    if (-3) printf("-3 counts as true in a condition\n");
+    return 0;
+}
+""", name="bools.c")
+```
+
+## Memory, addresses and pointers {#sec-pointers}
+
+### The model
+
+To C, memory is a huge **array of bytes**, numbered from 0: the number of a
+byte is its **address** (@sec-von-neumann). A variable of type `T` occupies
+`sizeof(T)` consecutive bytes; its address is the address of the first one.
+
+::: {#def-pointer}
+## Pointer
+A **pointer** to `T` (type `T *`) is a variable whose value is the address of
+an object of type `T`. The operator `&` gives the address of a variable
+(`&x`); the operator `*` **dereferences** a pointer, i.e. denotes the object it
+points to (`*p`). The special value `NULL` (C23 and C++: `nullptr`) points to
+no object.
+:::
+
+*In one line:* a pointer is an address with a type attached, so the compiler
+knows what lives at that address.
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int x = 10;
+    int *p = &x;                       /* p holds the address of x */
+    printf("x = %d, *p = %d\n", x, *p);
+    *p = 20;                           /* write THROUGH the pointer: changes x */
+    printf("after *p = 20, x = %d\n", x);
+    printf("sizeof(int) = %zu, sizeof(int *) = %zu, sizeof(double *) = %zu\n",
+           sizeof(int), sizeof(int *), sizeof(double *));
+    int *q = NULL;
+    if (q == NULL) printf("q points nowhere; dereferencing it would be undefined behaviour\n");
+    return 0;
+}
+""", name="pointers.c")
+```
+
+All pointers are 8 bytes on a 64-bit machine, whatever they point to: an
+address is an address. The type `int *` matters for what `*p` *means* (read 4
+bytes as an `int`) and for pointer arithmetic.
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "A pointer p holding the address of x. Addresses are illustrative; each int occupies 4 bytes."
+flowchart LR
+    subgraph memory["memory (addresses grow →)"]
+      direction LR
+      X["x : int<br/>address 1000<br/>value 20"]
+      P["p : int*<br/>address 1008<br/>value 1000"]
+    end
+    P -- "*p" --> X
+```
+
+Why would we want pointers? Three reasons, which we will meet in turn:
+
+1. to let a function **modify** the caller's variables (C passes arguments by
+   value, @sec-ch-c-tools);
+2. to refer to **large objects** without copying them;
+3. to manage memory whose size is known only **at run time** (@sec-malloc) and
+   to build linked data structures.
+
+### Pointer arithmetic
+
+If `p` points to an element of an array, `p + 1` points to the **next
+element**, not to the next byte:
+
+::: {#def-pointer-arith}
+## Pointer arithmetic
+For a pointer `p` of type `T *` and an integer `i`, `p + i` is the pointer of
+type `T *` whose address is $\text{address}(p) + i \cdot \texttt{sizeof(T)}$.
+It is defined only if both `p` and `p + i` point into the same array (or one
+past its last element). The difference `q - p` of two pointers into the same
+array is the number of elements between them.
+:::
+
+::: {#prp-subscript}
+## Subscripting is pointer arithmetic
+For an array or pointer `a` and an integer `i`, the expression `a[i]` is
+*defined* by the standard as `*(a + i)` [@iso9899, §6.5.2.1]. Consequently
+`a[i]`, `*(a + i)`, `*(i + a)` and even `i[a]` all denote the same object.
+:::
+
+*In one line:* indexing is "start at the beginning, skip $i$ elements, look
+there" — exactly the address formula $\text{base} + i\cdot s$ of
+@sec-indexing.
+
+::: {.deep kind="proof"}
+## Proof of @prp-subscript
+`a[i]` ≡ `*(a + i)` by definition. Addition of a pointer and an integer is
+commutative by @def-pointer-arith (the address computed for `i + a` is the
+same, $\text{address}(a) + i\cdot\texttt{sizeof(T)}$), so `*(a + i)` ≡
+`*(i + a)`, which by the same definition of subscripting is `i[a]`.
+$\blacksquare$
+:::
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+int main(void)
+{
+    int a[5] = {10, 20, 30, 40, 50};
+    int *p = a;                                 /* the array "decays" to &a[0] */
+    printf("a[2] = %d, *(a + 2) = %d, 2[a] = %d, *(p + 2) = %d\n", a[2], *(a + 2), 2[a], *(p + 2));
+    printf("byte distance between &a[3] and &a[0]: %td\n", (char *)&a[3] - (char *)&a[0]);
+    printf("element distance (&a[3] - &a[0]): %td\n", &a[3] - &a[0]);
+    for (int *q = a; q < a + 5; ++q)            /* walk the array with a pointer */
+        printf("%d ", *q);
+    printf("\n");
+    return 0;
+}
+""", name="arith.c")
+```
+
+(`2[a]` is legal and means `a[2]`; it is shown only to make the proposition
+concrete — never write it.)
+
+## Arrays {#sec-c-arrays}
+
+An **array** `T a[N]` is `N` objects of type `T` stored **contiguously**. It
+is the only built-in container of C, and it is what Python's list is built on
+(@sec-dynamic-arrays). Its properties follow from the model:
+
+- **fixed size**: `N` must be known when the array is created and never
+  changes;
+- **$O(1)$ access** to any element, by @def-pointer-arith;
+- **no bounds checking**: `a[N]` or `a[-1]` compile and silently read or write
+  someone else's memory — undefined behaviour (sanitizers catch it,
+  @sec-flags);
+- **decay**: in most expressions the name of an array is converted to a pointer
+  to its first element; in particular an array **passed to a function arrives
+  as a pointer**, and the function no longer knows its length.
+
+```{python}
+run(r"""
+#include <stdio.h>
+
+double average(const double *values, size_t n)   /* the length must travel separately */
+{
+    double sum = 0.0;
+    for (size_t i = 0; i < n; ++i)
+        sum += values[i];
+    return n ? sum / n : 0.0;
+}
+
+int main(void)
+{
+    double temps[] = {21.5, 23.0, 19.5, 22.0};               /* size deduced: 4 */
+    size_t n = sizeof temps / sizeof temps[0];               /* bytes of the array / bytes of one element */
+    printf("n = %zu, average = %.2f\n", n, average(temps, n));
+
+    int grid[2][3] = {{1, 2, 3}, {4, 5, 6}};                 /* 2 rows of 3: stored row after row */
+    printf("grid[1][2] = %d, sizeof grid = %zu bytes\n", grid[1][2], sizeof grid);
+    return 0;
+}
+""", name="arrays.c")
+```
+
+The idiom `sizeof a / sizeof a[0]` works **only** where `a` is a true array;
+inside `average`, `values` is a pointer and `sizeof values` would be 8. A
+two-dimensional array is stored **row by row** (row-major order), so element
+`[i][j]` of a `R × C` array is at offset $iC + j$ — the layout NumPy calls
+C order.
+
+## Strings {#sec-c-strings}
+
+C has no string type. A **C string** is an array of `char` that contains the
+characters followed by a terminating **null character** `'\0'` (value 0). The
+literal `"cat"` is an array of **four** `char`s: `'c' 'a' 't' '\0'`.
+
+```{python}
+run(r"""
+#include <stdio.h>
+#include <string.h>
+
+int main(void)
+{
+    char word[] = "cat";                         /* {'c','a','t','\0'} */
+    printf("sizeof word = %zu, strlen(word) = %zu\n", sizeof word, strlen(word));
+    for (size_t i = 0; i <= strlen(word); ++i)
+        printf("word[%zu] = %3d '%c'\n", i, word[i], word[i] ? word[i] : '0');
+
+    char buffer[32];
+    snprintf(buffer, sizeof buffer, "%s has %zu letters", word, strlen(word));  /* bounded write */
+    printf("%s\n", buffer);
+    printf("strcmp(\"apple\", \"banana\") = %d (negative: comes first)\n",
+           strcmp("apple", "banana") < 0 ? -1 : 1);
+    return 0;
+}
+""", name="strings.c")
+```
+
+| Function (`<string.h>`, `<stdio.h>`) | Does | Watch out |
+|---|---|---|
+| `strlen(s)` | number of characters before `'\0'` | $O(n)$: it scans |
+| `strcmp(a, b)` | $<0$, $0$, $>0$: lexicographic order of byte values (@sec-sorting) | `a == b` compares **addresses**, not contents |
+| `strcpy(dst, src)` | copies `src` into `dst` | no size check: overflows `dst` |
+| `strcat(dst, src)` | appends `src` at the end of `dst` | no size check; rescans `dst` |
+| `snprintf(dst, n, fmt, …)` | formatted write of at most `n - 1` chars + `'\0'` | the safe default for building strings |
+| `strchr(s, c)`, `strstr(s, t)` | find a character / a substring | return a pointer or `NULL` |
+
+: Common C string functions {#tbl-c-strings}
+
+### The cost of not storing the length
+
+Because a C string does not store its length, `strlen` must **walk** until the
+`'\0'`: $\Theta(n)$ for a string of length $n$, where Python's `len` is $O(1)$.
+The cost compounds in loops. Joel Spolsky called the resulting pattern
+**Shlemiel the painter's algorithm**, after a painter who keeps walking back to
+the paint can at the start of the road [@spolsky2001]:
+
+::: {#prp-schlemiel}
+## Repeated `strcat` is quadratic
+Appending $k$ pieces of length $L$ each to an initially empty string with
+`strcat` reads $\Theta(k^2 L)$ characters. Keeping a pointer to the current end
+and copying each piece there reads $\Theta(kL)$ characters.
+:::
+
+*In one line:* each `strcat` first walks over everything appended so far, and
+"everything so far" grows linearly.
+
+::: {.deep kind="proof"}
+## Proof of @prp-schlemiel
+Before the $j$-th append ($j = 1, \dots, k$) the string has length $(j-1)L$.
+`strcat` scans those $(j-1)L$ characters to find the end, then copies $L$
+characters. The total is
+$$
+\sum_{j=1}^{k} \big((j-1)L + L\big) = L \sum_{j=1}^{k} j = L\,\frac{k(k+1)}{2} = \Theta(k^2 L),
+$$
+using Gauss's formula (@eq-gauss). With an end pointer, the scan disappears and
+each append costs $L$: total $kL$. $\blacksquare$
+:::
+
+```{python}
+run(r"""
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+
+enum { PIECES = 40000, PIECE_LEN = 5 };
+static char buffer[PIECES * PIECE_LEN + 1];
+
+int main(void)
+{
+    clock_t t0 = clock();
+    buffer[0] = '\0';
+    for (int i = 0; i < PIECES; ++i)
+        strcat(buffer, "abcde");                        /* rescans from the start every time */
+    double t_strcat = (double)(clock() - t0) / CLOCKS_PER_SEC;
+
+    t0 = clock();
+    char *end = buffer;
+    for (int i = 0; i < PIECES; ++i) {
+        memcpy(end, "abcde", PIECE_LEN);                /* write at the known end */
+        end += PIECE_LEN;
+    }
+    *end = '\0';
+    double t_end = (double)(clock() - t0) / CLOCKS_PER_SEC;
+
+    printf("length %zu: strcat %.3f s, end pointer %.6f s\n", strlen(buffer), t_strcat, t_end);
+    return 0;
+}
+""", name="schlemiel.c", flags=("-O2",))
+```
+
+C++'s `std::string` (@sec-ch-c-vs-cpp) stores the length and the capacity,
+like a dynamic array, so its `size()` is $O(1)$ and `+=` is $O(1)$ amortised
+per character (@thm-amortized-append).
+
+### Buffer overflows
+
+`strcpy`, `strcat`, `sprintf` and the input function `gets` write as many
+bytes as the source provides, regardless of the size of the destination. A
+longer input overwrites whatever lies next in memory — other variables, or the
+saved return address of the function, which an attacker can redirect to code of
+their choosing. The Morris worm of 1988, one of the first Internet worms,
+spread, among other ways, by overflowing a buffer filled by `gets` in the
+`fingerd` server [@spafford1989]. `gets` was removed from the language in C11. Decades
+later, memory-safety errors — buffer overflows, use after free, and their
+relatives — were still the root cause of about 70% of the vulnerabilities
+Microsoft fixed each year [@miller2019]. The rules:
+
+- always pass the **size** of the destination (`snprintf`, `fgets`,
+  `strncat` with care), and check return values;
+- prefer data structures that know their size: in C++, `std::string` and
+  `std::vector` (@sec-ch-c-vs-cpp);
+- test with **AddressSanitizer**.
+
+```{python}
+run(r"""
+#include <stdio.h>
+#include <string.h>
+
+int main(void)
+{
+    char name[8];
+    const char *input = "Bartholomew";              /* 11 characters + '\0' = 12 bytes */
+    strcpy(name, input);                            /* writes 12 bytes into 8 */
+    printf("%s\n", name);
+    return 0;
+}
+""", name="overflow_str.c", sanitize="address", flags=("-O0", "-Wall"), filter_lines=sanitizer_summary)
+```
+
+Here GCC already warns at compile time, because both sizes are constants; when
+the string comes from the user or a file, only a run-time check — or a correct
+program — can help. The sanitizer stops the program at the faulty `strcpy`
+(frame `#1 … in main overflow_str.c:8`).
+
+## Arrays of run-time size: `malloc` and `free` {#sec-malloc}
+
+Arrays declared in a function live on the **stack** and disappear when the
+function returns; their size must be known in advance. For data whose size is
+known only at run time — the number of records in a file — C programs ask the
+system for memory on the **heap**: `malloc(n)` returns a pointer to `n` fresh
+bytes (or `NULL` if none are available), `realloc` resizes a block (possibly
+moving it), and `free` gives the memory back.
+
+```{python}
+run(r"""
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void)
+{
+    size_t n = 0, capacity = 2;
+    int *v = malloc(capacity * sizeof *v);           /* room for 2 ints */
+    if (v == NULL) return 1;
+    for (int x = 1; x <= 10; ++x) {
+        if (n == capacity) {                         /* full: double the capacity */
+            capacity *= 2;
+            int *bigger = realloc(v, capacity * sizeof *v);
+            if (bigger == NULL) { free(v); return 1; }
+            v = bigger;
+            printf("grew to capacity %zu\n", capacity);
+        }
+        v[n++] = x * x;
+    }
+    for (size_t i = 0; i < n; ++i) printf("%d ", v[i]);
+    printf("\n");
+    free(v);                                         /* every malloc needs exactly one free */
+    return 0;
+}
+""", name="dynarray.c")
+```
+
+This is a **dynamic array** built by hand, with the doubling strategy whose
+$O(1)$ amortised cost we proved in @thm-amortized-append. The burden is on
+the programmer: forgetting `free` **leaks** memory; using `v` after `free`
+(a **dangling pointer**) or freeing twice is undefined behaviour. C++ removes
+most of this burden with constructors, destructors and `std::vector`
+(@sec-ch-c-vs-cpp); the CRM never calls `malloc`.
+
+::: {.project-link}
+**In the project.** The CRM (@sec-ch-project-crm) is written in C++ and uses
+`std::string` and the standard containers rather than C arrays and C strings,
+for exactly the reasons of @sec-c-strings: they know their size and grow on
+demand. This chapter still shapes the design: customer and interaction
+**identifiers** are unsigned integers of a fixed width (`std::uint32_t`,
+@sec-c-integers), dates are validated objects written in the ISO form
+`YYYY-MM-DD`, which sorts correctly even as text, and premium amounts are kept as **integer cents** (a `std::int64_t`)
+rather than `double`, so that 0.10 + 0.20 is exactly 0.30 (@sec-c-floats).
+Parsing user input into these types safely is the subject of @sec-ch-c-tools.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Assuming sizes**: `int` is not necessarily 32 bits, `long` is 32 bits on
+  Windows. Use `<stdint.h>` when it matters, `size_t` for sizes.
+- **Signed overflow**: undefined, not "wrap-around". Check before computing.
+- **Mixing signed and unsigned**: `-1 < 0u` is false; `strlen(s) - 1` with an
+  empty string is a huge number.
+- **Integer division**: `7 / 2` is `3`; cast first (`(double)7 / 2`).
+- **`float` for money or large sums**: use `double`, or integers in cents.
+- **Uninitialised variables and pointers**: their value is indeterminate.
+- **Out-of-bounds access**: not checked; undefined behaviour.
+- **`sizeof` on an array parameter**: it is a pointer; pass the length.
+- **`==` on strings** compares addresses: use `strcmp`.
+- **Forgetting the `'\0'`**: a string of $n$ characters needs $n + 1$ bytes.
+- **Unbounded string functions** (`strcpy`, `strcat`, `sprintf`, `gets`):
+  use bounded ones and check sizes.
+- **Leaks, double `free`, use after `free`.**
+:::
+
+## Summary
+
+- A C variable is a box of `sizeof(T)` bytes at an address; types exist at
+  compile time and decide size and interpretation.
+- Integer types have minimum ranges; with $n$ bits, unsigned covers
+  $[0, 2^n-1]$ and two's complement $[-2^{n-1}, 2^{n-1}-1]$. **Unsigned
+  arithmetic is modulo $2^n$** (@thm-mod-arith); **signed overflow is undefined
+  behaviour**, and optimisers exploit it.
+- Mixed operands undergo **promotions** and the **usual arithmetic
+  conversions**; signed meets unsigned → unsigned.
+- `float` ≈ 7 and `double` ≈ 16 significant digits (@prp-decimal-digits);
+  prefer `double`.
+- `char` is a one-byte integer holding a character code; `bool` (C99/C23) holds
+  0 or 1; any non-zero scalar is true.
+- A **pointer** holds an address; `&` takes it, `*` follows it; `p + i` moves
+  by $i$ elements, and `a[i]` *is* `*(a + i)` (@prp-subscript).
+- **Arrays** are fixed-size, contiguous, unchecked, and decay to pointers.
+  **C strings** are `'\0'`-terminated arrays: `strlen` is $O(n)$ and repeated
+  `strcat` is quadratic (@prp-schlemiel); unbounded writes cause buffer
+  overflows.
+- `malloc`/`realloc`/`free` manage heap memory by hand.
+
+## Exercises
+
+::: {#exr-cpp3-ranges}
+For a 16-bit `short`, give `SHRT_MIN` and `SHRT_MAX`. What is the value of
+`(unsigned short)-2`? And of `(short)40000`? (Converting an out-of-range value
+to a signed type is implementation-defined in C; C++20 defines it as reduction
+modulo $2^n$, which is also what GCC does in C.)
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$[-2^{15}, 2^{15}-1] = [-32\,768, 32\,767]$. `(unsigned short)-2` is
+$-2 \bmod 2^{16} = 65\,534$. `(short)40000`: $40\,000 \bmod 2^{16} = 40\,000$,
+which lies in the upper half of the 16-bit patterns, so the two's-complement
+reading is $40\,000 - 65\,536 = -25\,536$.
+:::
+
+::: {#exr-cpp3-hash}
+The FNV-1a hash of a byte string is computed as: `h = 2166136261`; for each
+byte `b`: `h = (h ^ b) * 16777619`, all in `uint32_t`. Write it in C and use
+@thm-mod-arith to explain why the result is the same on every platform even
+though the multiplication overflows at almost every step.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```c
+#include <stdint.h>
+uint32_t fnv1a(const unsigned char *s, size_t n) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; ++i) {
+        h ^= s[i];
+        h *= 16777619u;          /* wraps modulo 2^32: well defined for unsigned */
+    }
+    return h;
+}
+```
+`uint32_t` arithmetic is defined as arithmetic modulo $2^{32}$; by
+@thm-mod-arith the result equals the exact value of the formula reduced modulo
+$2^{32}$, which does not depend on the machine. With a signed `int32_t`, the
+overflow would be undefined behaviour.
+:::
+
+::: {#exr-cpp3-predict}
+Predict the output, then check by compiling with warnings:
+```c
+unsigned u = 3; int i = -5;
+printf("%d\n", u + i > 0);
+printf("%d\n", -7 / 2 * 2 + -7 % 2);
+char s[] = "hello";
+printf("%zu %zu\n", sizeof s, strlen(s));
+```
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+`u + i`: `i` is converted to `unsigned` ($2^{32}-5$), the sum is
+$2^{32} - 2$ modulo $2^{32}$, i.e. 4 294 967 294, which is $> 0$: prints `1`.
+`-7 / 2 * 2 + -7 % 2` $= (-3)\cdot 2 + (-1) = -7$: C guarantees
+`(a/b)*b + a%b == a`. `sizeof s` is 6 (five letters and `'\0'`), `strlen(s)`
+is 5.
+:::
+
+::: {#exr-cpp3-pointers}
+Write a function `void minmax(const int *a, size_t n, int *min, int *max)` that
+stores the minimum and the maximum of a non-empty array in the variables
+pointed to by `min` and `max`. Why does it need pointers for the results?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```c
+void minmax(const int *a, size_t n, int *min, int *max) {
+    *min = *max = a[0];
+    for (size_t i = 1; i < n; ++i) {
+        if (a[i] < *min) *min = a[i];
+        if (a[i] > *max) *max = a[i];
+    }
+}
+/* usage: int lo, hi; minmax(v, 5, &lo, &hi); */
+```
+C passes arguments by value: the function receives copies. To deliver two
+results to the caller's variables it receives their **addresses** and writes
+through them. (C++ references make this more convenient, @sec-ch-c-vs-cpp.)
+:::
+
+::: {#exr-cpp3-digits}
+Using @prp-decimal-digits, how many significant decimal digits does the IEEE
+754 binary16 ("half precision", $p = 11$) format carry? And bfloat16, used to
+train neural networks ($p = 8$)? What does this suggest about accumulating
+sums in those formats?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$11 \log_{10}2 \approx 3.3$ and $8 \log_{10} 2 \approx 2.4$ digits. With so few
+digits, adding a small number to a large running sum loses it entirely (as in
+the `float` experiment, but much sooner): this is why mixed-precision training
+keeps accumulators and master weights in `float` (binary32).
+:::
+
+## Further reading {.unnumbered}
+
+- @kernighan1988 — "K&R": ch. 2 (types, operators, conversions), ch. 5
+  (pointers and arrays), Appendix A (the reference manual). Still the best
+  introduction to C.
+- @iso9899 — the C standard (the free draft N3220 is almost identical to
+  C23): §5.2.4.2 (limits), §6.2.5 (types), §6.3 (conversions), §6.5.2.1
+  (subscripting).
+- @ritchie1993 — Ritchie's own history of how C's types and pointers came
+  about.
+- @bryant2016, ch. 2 (representing and manipulating information: integers and
+  floating point, at the bit level) and ch. 3 (how arrays and pointers become
+  machine code).
+- @wang2013 and @lattner2011 — undefined behaviour seen by systems researchers
+  and by a compiler writer.
+- @seacord2013 — secure programming in C and C++, ch. 2 on strings and buffer
+  overflows.
+- @matula1968 — the classic analysis of decimal ↔ binary conversion.

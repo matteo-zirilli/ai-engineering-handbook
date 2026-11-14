@@ -1,0 +1,5 @@
+id,first_name,last_name,phone,email,city
+1,Giulia,Ferrari,+39 02 5550 1234,giulia.ferrari@example.com,Milano
+2,Marco,Russo,333 555 0199,,Torino
+3,Chiara,Esposito,081 555 0147,chiara.esposito@example.org,Napoli
+4,Luca,Bianchi,,luca.bianchi@example.net,Bologna

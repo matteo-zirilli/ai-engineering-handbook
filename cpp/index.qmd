@@ -1,0 +1,95 @@
+# High-performance programming with C and C++ {.unnumbered}
+
+> *"There are only two kinds of languages: the ones people complain about and
+> the ones nobody uses."* — Bjarne Stroustrup [@stroustrup2025].
+
+This part corresponds to the second course of the master: programming in C
+and C++, the compiled languages in which operating systems, databases, game
+engines and the numerical kernels of every AI framework are written. It takes
+a reader who knows Python (Part I) to the point of writing a well-structured
+object-oriented C++ application that stores its data in files, never crashes
+on wrong input — and of making C++ and Python programs work together.
+
+The chapters follow the order in which the skills build on each other: the
+tools to compile, run and debug; what it means for a language to be compiled
+rather than interpreted; the data types, pointers and arrays of C; control
+flow; functions, input and files; what C++ adds to C; object-oriented
+programming in C++; and, finally, how a C++ program and a Python script
+exchange data through standard streams and pipes.
+
+::: {.callout-note}
+## Why this part matters for an AI engineer
+Python is the language of AI, but the work is done in compiled code: NumPy,
+PyTorch, TensorFlow, ONNX Runtime and llama.cpp are written in C and C++ (and
+CUDA, a C++ dialect). Knowing how that code manages memory, what it costs to
+cross the boundary between Python and C++, and how to write a small fast
+component yourself is what lets you understand performance problems, read the
+source of the tools you use, and deploy models where Python is not available.
+:::
+
+## What you will be able to do {.unnumbered}
+
+1. Install and configure a C/C++ toolchain on Windows or Linux, with VS Code,
+   and build, debug and sanitize programs (@sec-ch-cpp-env).
+2. Compare compiled and interpreted execution on performance, portability,
+   confidentiality and workflow, and decide with Amdahl's law what is worth
+   moving to C++ (@sec-ch-compiled).
+3. Represent data in C with the right types, and use pointers, arrays and
+   strings knowing exactly what happens in memory (@sec-ch-c-intro).
+4. Control execution with conditions, `switch` and loops, avoiding the traps of
+   fixed-width integers (@sec-ch-c-control).
+5. Organise code into functions, read user input robustly, and read and write
+   files in C and C++ (@sec-ch-c-tools).
+6. Use what C++ adds to C: references, namespaces, overloading, RAII, smart
+   pointers and the standard containers (@sec-ch-c-vs-cpp).
+7. Design class hierarchies in C++ with constructors, destructors, access
+   control, inheritance, virtual functions and operator overloading
+   (@sec-ch-cpp-oop).
+8. Make C++ programs and Python scripts exchange data through standard streams
+   and pipes, and manage how processes end (@sec-ch-cpp-python).
+
+## Prerequisites {.unnumbered}
+
+Part I, in particular @sec-ch-intro (how a computer executes programs, binary
+numbers), @sec-ch-variables (two's complement and floating point),
+@sec-ch-collections (dynamic arrays, hash tables, sorting) and @sec-ch-oop
+(classes and design principles). This part links back to them instead of
+repeating them.
+
+## Compiler and standards used {.unnumbered}
+
+Every C++ example is compiled with **GCC (`g++`) 13 using `-std=c++20 -O2
+-Wall -Wextra`**, and every C example with **`gcc -std=c17`**, on x86-64
+Linux; each one was actually compiled and executed when the book was built,
+and the outputs shown are the real ones. In the source of the book, each
+example is a small Python cell that writes the program to a file, compiles it,
+runs it and prints its output — the helper is
+[`cpp/cppbook.py`](https://github.com/matteo-zirilli/ai-engineering-handbook/blob/main/cpp/cppbook.py).
+Results that depend on the platform (sizes of types, timings, addresses) are
+marked as such in the text. The Python code of @sec-ch-cpp-python uses Python
+3.13.
+
+## Map of the part {.unnumbered}
+
+| Chapter | Core topics | What the book adds |
+|---|---|---|
+| @sec-ch-cpp-env | VS Code with C/C++ on Windows and Linux | the toolchain stage by stage, symbols and linking, warnings and sanitizers, GDB, Make and CMake, a proof of the minimal rebuild set |
+| @sec-ch-compiled | compiled vs interpreted languages | definitions and Futamura projections, measured speed gap and dispatch cost, Amdahl's law, JIT break-even and the 2-competitive ski-rental strategy, data models, what a binary reveals |
+| @sec-ch-c-intro | types, pointers, arrays and strings in C | integer ranges, arithmetic modulo $2^n$, undefined behaviour exploited by optimisers, the usual arithmetic conversions, decimal digits of `float`/`double`, $a[i] \equiv *(a+i)$, quadratic `strcat`, buffer overflows, `malloc` |
+| @sec-ch-c-control | comparisons, `if`, logical operators, `switch`, loops, `break`/`continue` | chained comparisons, dangling else, jump tables and a $\log_2$ lower bound, `for` vs `while` with `continue`, the unsigned count-down and the safe midpoint, the sieve and the harmonic series |
+| @sec-ch-c-tools | functions, user input, files | call stack, scope and lifetime, buffering and system calls, overflow-safe parsing, `strtol` and `std::from_chars`, C and C++ files, an RFC 4180 CSV codec |
+| @sec-ch-c-vs-cpp | references, namespaces, `struct`, default arguments, overloading, encapsulation, `new`/`delete` | zero-overhead principle, struct padding, overload resolution and name mangling, RAII and `unique_ptr`, containers, iterator invalidation, red–black tree height, templates |
+| @sec-ch-cpp-oop | classes, constructors, destructors, access, inheritance, virtual and pure virtual functions, friends, operator overloading | construction/destruction order, virtual inheritance and subobject counting, vtables, slicing, virtual destructors, rule of three/five/zero, strict weak orders |
+| @sec-ch-cpp-python | data exchange between C++ and Python through streams and pipes, process termination | pipe semantics, exit statuses and signals, `subprocess.run`/`Popen`, flushing and framing, a deadlock theorem, `SIGPIPE`, binary data, cost model and `ctypes` |
+| @sec-ch-project-crm | the final project | requirements, design, cost analysis, a tested reference implementation driven from Python |
+
+## The final project {.unnumbered}
+
+The course ends with a **command-line CRM prototype for an insurance
+company**: an interactive C++ console application, designed with
+object-oriented principles, that manages customers and their interactions —
+appointments and contracts — searches them, saves everything to CSV files,
+loads it at start-up and never crashes on wrong input.
+@sec-ch-project-crm states the requirements in my own words, maps each of them
+to the chapters above, discusses the design, and presents a complete reference
+implementation, built with sanitizers and tested by driving it from Python.
