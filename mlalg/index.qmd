@@ -103,7 +103,10 @@ is known) or are public data sets with a clear licence that ship with
 scikit-learn: the wine data [@aeberhard1992] and the Wisconsin breast-cancer
 data [@wolberg1993] already used in Part III, Fisher's iris data
 [@fisher1936; @fisher1936data] and the handwritten digits [@alpaydin1998], all
-under CC BY 4.0.
+under CC BY 4.0. The project analyses the fruit measurements provided by the course,
+whose licence is not declared: the handbook does not contain the file but
+reads it from the companion repository, pinned to a commit, and checks what it
+contains (@sec-fruit-data).
 
 ## Map of the part {.unnumbered}
 
@@ -116,6 +119,7 @@ under CC BY 4.0.
 | @sec-ch-mla-nn | artificial neuron, activations, multilayer perceptron, training, universal approximation | Novikoff's theorem, XOR, vanishing gradients, backpropagation derived and implemented, Glorot/He initialisation, a constructive universal approximation proof |
 | @sec-ch-mla-knn | nearest neighbours, $k$-NN, distance metrics, radius neighbours | Minkowski metrics proved, scaling and Mahalanobis, choosing $k$ honestly, Cover–Hart bound, curse of dimensionality, a reject option |
 | @sec-ch-mla-trees | decision trees, bias–variance, bagging, random forests | impurity concavity, best-split search from scratch, cost-complexity pruning, variance of correlated averages, out-of-bag $1/e$, MDI versus permutation importance |
+| @sec-ch-mla-project | the final project | requirements, a forensic look at the data (synthetic, with inconsistencies) and a Bayes ceiling, a re-execution and code review of the published notebook, nested comparison of five models, error analysis, conclusions in plain words |
 
 ## The final project {.unnumbered}
 
@@ -127,14 +131,9 @@ evaluation on unseen data that goes beyond overall accuracy to the errors
 between specific classes, and an explanation that colleagues without a
 technical background can follow.
 
-::: {.callout-important}
-## Status of the project chapter
-The project chapter — the requirements restated in my own words, the
-provenance and the checks of the data (which turn out to be synthetic, with
-some inconsistencies), the mapping from requirements to the chapters above, a
-re-execution and code review of the notebook I submitted, and a reference
-implementation — is in preparation and will be added in the next update of
-the book. The data file and the notebook are already in the companion
-repository
-[`ai-projects`](https://github.com/matteo-zirilli/ai-projects/blob/main/Exotic_Fruit_Classification_KNN.ipynb).
-:::
+@sec-ch-mla-project states the requirements in my own words, checks in code
+where the data come from and what they contain — they turn out to be
+synthetic, with some impossible values — maps each requirement to the
+chapters above, reviews the notebook I submitted after re-executing it, and
+presents a reference implementation that compares five classifiers by nested
+cross-validation against an estimate of the best achievable accuracy.

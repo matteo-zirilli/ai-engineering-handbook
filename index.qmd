@@ -65,7 +65,7 @@ each part is always the same:
 | I | [Programming with Python](python/index.qmd) | ✅ available |
 | II | [High-performance programming with C and C++](cpp/index.qmd) | ✅ available |
 | III | [Foundations of machine learning](ml/index.qmd) | ✅ available |
-| IV | [Machine learning: models and algorithms](mlalg/index.qmd) | ✅ theory chapters available; project chapter in preparation |
+| IV | [Machine learning: models and algorithms](mlalg/index.qmd) | ✅ available |
 | V–XII | the remaining courses of the master | 🛠 in preparation |
 
 ## Conventions {.unnumbered}
@@ -89,7 +89,10 @@ This is an **independent, personal work**. It is not affiliated with, endorsed
 by or produced on behalf of the institution that runs the master, and it does
 **not reproduce any of its course material** (lectures, slides, texts or
 project assignments): the master only determined *which topics* each part
-covers and in which order. The text, the examples, the proofs, the code and the
+covers and in which order. The one exception is a data file: the project of
+Part IV analyses the table of fruit measurements provided by the course, whose
+licence is not declared; the handbook does not contain it, but reads it from
+the companion repository, where it is kept with a note on its provenance. The text, the examples, the proofs, the code and the
 project specifications are original work written for this handbook; the
 primary sources each section draws on are cited in place. All rights
 reserved.

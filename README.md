@@ -35,7 +35,7 @@ repository [`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-p
 | I | Programming with Python | Terminal phone-book prototype | ✅ |
 | II | High-performance programming with C and C++ | Command-line CRM for an insurance company | ✅ |
 | III | Foundations of machine learning | Regularised models for house-price prediction | ✅ |
-| IV | Machine learning: models and algorithms | Classification of fruit types with k-nearest neighbours | ✅ theory · 🛠 project chapter |
+| IV | Machine learning: models and algorithms | Classification of fruit types with k-nearest neighbours | ✅ |
 | V–XII | remaining courses of the master | — | 🛠 in preparation |
 
 ## Repository layout

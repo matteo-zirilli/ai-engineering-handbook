@@ -199,19 +199,16 @@ for style, depth and structure**: read one chapter (e.g.
 
 ## Notes for Part IV (Machine learning: models and algorithms, `mlalg/`)
 
-- Status (2026-11-15): theory chapters published; **project chapter still to
-  write** (agreed split: theory first, project in a second session). The part
-  overview `mlalg/index.qmd` has a callout "Status of the project chapter" —
-  remove it and update the parts tables in `index.qmd` and `README.md` when
-  the project chapter is added.
+- Status (2026-11-15): complete. Theory chapters and project chapter
+  `08-project-fruits.qmd` (id `sec-ch-mla-project`, labels `fruit`) published
+  the same day, in two working sessions.
 - Structure: `mlalg/index.qmd` + one chapter per course module (the course's
   introductory module is folded into the overview): `01-optimization`,
   `02-parametric`, `03-naive-bayes`, `04-svm`, `05-neural-networks`,
   `06-knn`, `07-trees-forests`. Chapter ids: `sec-ch-mla-optim`,
   `sec-ch-mla-parametric`, `sec-ch-mla-nb`, `sec-ch-mla-svm`,
-  `sec-ch-mla-nn`, `sec-ch-mla-knn`, `sec-ch-mla-trees`. Suggested for the
-  project: `mlalg/08-project-fruits.qmd`, id `sec-ch-mla-project`, labels
-  with the prefix `fruit`.
+  `sec-ch-mla-nn`, `sec-ch-mla-knn`, `sec-ch-mla-trees`, project
+  `sec-ch-mla-project` (`08-project-fruits`).
 - Label stems per chapter (theorems, figures, equations, sections): `opt`,
   `npar`, `nb`, `svm`, `nn`, `knn`, `tree`; exercises
   `exr-mla<N>-<section>-easy|medium|hard` (Practice) and `exr-mla<N>-<name>`
@@ -246,11 +243,11 @@ for style, depth and structure**: read one chapter (e.g.
   raw URL pinned at `dec0cb2`. The handbook must **not** contain a copy:
   the project chapter reads it with `mlalgbook.load_fruits()` (pinned to
   `dec0cb2`). **Re-rendering the project chapter needs network access** to
-  `raw.githubusercontent.com` (the CSV and the notebook). When the project
-  chapter is published, extend the preface's independence note: the course's
-  data file is used, read from the companion repository, licence undeclared.
-- Known problems of `fruits.csv`, to verify **in code** in the project chapter
-  (as for the houses in Part III): 500 rows, 5 classes × 100, no missing
+  `raw.githubusercontent.com` (the CSV and the notebook, both pinned to
+  `dec0cb2`) and `seaborn` (imported by the replayed notebook). The preface's
+  independence note and `mlalg/index.qmd` state this exception.
+- Known problems of `fruits.csv`, verified **in code** in the project chapter
+  (@sec-fruit-data): 500 rows, 5 classes × 100, no missing
   values, no duplicates; 40 values of `Durezza buccia (1-10)` above 10 (24
   Uva, 15 Banana, 1 Mela; max 13.72); bananas have "diameter" 119.8–299.9 mm
   and "length" 1.6–4.3 mm (swapped, and the lengths look like cm); lengths of
@@ -258,14 +255,23 @@ for style, depth and structure**: read one chapter (e.g.
   bananas are separable by the diameter alone (min 119.8 > max of the others
   115.4). The course's S3 URL is not reachable from the sandbox: the copy came
   from the zip the author sent.
-- Notebook review (next session): review the notebook as of `dec0cb2`
-  (identical to `2e2c86d`; it still reads the course's S3 URL), not
-  `090cac3`. Replay it top to bottom **and** in the order of the stored
-  `execution_count`s (the data-loading cell has count 39: the published
-  outputs come from an out-of-order session). Claims to check, from the
-  `ai-projects` README: Yeo–Johnson transform, K = 15 with 92 % test / 94 %
-  train accuracy, 5-fold CV 91.4 % ± 2.4 %, `GridSearchCV` choosing K = 6
-  (0.92). Do not name the course's fictional company.
+  Also found: within each type the five measurements are uncorrelated and
+  Gaussian-looking — the data look like independent Gaussian draws per type,
+  so Gaussian naive Bayes is (nearly) the Bayes classifier; the chapter
+  estimates the Bayes accuracy by simulation (≈ 0.94) as a ceiling. All five
+  compared models reach ≈ 0.91–0.92 by nested CV.
+- Notebook review: done on the version at `dec0cb2` (the one submitted; it
+  reads the course's S3 URL, replaced by the pinned copy in the replay).
+  Replayed top to bottom it reproduces **every** published output (the
+  replay must run under NumPy's default print options, since
+  `mlalgbook.setup()` changes them); replayed in counter order it fails
+  (counters are leftovers of an interactive session). Main review items: $k$
+  chosen on the test set (optimism ≈ 2 points, measured), Yeo–Johnson fitted
+  outside the CV (negligible effect here), ambiguous final model ($k = 6$ vs
+  15), no metric comparison, data anomalies not discussed. If the author
+  updates the notebook, update the pinned commit and re-check the review table.
+- Project chapter render time ≈ 8 min (nested grid search over scaler × p ×
+  weights × 17 values of $k$); `n_jobs=-1` is used in the searches.
 - Versions used: Python 3.13, scikit-learn 1.9.1, NumPy 2.5.3, SciPy 1.18.1,
   pandas 3.0.5, Matplotlib 3.11.2. Pitfalls met with these versions:
   `MLPClassifier`/`MLPRegressor` take `hidden_layer_sizes=` as a keyword;

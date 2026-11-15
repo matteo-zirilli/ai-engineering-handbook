@@ -1,0 +1,763 @@
+# Project: classifying fruit with nearest neighbours {#sec-ch-mla-project}
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## What this chapter contains
+1. The **problem statement**, written in my own words.
+2. The **data** and their provenance, verified in code — including the
+   evidence that they are synthetic and the inconsistencies they contain.
+3. A **requirements matrix** that maps every requirement to the chapters of
+   this part.
+4. A **walkthrough and code review** of the implementation published in the
+   companion repository,
+   [`Exotic_Fruit_Classification_KNN.ipynb`](https://github.com/matteo-zirilli/ai-projects/blob/main/Exotic_Fruit_Classification_KNN.ipynb)
+   ([open in Colab](https://colab.research.google.com/github/matteo-zirilli/ai-projects/blob/main/Exotic_Fruit_Classification_KNN.ipynb)),
+   with a re-execution that reproduces every number it prints.
+5. A **reference implementation** that applies the review's suggestions:
+   pipelines without leakage, an honest comparison of models with nested
+   cross-validation, metrics and confusion matrices for five classes, an
+   analysis of the errors, and conclusions for readers who do not program.
+6. **Extensions** to practise further.
+:::
+
+## The problem {#sec-fruit-brief}
+
+::: {.callout-note}
+## About this specification
+This project was the final assignment of the course on machine-learning
+models and algorithms of the master I attended. The specification below is
+**my own restatement** of the requirements, written for this handbook; it does
+not reproduce the course material.
+:::
+
+**Context.** A company that imports and distributes fruit sorts incoming
+batches by eye. Mixed batches and less common varieties lead to mislabelled
+lots, with the wrong storage conditions, inventory discrepancies and customer
+complaints. At reception, a few objective measurements of each piece are
+already taken with the existing equipment. The question is how far a model
+fed with those measurements could go in **suggesting the fruit type to the
+operator** — and, just as important, where it would fail.
+
+**What the analysis must do.**
+
+- **R1 — Data.** Start from a table of individual fruits with five
+  measurements — weight, average diameter, average length, peel hardness and
+  sweetness — and the fruit type, the variable to predict.
+- **R2 — Exploration first.** Before any model: distributions of the
+  measurements, missing or anomalous values, number of examples per type, and
+  per-type plots showing which measurements separate which fruits and which
+  overlap.
+- **R3 — Comparable scales.** The model is based on distances, so the
+  measurements (grams, millimetres, 1–10 scores) must be brought to
+  comparable scales, with the transformation learned on training data only
+  and applied unchanged to the rest.
+- **R4 — The model.** A $k$-nearest-neighbour classifier.
+- **R5 — A justified $k$.** Try a range of values, plot the performance
+  against $k$, and motivate the choice — small $k$ follows noise, large $k$
+  favours the most common types.
+- **R6 — The distance.** Compare distance metrics, since they change which
+  fruits are neighbours; optionally, a fixed-radius variant for fruits far
+  from all the others.
+- **R7 — Evaluation on unseen data.** Not only the overall accuracy: which
+  types are confused with which, and why, connecting the errors to the
+  exploratory analysis.
+- **R8 — Honesty.** A system that is candid about its limits is preferred to
+  an inflated figure.
+- **R9 — Readable by non-specialists.** A notebook alternating code and text,
+  each chart accompanied by a sentence saying what it shows; a final summary
+  of the model's limits and of possible improvements.
+- **R10 — Shareable.** The notebook must be publicly accessible and runnable
+  in Colab.
+
+**What counts as quality.** A careful look at the data, a protocol that does
+not let the test data influence any choice, and an error analysis that an
+operator could act on.
+
+## The data and their provenance {#sec-fruit-data}
+
+The brief points to a CSV file of 500 fruits. No source, author, date or
+licence is given, and no public copy of the file could be found elsewhere
+(web searches in November 2026 for its column names and values found
+nothing). The handbook therefore reads the course's file as distributed: a
+byte-for-byte copy is kept, with its provenance, in the companion repository
+(`fruits.csv`, with `fruits_README.md`), and the code below downloads it from
+a URL **pinned to the commit** that added it and checks its MD5 checksum. The
+licence of the file is not declared; the handbook analyses it but does not
+redistribute it.
+
+```{python}
+import io, re, json, contextlib, urllib.request, warnings
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy import stats
+
+raw = mlalgbook.load_fruits()                       # pinned copy in ai-projects, MD5 checked
+english = {"Frutto": "fruit", "Peso (g)": "weight", "Diametro medio (mm)": "diameter",
+           "Lunghezza media (mm)": "length", "Durezza buccia (1-10)": "hardness", "Dolcezza (1-10)": "sweetness"}
+fruit_names = {"Mela": "apple", "Banana": "banana", "Arancia": "orange", "Uva": "grape", "Kiwi": "kiwi"}
+df = raw.rename(columns=english).assign(fruit=lambda d: d["fruit"].map(fruit_names))
+features = ["weight", "diameter", "length", "hardness", "sweetness"]
+print(f"MD5 {mlalgbook.FRUITS_MD5}; shape {raw.shape}; missing values {int(raw.isna().sum().sum())}; "
+      f"duplicated rows {int(raw.duplicated().sum())}")
+print("fruits per type:", df["fruit"].value_counts().to_dict())
+ranges = df.groupby("fruit")[features].agg(["min", "max"]).round(1)
+ranges
+```
+
+The file is clean in the usual sense — no missing values, no duplicated rows,
+exactly 100 fruits per type — and the column names promise grams, millimetres
+and two 1–10 scores. The ranges above tell a different story.
+
+```{python}
+over = df[df["hardness"] > 10]
+print(f"hardness above the declared maximum 10: {len(over)} fruits "
+      f"({over['fruit'].value_counts().to_dict()}), largest {df['hardness'].max():.2f}")
+ban, rest = df[df.fruit == "banana"], df[df.fruit != "banana"]
+print(f"bananas: diameter {ban.diameter.min():.1f}–{ban.diameter.max():.1f} mm, length {ban.length.min():.1f}–{ban.length.max():.1f} mm; "
+      f"largest diameter of any other fruit {rest.diameter.max():.1f} mm")
+print(f"lengths of all fruits: {df.length.min():.2f}–{df.length.max():.2f} mm; "
+      f"weights of apples: {df[df.fruit == 'apple'].weight.min():.0f}–{df[df.fruit == 'apple'].weight.max():.0f} g")
+within = {f: g[features].corr().to_numpy()[np.triu_indices(5, 1)] for f, g in df.groupby("fruit")}
+print("within-type correlations between measurements: largest |r| =",
+      f"{max(np.abs(v).max() for v in within.values()):.2f}; weight–diameter:",
+      {f: round(float(g[['weight', 'diameter']].corr().iloc[0, 1]), 2) for f, g in df.groupby('fruit')})
+ks = pd.DataFrame({f: [stats.kstest(g[c], stats.norm(g[c].mean(), g[c].std()).cdf).pvalue for c in features]
+                   for f, g in df.groupby("fruit")}, index=features)
+print(f"Gaussian fit per type and measurement: smallest Kolmogorov–Smirnov p-value of 25 = {ks.to_numpy().min():.2f}")
+```
+
+Five findings, each checked above:
+
+1. **Hardness outside its scale.** 40 fruits have a peel hardness above the
+   declared maximum of 10, mostly grapes and bananas.
+2. **Bananas: diameter and length appear swapped.** Their "diameter" ranges
+   from about 120 to 300 mm and their "length" from 1.6 to 4.3 mm — the
+   reverse of a banana. As a consequence, **the diameter alone separates
+   bananas from every other fruit**: the smallest banana "diameter" exceeds
+   the largest of any other type.
+3. **Implausible units.** Every "length" lies between 1.2 and 11.1 mm — an
+   apple 3 to 9 mm long — as if the values were centimetres. The weights are
+   low for whole fruit: the USDA reference data list a medium apple of about
+   76 mm (3 inches) in diameter at 182 g and a medium banana, 18–20 cm long,
+   at 118 g [@usda2019], while here apples weigh 31–111 g and bananas 13–47 g.
+4. **No physical relation between the measurements.** For real fruit of one
+   variety, weight grows with size (roughly with the cube of the diameter), so
+   weight and diameter are strongly correlated. In this file the correlations
+   between any two measurements *within* a type are all small, around zero
+   (largest in absolute value 0.29), which is what one expects from
+   independent random draws of 100 values.
+5. **Gaussian by construction?** Within each type, every measurement is
+   compatible with a normal distribution (no Kolmogorov–Smirnov test rejects
+   it). Together with finding 4, the data look like **independent Gaussian
+   draws, with a mean and a standard deviation per type and measurement** —
+   five numbers per type, generated rather than measured.
+
+```{python}
+#| label: fig-fruit-anomalies
+#| fig-cap: "Left: weight against diameter for each fruit type. Real fruit would show a rising cloud within each type (bigger fruit weigh more); here there is no relation, and the bananas' 'diameters' are far beyond any other fruit. Right: peel hardness by type, with the declared maximum of the scale (dashed)."
+order = ["apple", "orange", "kiwi", "banana", "grape"]
+fig, axes = plt.subplots(1, 2, figsize=(10, 3.8))
+for f, c in zip(order, mlalgbook.COLORS):
+    g = df[df.fruit == f]
+    axes[0].scatter(g.diameter, g.weight, s=12, color=c, label=f, edgecolor="#fcfcfb", linewidth=0.4)
+axes[0].set_xlabel("diameter (mm, as declared)"); axes[0].set_ylabel("weight (g)"); axes[0].legend(fontsize=8)
+axes[1].boxplot([df[df.fruit == f].hardness for f in order], tick_labels=order, widths=0.5,
+                medianprops={"color": mlalgbook.INK}, flierprops={"markersize": 3})
+axes[1].axhline(10, color=mlalgbook.MUTED, ls="--", lw=1); axes[1].set_ylabel("peel hardness (declared scale 1–10)")
+fig.tight_layout(); plt.show()
+```
+
+**What this means for the project.** The exercise remains meaningful —
+classifying five groups from five noisy numbers is exactly what the course
+wants to practise — but the conclusions must be phrased with care:
+
+- An accuracy measured on these data says **nothing** about how the model
+  would perform on real fruit at a real warehouse door.
+- The perfect results on **bananas** (and nearly perfect on grapes) are
+  **artefacts** of the swapped columns and of the generator's choice of means,
+  not evidence of a good model.
+- If the data are independent Gaussian draws per type, the **best possible
+  classifier** is the Bayes classifier of that model (@thm-bayes-classifier),
+  which is exactly a Gaussian naive Bayes classifier (@def-nb-naive) with the
+  true means and variances. Its accuracy can be estimated by simulation from
+  the fitted model, and it gives a **ceiling** against which every model of
+  this chapter can be judged (@sec-fruit-comparison).
+
+```{python}
+from sklearn.naive_bayes import GaussianNB
+gauss = GaussianNB().fit(df[features], df["fruit"])           # one Gaussian per type and measurement
+rng = np.random.default_rng(0)
+classes = gauss.classes_
+sim_y = rng.choice(classes, 200_000)
+idx = np.searchsorted(classes, sim_y)
+sim_X = pd.DataFrame(rng.normal(gauss.theta_[idx], np.sqrt(gauss.var_[idx])), columns=features)
+bayes_acc = np.mean(gauss.predict(sim_X) == sim_y)
+print(f"estimated accuracy of the Bayes classifier under the fitted Gaussian model: {bayes_acc:.3f}")
+```
+
+The estimate is a plug-in: it treats the means and variances fitted on 500
+fruits as the truth, so it is itself uncertain by a point or so. It says that
+**about 6 % of the fruits are intrinsically ambiguous** — their measurements
+are as typical of another type as of their own — and that no model can be
+expected to classify much more than about 94 % of them correctly.
+
+| Column (original name) | Declared meaning | What the file contains |
+|---|---|---|
+| `Frutto` | fruit type: apple, banana, orange, grape, kiwi | 100 of each — a balanced design, not a stream of deliveries |
+| `Peso (g)` | weight in grams | values much lower than real whole fruit |
+| `Diametro medio (mm)` | average diameter | plausible ranges except for bananas (120–300 "mm") |
+| `Lunghezza media (mm)` | average length | 1.2–11.1 "mm" for every fruit (centimetres?); for bananas, swapped with the diameter |
+| `Durezza buccia (1-10)` | peel hardness on a 1–10 scale | 40 values above 10 |
+| `Dolcezza (1-10)` | sweetness on a 1–10 scale | within the scale |
+
+: What the columns of the fruit data contain {#tbl-fruit-columns}
+
+## Requirements matrix {#sec-fruit-requirements}
+
+| Requirement | Where the book teaches it |
+|---|---|
+| R1 data, R2 exploration | @sec-first-look (a disciplined first look), @sec-describing; per-class distributions @exr-mla2-parametric-hard; which features separate @exr-mla6-theory-hard |
+| R3 scaling | @sec-scaling, @prp-knn-scaling (distances depend on units), @sec-leakage and pipelines |
+| R4 $k$-NN | @sec-knn-rule |
+| R5 choice of $k$ | @sec-knn-k, @exr-ml5-bv-knn (bias–variance), @sec-selection (one-standard-error rule, nested CV) |
+| R6 distance and radius | @sec-knn-distances, @thm-knn-minkowski, @exr-mla6-rule-hard (reject option) |
+| R7 evaluation on unseen data | @sec-classification-metrics, @sec-multiclass, @thm-test-set-size, @exr-mla6-k-hard |
+| R8 honesty | @sec-fruit-data (what the data can and cannot say), the Bayes ceiling (@thm-bayes-classifier) |
+| R9 readability | @sec-fruit-conclusions |
+| R10 sharing | the notebook in `ai-projects`, now reading its data from the same repository |
+
+: Requirements and the chapters that teach them {#tbl-fruit-requirements}
+
+## Walkthrough of the published implementation {#sec-fruit-walkthrough}
+
+The notebook in `ai-projects` (English version; the Italian original is in
+`it/`) has 36 cells, 19 of them code, organised in seven phases. The review
+refers to the version at commit `dec0cb2`, the one submitted to the course;
+the next commit changed only the URL from which it reads the CSV.
+
+**Setup and exploration.** Imports (pandas, NumPy, Matplotlib, seaborn,
+scikit-learn) and the CSV from the course's URL. A text cell translates the
+Italian column and fruit names. `df.shape` (500 × 6), `df.isna().sum()` (no
+missing values) and `df.describe()` are printed; a 2 × 3 grid of histograms
+with density curves shows the distribution of each measurement over all
+fruits, and a seaborn **pairplot coloured by fruit** shows every pair of
+measurements. The comments read the plots: weight and sweetness seem to
+separate the types best; grapes stand out by weight, diameter and length;
+apples, oranges and kiwis overlap.
+
+**Split and transformation.** Features and target are separated; a 70/30
+split with `random_state=0`; a `PowerTransformer` (Yeo–Johnson, which also
+standardises) is **fitted on the training part** and applied to both. The
+transformed histograms and pairplot are shown again; the comment observes
+two well-separated bumps in diameter and length.
+
+**Choosing $k$.** A helper `evaluate_model` fits a model and returns training
+and test accuracy. A loop over $k = 1, \dots, 20$ records both and plots them;
+the text picks $k = 15$ (training 0.937, test 0.92).
+
+**Final evaluation.** The $k = 15$ model's classification reports and
+confusion matrices on training and test data; the comment notes that bananas
+and grapes are never misclassified and that oranges, apples and kiwis are
+confused. A 5-fold `cross_val_score` on the training part gives a mean of
+0.914 with standard deviation 0.024. `GridSearchCV` over $k = 1, \dots, 20$
+then chooses $k = 6$ (best CV score 0.92); its test accuracy is 0.87, and the
+last text cell explains that $k = 15$ had been chosen on the test set,
+which favours it. A final bar chart shows precision, recall and $F_1$ per
+fruit for $k = 15$.
+
+**What it does well.** An explicit integrity check; per-type plots
+**before** modelling, whose reading is right (the best pair of measurements
+is indeed weight–sweetness, @sec-fruit-reference-eda); a transformation
+**fitted on the training data only** and applied unchanged to the test data;
+training and test accuracy plotted together, which shows the overfitting of
+$k = 1$; per-class reports and confusion matrices on **both** sets, as the
+brief asks; cross-validation and a grid search; a glossary for the Italian
+names; and above all the closing reflection, which correctly identifies why
+the test-chosen $k$ looks better than the cross-validated one — the central
+methodological point of the project. As shown next, the notebook also runs
+cleanly from top to bottom.
+
+### Re-executing the notebook {#sec-fruit-replay}
+
+The code below downloads the notebook from `ai-projects` (pinned to
+`dec0cb2`), replaces the course's URL with the pinned copy of the data, and
+executes the code cells in a fresh namespace — from top to bottom, and in the
+order of the execution counters stored in the file.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Show the replay code"
+NB_URL = ("https://raw.githubusercontent.com/matteo-zirilli/ai-projects/"
+          f"{mlalgbook.FRUITS_COMMIT}/Exotic_Fruit_Classification_KNN.ipynb")
+nb = json.loads(urllib.request.urlopen(NB_URL, timeout=60).read())
+cells = {i: c for i, c in enumerate(nb["cells"]) if c["cell_type"] == "code"}
+code = {i: "".join(c["source"]) for i, c in cells.items()}
+published = {i: "".join("".join(o.get("text", "")) for o in c.get("outputs", [])) for i, c in cells.items()}
+counts = {i: c.get("execution_count") for i, c in cells.items()}
+
+def replay(order):
+    """Execute the notebook's code cells in the given order; return each cell's printed output and the namespace."""
+    ns, out = {}, {}
+    for i in order:
+        src = (code[i].replace("https://proai-datasets.s3.eu-west-3.amazonaws.com/fruits.csv", mlalgbook.FRUITS_URL)
+                      .replace("plt.show()", "plt.close('all')"))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), warnings.catch_warnings(), np.printoptions(precision=8, suppress=False):
+                warnings.simplefilter("ignore")              # NumPy's default print options, as in a fresh Colab kernel
+                exec(src, ns)
+        except Exception as err:
+            buf.write(f"[{type(err).__name__}: {err}]")
+        plt.close("all")
+        out[i] = buf.getvalue()
+    return out, ns
+
+top_down, ns_top = replay(sorted(code))
+with_output = [i for i in sorted(code) if published[i].strip()]
+print("cells with printed output:", with_output)
+print("identical to the published output when run top to bottom:",
+      all(top_down[i].strip() == published[i].strip() for i in with_output))
+by_counter, _ = replay(sorted(code, key=lambda i: counts[i]))
+print("execution counters (cell: counter):", {i: counts[i] for i in sorted(counts, key=lambda i: counts[i])})
+print("errors when replayed in counter order:",
+      {i: by_counter[i].split("[")[-1][:40] for i in by_counter if by_counter[i].startswith("[")} or "none")
+```
+
+Run from top to bottom, **every printed output of the notebook is reproduced
+exactly** — the accuracy lists, the classification reports, the
+cross-validation scores and the grid search. The stored counters show that the
+cells were not run in that order during development: the loop over $k$
+(counter 50) ran before the current definition of `evaluate_model` (67), and
+the imports were re-run near the end (76). Replayed in counter order, the
+notebook fails at the first cell that needs an import or a function defined
+"later" — the counters are leftovers of an interactive session, in which
+earlier runs were overwritten by later ones. Unlike the notebook of Part III
+(@sec-housing-replay), here the final state agrees with a clean run: the
+published numbers are those of the code as written. One cell is nevertheless
+fragile: `x_train = pt.fit_transform(x_train)` overwrites its own input, so
+running it twice would transform the data twice — the same pattern that
+corrupted the Part III results (review item 10).
+
+### Three numbers worth checking
+
+The review rests on three quantitative questions, answered with the
+notebook's own choices (70/30 split, Yeo–Johnson, $k = 15$ and $k = 6$).
+
+```{python}
+#| label: fig-fruit-split-variability
+#| fig-cap: "Test accuracy of the notebook's procedure (Yeo–Johnson fitted on the training part, k-NN) over 300 random 70/30 splits, for k = 15 and k = 6. The notebook's split (random_state = 0) is marked: there k = 15 scores 0.920 and k = 6 0.867, a gap larger than on almost every other split."
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, RepeatedStratifiedKFold, GridSearchCV, cross_validate, cross_val_predict
+from sklearn.preprocessing import PowerTransformer, StandardScaler, MinMaxScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import Pipeline, make_pipeline
+
+Xr, yr = raw.drop(columns="Frutto"), raw["Frutto"]
+def notebook_split_scores(seed, ks=(15, 6)):
+    a, b, ya, yb = train_test_split(Xr, yr, test_size=0.3, random_state=seed, shuffle=True)
+    pt = PowerTransformer().fit(a)
+    return [KNeighborsClassifier(n_neighbors=k).fit(pt.transform(a), ya).score(pt.transform(b), yb) for k in ks]
+split_scores = np.array([notebook_split_scores(s) for s in range(300)])
+diff = split_scores[:, 0] - split_scores[:, 1]
+fig, ax = plt.subplots(figsize=(6.5, 3.2))
+bins = np.arange(0.80, 1.0, 1 / 150)
+for j, (k, c) in enumerate(zip((15, 6), mlalgbook.COLORS)):
+    ax.hist(split_scores[:, j], bins=bins, alpha=0.6, color=c, label=f"k = {k}")
+    ax.axvline(split_scores[0, j], color=c, ls="--", lw=1.2)
+ax.set_xlabel("test accuracy on one random 70/30 split"); ax.set_ylabel("number of splits"); ax.legend(); plt.show()
+print(f"notebook's split (seed 0): k = 15 {split_scores[0, 0]:.3f}, k = 6 {split_scores[0, 1]:.3f}")
+print(f"k = 15: mean {split_scores[:, 0].mean():.3f}, sd {split_scores[:, 0].std():.3f};  k = 6: mean {split_scores[:, 1].mean():.3f}, "
+      f"sd {split_scores[:, 1].std():.3f};  gap k15 - k6: mean {diff.mean():.3f}, at least as large as on the notebook's split in "
+      f"{np.mean(diff >= diff[0]):.0%} of the splits")
+```
+
+**1. How much does one split say?** On a single 70/30 split, the test accuracy
+of the same procedure varies by several points from split to split; the
+notebook's split happens to be one on which $k = 15$ beats $k = 6$ by an
+unusually wide margin. On average the two values of $k$ are close. A
+difference between two models measured on one test set of 150 fruits is
+mostly noise — its standard error is about 2 points (@thm-test-set-size).
+
+```{python}
+best_test = []                       # what "pick k with the best test accuracy" reports, per split
+honest = []                          # what a k chosen on the training part (5-fold CV) achieves on the same test set
+for s in range(60):
+    a, b, ya, yb = train_test_split(Xr, yr, test_size=0.3, random_state=s)
+    pt = PowerTransformer().fit(a); A, B = pt.transform(a), pt.transform(b)
+    accs = [KNeighborsClassifier(n_neighbors=k).fit(A, ya).score(B, yb) for k in range(1, 21)]
+    best_test.append(max(accs))
+    k_cv = GridSearchCV(make_pipeline(PowerTransformer(), KNeighborsClassifier()),
+                        {"kneighborsclassifier__n_neighbors": list(range(1, 21))}, cv=5).fit(a, ya).best_params_["kneighborsclassifier__n_neighbors"]
+    honest.append(accs[k_cv - 1])
+print(f"over 60 splits: 'best k on the test set' reports {np.mean(best_test):.3f} on average; "
+      f"the k chosen by CV on the training part scores {np.mean(honest):.3f} on the same test sets "
+      f"(optimism {np.mean(best_test) - np.mean(honest):.3f})")
+```
+
+**2. What does choosing $k$ on the test set cost?** Picking the $k$ with the
+highest test accuracy among twenty and reporting that accuracy is optimistic
+by construction: the reported figure is the maximum of twenty noisy
+estimates. The simulation above measures the bias on these data — a couple of
+points on average — exactly the effect the notebook's closing cell suspects.
+
+```{python}
+cv5 = StratifiedKFold(5, shuffle=True, random_state=0)
+rows = []
+for seed in range(20):
+    a, b, ya, yb = train_test_split(Xr, yr, test_size=0.3, random_state=seed)
+    outside = cross_val_score(KNeighborsClassifier(n_neighbors=15), PowerTransformer().fit_transform(a), ya, cv=cv5).mean()
+    inside = cross_val_score(make_pipeline(PowerTransformer(), KNeighborsClassifier(n_neighbors=15)), a, ya, cv=cv5).mean()
+    rows.append(outside - inside)
+print(f"CV accuracy with the transformation fitted on the whole training part minus fitted inside each fold: "
+      f"mean {np.mean(rows):+.4f}, range {np.min(rows):+.4f} to {np.max(rows):+.4f} (20 splits)")
+```
+
+**3. Does the transformation leak into the cross-validation?** The notebook
+fits the Yeo–Johnson transformation on the whole training part and then
+cross-validates on it, so each validation fold has contributed to the
+transformation (@sec-leakage). Here the effect is negligible — a
+transformation with two parameters per feature learns little from 70 extra
+fruits — but the protocol is wrong, and with richer preprocessing (feature
+selection, @exr-mla6-theory-hard) the same mistake can be large. A pipeline
+removes the question.
+
+### Code review: refinements suggested by this book {#sec-fruit-review}
+
+| # | Observation | Why it matters | Suggested change | Chapter |
+|---|---|---|---|---|
+| 1 | $k$ chosen as the value with the best **test** accuracy (cells 21–23) | the reported 0.92 is the best of 20 noisy test scores: optimistic by about two points here | choose $k$ by cross-validation on the training part (validation curve, one-standard-error rule); touch the test set once | @sec-knn-k, @sec-selection |
+| 2 | The final model is ambiguous: the grid search picks $k = 6$, the final chart and the conclusions use $k = 15$ | the reader does not know which model is proposed | state one procedure, one final model, one test evaluation | @sec-fruit-test |
+| 3 | One 70/30 split, not stratified, 150 test fruits | one split's accuracy varies by several points; "$k = 6$ is worse than $k = 15$" is within that noise | `stratify=y`; compare procedures by repeated stratified CV with standard errors | @fig-fruit-split-variability, @thm-test-set-size |
+| 4 | Transformation fitted on the whole training part before `cross_val_score` and `GridSearchCV` | each validation fold influences the transformation (negligible here, large with other preprocessing) | `Pipeline([("scale", ...), ("knn", ...)])` inside every CV | @sec-leakage |
+| 5 | The text motivates a "logarithmic transformation" to make distributions normal and the space isotropic; the code applies Yeo–Johnson | $k$-NN needs comparable scales, not normality; the bumps in the pooled histograms are the fruit types, not skewness | justify by scale; compare scalings by CV (all are equivalent here) | @prp-knn-scaling, @sec-fruit-reference-tuning |
+| 6 | The distance metric and the weighting are never varied; no radius variant | the brief asks to compare metrics; the reject option is the natural answer to "unusual fruits" | tune `p`, `weights`; try `RadiusNeighborsClassifier` with an outlier label | @sec-knn-distances, @exr-mla6-rule-hard |
+| 7 | The anomalies visible in `df.describe()` (hardness up to 13.7, "diameters" up to 300 mm) are not discussed | the data are synthetic and partly inconsistent; the perfect banana scores are artefacts | read the ranges per type; report what the data can and cannot support | @sec-fruit-data |
+| 8 | No reference point for the accuracy | 0.92 means little without a baseline and a ceiling | compare with simple models on the same folds; estimate the Bayes ceiling | @sec-fruit-comparison |
+| 9 | CV reported as mean and *population* standard deviation of 5 folds, read as "the model generalises well" | the fold scores are correlated and computed on the same transformed data; the spread is not the uncertainty of the mean | report mean ± standard error over repeated folds; read it as an estimate, not a guarantee | @sec-cross-validation |
+| 10 | `x_train = pt.fit_transform(x_train)` overwrites its input; counters show out-of-order editing | re-running the cell would transform twice (the Part III failure mode) | new names (`x_train_t`); Restart & Run All before publishing | @sec-housing-replay |
+| 11 | No closing summary for non-specialists; findings mostly in short comments | the brief asks for a readable notebook ending with limits and actions | a final text cell in plain language | @sec-fruit-conclusions |
+| 12 | Dead code: `x_ridotto` is never used; `evaluate_model` computes a confusion matrix it discards | noise for the reader | remove | — |
+
+: Code review of the published implementation {#tbl-fruit-review}
+
+None of these items reflects a misunderstanding of $k$-NN: scaling is fitted
+on training data, the right plots are made and read correctly, and the notebook
+itself spots the most important problem (item 1). The review is about turning
+a careful exploration into a protocol whose numbers can be trusted, and about
+saying what the data allow one to conclude.
+
+## Reference implementation {#sec-fruit-reference}
+
+In a notebook each block below would be one code cell preceded by a text cell
+(R9); here the explanations are the surrounding paragraphs. The test set is
+set aside **first** — 20 % of the fruits, stratified by type (20 per type) —
+and used once, at the end.
+
+```{python}
+X, y = df[features], df["fruit"]
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=0)
+print(f"training {len(y_train)} fruits ({y_train.value_counts().min()}–{y_train.value_counts().max()} per type); "
+      f"test {len(y_test)} ({y_test.value_counts().min()}–{y_test.value_counts().max()} per type)")
+```
+
+### Exploration that informs the model {#sec-fruit-reference-eda}
+
+How well does each measurement, and each pair, separate the types on its own?
+A 15-NN classifier on one or two standardised measurements, evaluated by
+repeated cross-validation on the training part, answers in the same terms as
+the final model.
+
+```{python}
+#| label: fig-fruit-eda
+#| fig-cap: "Distribution of each measurement by fruit type (training part). Bananas are isolated by the 'diameter', grapes largely by weight, diameter and length; apples, oranges and kiwis overlap in every single measurement and differ mostly in combinations (weight with sweetness)."
+fig, axes = plt.subplots(1, 5, figsize=(13, 3.2))
+train = X_train.assign(fruit=y_train)
+for ax, feat in zip(axes, features):
+    ax.boxplot([train[train.fruit == f][feat] for f in order], tick_labels=order, widths=0.55,
+               medianprops={"color": mlalgbook.INK}, flierprops={"markersize": 2})
+    ax.set_title(feat); ax.tick_params(axis="x", labelrotation=60, labelsize=8)
+fig.tight_layout(); plt.show()
+import itertools
+cvr = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=0)
+def knn_cv(cols, k=15):
+    return cross_val_score(make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=k)), X_train[list(cols)], y_train, cv=cvr).mean()
+single = pd.Series({f: knn_cv([f]) for f in features}).sort_values(ascending=False)
+pairs = pd.Series({f"{a} + {b}": knn_cv([a, b]) for a, b in itertools.combinations(features, 2)}).sort_values(ascending=False)
+print("one measurement :", ", ".join(f"{k} {v:.3f}" for k, v in single.items()))
+print("best pairs      :", ", ".join(f"{k} {v:.3f}" for k, v in pairs.head(3).items()), "| worst:", f"{pairs.index[-1]} {pairs.iloc[-1]:.3f}")
+print(f"all five        : {knn_cv(features):.3f}")
+```
+
+Weight is the most informative single measurement and **weight with
+sweetness** the best pair — the notebook's reading of its pairplot was right.
+Hardness is the weakest. No single measurement or pair reaches the accuracy of
+all five together: the types differ in combinations, which is where a
+distance-based model helps.
+
+### Choosing the scaling, the distance and $k$ {#sec-fruit-reference-tuning}
+
+All choices are made inside one cross-validated search on the training part:
+the scaler (standardisation, min–max, Yeo–Johnson), the Minkowski exponent
+($p = 1$ or $2$), the weighting, and $k$.
+
+```{python}
+#| label: fig-fruit-validation
+#| fig-cap: "Validation curve of k-NN on the training part (standardised, Euclidean, uniform weights): mean accuracy of 3 × 5-fold cross-validation ± 1 standard error. The dashed line marks the best k, the dotted one the largest k within one standard error of the best."
+knn_pipe = Pipeline([("scaler", StandardScaler()), ("knn", KNeighborsClassifier())])
+ks = [1, 3, 5, 7, 9, 11, 15, 19, 23, 27, 31, 39, 47, 55, 63, 79, 99]
+grid = {"scaler": [StandardScaler(), MinMaxScaler(), PowerTransformer()], "knn__n_neighbors": ks,
+        "knn__weights": ["uniform", "distance"], "knn__p": [1, 2]}
+inner = StratifiedKFold(5, shuffle=True, random_state=0)
+search = GridSearchCV(knn_pipe, grid, cv=cvr, n_jobs=-1).fit(X_train, y_train)
+res = pd.DataFrame(search.cv_results_)
+res["scaler"] = res["param_scaler"].map(lambda s: type(s).__name__)
+summary = res.groupby("scaler")["mean_test_score"].max().round(3).to_dict()
+print("best CV accuracy per scaler:", summary)
+print("best per metric:", res.groupby("param_knn__p")["mean_test_score"].max().round(3).to_dict(),
+      "| per weighting:", res.groupby("param_knn__weights")["mean_test_score"].max().round(3).to_dict())
+best = search.best_params_
+print(f"best combination: {type(best['scaler']).__name__}, p = {best['knn__p']}, {best['knn__weights']} weights, "
+      f"k = {best['knn__n_neighbors']} (CV accuracy {search.best_score_:.3f})")
+curve = res[(res.scaler == "StandardScaler") & (res.param_knn__p == 2) & (res.param_knn__weights == "uniform")].sort_values("param_knn__n_neighbors")
+k_arr, m_arr = curve["param_knn__n_neighbors"].astype(int).to_numpy(), curve["mean_test_score"].to_numpy()
+se_arr = curve["std_test_score"].to_numpy() / np.sqrt(15)
+kb = int(np.argmax(m_arr)); k_1se = int(k_arr[np.max(np.where(m_arr >= m_arr[kb] - se_arr[kb])[0])])
+fig, ax = plt.subplots(figsize=(6.5, 3.2))
+ax.plot(k_arr, m_arr, marker="o", ms=4); ax.fill_between(k_arr, m_arr - se_arr, m_arr + se_arr, alpha=0.2, lw=0)
+ax.axvline(k_arr[kb], color=mlalgbook.MUTED, ls="--", lw=1); ax.axvline(k_1se, color=mlalgbook.MUTED, ls=":", lw=1)
+ax.set_xlabel("k"); ax.set_ylabel("CV accuracy (training part)"); plt.show()
+print(f"standardised, Euclidean, uniform: best k = {k_arr[kb]} ({m_arr[kb]:.3f} ± {se_arr[kb]:.3f}); largest k within one s.e. = {k_1se}")
+```
+
+The search confirms what the theory predicts for these data: the three
+scalings, the two metrics and the two weightings all reach practically the
+same accuracy — differences of a few tenths of a point, far below the standard
+error — and $k$ matters only below about 10: from there to 100 neighbours the
+curve is flat within its error band. When choices are statistically
+indistinguishable, prefer the simplest and most explainable one:
+**standardisation, Euclidean distance, uniform votes**, and the largest $k$
+within one standard error of the best, which gives smoother boundaries
+(@sec-knn-k).
+
+```{python}
+final_k = k_1se
+final_model = Pipeline([("scaler", StandardScaler()), ("knn", KNeighborsClassifier(n_neighbors=final_k))])
+print(f"final model: standardisation + {final_k}-NN, Euclidean, uniform weights")
+```
+
+### A fair comparison {#sec-fruit-comparison}
+
+Is $k$-NN a good choice? Five models are compared by **nested**
+cross-validation on the training part — every model tunes its own knobs in an
+inner loop, all are evaluated on the same outer folds — with accuracy and
+macro-averaged $F_1$ (@sec-classification-metrics), next to the Bayes ceiling
+estimated in @sec-fruit-data.
+
+```{python}
+#| label: fig-fruit-comparison
+#| fig-cap: "Nested cross-validated accuracy (3 × 5 outer folds, training part) of five classifiers, ± 1 standard error; the dashed line is the estimated accuracy of the Bayes classifier under the fitted Gaussian model. All models are within about one point of each other and a couple of points below the ceiling."
+from sklearn.naive_bayes import GaussianNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+
+outer = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=1)
+contenders = {
+    "k-NN (scaling, p, weights, k tuned)": GridSearchCV(knn_pipe, grid, cv=inner, n_jobs=-1),
+    "Gaussian naive Bayes": GaussianNB(),
+    "logistic regression": GridSearchCV(make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000)),
+                                        {"logisticregression__C": np.logspace(-2, 2, 5)}, cv=inner),
+    "RBF SVM": GridSearchCV(make_pipeline(StandardScaler(), SVC()),
+                            {"svc__C": np.logspace(-1, 2, 4), "svc__gamma": np.logspace(-2, 0, 3)}, cv=inner),
+    "random forest": RandomForestClassifier(n_estimators=300, random_state=0),
+}
+comp = {}
+for name, model in contenders.items():
+    r = cross_validate(model, X_train, y_train, cv=outer, scoring=["accuracy", "f1_macro"])
+    comp[name] = (r["test_accuracy"].mean(), r["test_accuracy"].std(ddof=1) / np.sqrt(len(r["test_accuracy"])), r["test_f1_macro"].mean())
+comp = pd.DataFrame(comp, index=["accuracy", "s.e.", "macro F1"]).T
+fig, ax = plt.subplots(figsize=(6.5, 2.8))
+ax.errorbar(comp["accuracy"], range(len(comp)), xerr=comp["s.e."], fmt="o", color=mlalgbook.COLORS[0], capsize=3)
+ax.axvline(bayes_acc, color=mlalgbook.MUTED, ls="--", lw=1)
+ax.set_yticks(range(len(comp)), comp.index); ax.invert_yaxis(); ax.set_xlabel("nested CV accuracy")
+plt.show()
+comp.round(3)
+```
+
+The five models — a non-parametric one, a generative parametric one, a
+linear one, a kernel method and an ensemble — are statistically
+indistinguishable, and all sit a couple of points below the estimated ceiling.
+That is the signature of a problem in which the remaining errors are not the
+model's fault but the data's: the fruits that are misclassified look, in these
+five numbers, like another type. Gaussian naive Bayes, which matches how the
+data appear to have been generated, does as well as anything — with five
+numbers per type and measurement, the most compact model of all. $k$-NN, the
+model the brief asks for, is a perfectly good choice; it is not a better one.
+
+### The test set, once {#sec-fruit-test}
+
+The final model is fitted on the whole training part and evaluated, for the
+first and only time, on the 100 test fruits.
+
+```{python}
+#| label: fig-fruit-confusion
+#| fig-cap: "Confusion matrix of the final model on the 100 test fruits (rows: true type, columns: predicted type). All errors are among apples, oranges and kiwis."
+from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix, balanced_accuracy_score
+final_model.fit(X_train, y_train)
+pred = final_model.predict(X_test)
+acc = accuracy_score(y_test, pred); se = np.sqrt(acc * (1 - acc) / len(y_test))
+print(f"test accuracy {acc:.2f} (standard error ≈ {se:.3f}); macro F1 {f1_score(y_test, pred, average='macro'):.3f}; "
+      f"balanced accuracy {balanced_accuracy_score(y_test, pred):.3f}")
+print(classification_report(y_test, pred, labels=order, digits=3))
+cm = confusion_matrix(y_test, pred, labels=order)
+fig, ax = plt.subplots(figsize=(4.6, 3.9))
+ax.imshow(cm, cmap="Blues"); ax.grid(False)
+for i in range(5):
+    for j in range(5):
+        ax.text(j, i, cm[i, j], ha="center", va="center", color="white" if cm[i, j] > 10 else mlalgbook.INK, fontsize=10)
+ax.set_xticks(range(5), order, rotation=45); ax.set_yticks(range(5), order)
+ax.set_xlabel("predicted"); ax.set_ylabel("true"); plt.show()
+```
+
+The test accuracy, `{python} f"{acc:.2f}"`, is higher than the nested estimate
+for $k$-NN (`{python} f"{comp.iloc[0]['accuracy']:.3f}"`) by about
+`{python} f"{(acc - comp.iloc[0]['accuracy']) / se:.1f}"` standard errors of a
+100-fruit test set: the two agree within the precision that 100 fruits allow
+(@thm-test-set-size). The number to report is the cross-validated one, which
+averages over many more evaluations. Bananas and grapes are classified without error, for the
+artefactual reasons of @sec-fruit-data; all mistakes are among apples,
+oranges and kiwis.
+
+### Error analysis {#sec-fruit-errors}
+
+Which fruits are misclassified, and why? Cross-validated predictions on the
+training part give every training fruit a prediction from a model that did not
+see it, enough errors to study.
+
+```{python}
+#| label: fig-fruit-errors
+#| fig-cap: "Apples, oranges and kiwis of the training part in the plane of the best pair of measurements, weight and sweetness (cross-validated predictions of the final model). Crosses are misclassified fruits: they lie where the clouds of two types overlap."
+cv_pred = cross_val_predict(final_model, X_train, y_train, cv=StratifiedKFold(5, shuffle=True, random_state=2))
+mix = y_train.isin(["apple", "orange", "kiwi"])
+pairs_err = pd.crosstab(y_train[cv_pred != y_train], pd.Series(cv_pred[cv_pred != y_train], index=y_train[cv_pred != y_train].index),
+                        rownames=["true"], colnames=["predicted"])
+print(f"cross-validated errors on the training part: {int((cv_pred != y_train).sum())} of {len(y_train)}")
+print(pairs_err.to_string())
+fig, ax = plt.subplots(figsize=(6, 4))
+for f, c in zip(["apple", "orange", "kiwi"], mlalgbook.COLORS):
+    ok = (y_train == f) & (cv_pred == y_train); bad = (y_train == f) & (cv_pred != y_train)
+    ax.scatter(X_train.loc[ok, "weight"], X_train.loc[ok, "sweetness"], s=14, color=c, alpha=0.6, label=f, edgecolor="#fcfcfb", linewidth=0.4)
+    ax.scatter(X_train.loc[bad, "weight"], X_train.loc[bad, "sweetness"], s=40, color=c, marker="X", edgecolor=mlalgbook.INK, linewidth=0.5)
+ax.set_xlabel("weight (g)"); ax.set_ylabel("sweetness (1–10)"); ax.legend(); plt.show()
+means = X_train.assign(fruit=y_train).groupby("fruit")[features].mean().loc[["apple", "orange", "kiwi"]].round(1)
+means
+```
+
+The errors form a pattern an operator can use. Among the three types,
+oranges are the sweetest, apples the heaviest and the least sweet, and kiwis
+the lightest, with intermediate sweetness (table above). The most frequent
+mistake turns light, not very sweet oranges into kiwis; heavy, sweet kiwis
+become oranges; light apples become kiwis; heavy oranges with little sugar
+become apples. The misclassified
+fruits are exactly those whose weight and sweetness fall in the zones where
+two clouds overlap — in the language of the brief, the measurements that do
+**not** separate these three types well are diameter, length and hardness,
+whose distributions almost coincide (@fig-fruit-eda), and weight and
+sweetness separate them only partially. No choice of $k$ or of distance can
+fix that; only a different or additional measurement could.
+
+### How much rests on the dubious columns?
+
+```{python}
+variants = {"all five measurements": features, "without hardness (scale violated)": ["weight", "diameter", "length", "sweetness"],
+            "without diameter and length (swapped for bananas)": ["weight", "hardness", "sweetness"]}
+for name, cols in variants.items():
+    s = cross_val_score(final_model, X_train[cols], y_train, cv=cvr)
+    print(f"{name:50s} CV accuracy {s.mean():.3f} ± {s.std(ddof=1) / np.sqrt(len(s)):.3f}")
+clipped = X_train.assign(hardness=X_train["hardness"].clip(upper=10))
+print(f"{'hardness clipped at 10':50s} CV accuracy {cross_val_score(final_model, clipped, y_train, cv=cvr).mean():.3f}")
+```
+
+Dropping or clipping hardness changes nothing: it is the least informative
+measurement anyway. Dropping diameter and length costs several points — the
+model relies on them, partly for the artefactual banana separation and partly
+for the grapes. Whatever happened to those columns in the generation of the
+file determines a sizeable part of the reported accuracy, which is one more
+reason not to transfer these numbers to real fruit.
+
+### Conclusions for readers who do not program {#sec-fruit-conclusions}
+
+::: {.callout-tip}
+## What we found, in plain words
+- **The data.** The file looks generated by a computer rather than measured
+  at a warehouse: the sizes and weights do not go together as they do for
+  real fruit, some values are impossible (hardness above the top of its
+  scale; bananas "300 mm wide and 3 mm long"). The exercise is useful for
+  learning the method, but **the numbers below do not tell us how the method
+  would do on real fruit**.
+- **What the model does.** It compares a new fruit with the most similar
+  fruits already classified, after putting
+  grams, millimetres and scores on the same footing, and takes the most
+  common type among them (here the `{python} final_k` nearest).
+- **How good it is.** About **`{python} f"{100 * comp.iloc[0]['accuracy']:.0f}"`
+  fruits out of 100** are classified correctly, give or take two or three
+  (on our 100 test fruits it was `{python} f"{100 * acc:.0f}"`, within the
+  margin of error of such a small test). Bananas and grapes are always recognised (in these data,
+  trivially). All the mistakes are between **apples, oranges and kiwis**: in
+  these five measurements some of them are genuinely indistinguishable — none
+  of the five methods we tried does better than about
+  `{python} f"{100 * comp['accuracy'].max():.0f}"` %, and by our estimate no
+  method could do much better than `{python} f"{100 * bayes_acc:.0f}"` %.
+- **Where it errs, and why.** Light oranges with little sugar are taken for
+  kiwis; heavy, sweet kiwis for oranges; light apples for kiwis. The measurements that would help are
+  not in the file: diameter, length and peel hardness are almost the same for
+  these three fruits.
+- **What we recommend.** Use the model as a **suggestion** for the operator,
+  never as an automatic label, and ask for a check whenever it proposes apple,
+  orange or kiwi. Before any real use: collect a few hundred real
+  measurements, verify the units of every column, and consider one more
+  measurement that distinguishes these three fruits (for example colour or
+  surface texture). Then repeat this analysis, which takes minutes.
+:::
+
+## Extensions {#sec-fruit-extensions}
+
+1. **A reject option.** Replace the classifier by `RadiusNeighborsClassifier`
+   with `outlier_label` (or abstain when the top vote is below a threshold),
+   and plot accuracy on the accepted fruits against the fraction sent to an
+   operator (@exr-mla6-rule-hard).
+2. **Costs of errors.** If mislabelling an orange as an apple costs more than
+   the reverse (storage temperatures differ), predict with probabilities and a
+   cost matrix rather than the majority vote (@thm-cost-threshold, generalised
+   to five classes).
+3. **Calibration.** Are the $k$-NN vote fractions reliable probabilities?
+   Draw reliability diagrams per class and compare with Gaussian naive Bayes
+   (@fig-nb-calibration).
+4. **The generator.** Fit one Gaussian per type and measurement, simulate
+   10 000 fruits, and check that the learning curve of $k$-NN approaches the
+   Bayes ceiling as the training set grows (@thm-knn-cover-hart).
+5. **Repairing the bananas.** Swap the bananas' diameter and length and
+   convert the lengths to millimetres: which conclusions change? (Only the
+   banana results should; check.)
+6. **Distribution shift.** Simulate a delivery of a variety whose mean weight
+   differs by one standard deviation from the training apples; how quickly does
+   accuracy degrade, and would the reject option catch it?
+
+## Further reading {.unnumbered}
+
+- @hastie2009, §13.3 — $k$-nearest-neighbour classifiers in practice, and
+  §7.10 — cross-validation done right; @james2023, §4.7 and 5.1 — the same at
+  an introductory level.
+- @cover1967 — why nearest neighbours cannot be far from the best possible
+  classifier, given enough data (@thm-knn-cover-hart).
+- @kapoor2023 — leakage and reproducibility failures in published
+  machine-learning studies; @pimentel2019 — how often notebooks reproduce.
+- @mitchell2019 — model cards: a template for the "plain words" summary that
+  should accompany any model handed to colleagues.
+- scikit-learn user guide, "Nearest Neighbors" and "Tuning the
+  hyper-parameters of an estimator" [@pedregosa2011].

@@ -73,6 +73,7 @@ book:
         - mlalg/05-neural-networks.qmd
         - mlalg/06-knn.qmd
         - mlalg/07-trees-forests.qmd
+        - mlalg/08-project-fruits.qmd
   appendices:
     - appendices/finding-sources.qmd
     - references.qmd
