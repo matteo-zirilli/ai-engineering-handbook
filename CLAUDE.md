@@ -111,6 +111,10 @@ for style, depth and structure**: read one chapter (e.g.
 - Interactive widgets use `{ojs}` cells; put `viewof` inputs and the labelled
   figure in **separate** cells (otherwise subfigure labels appear). Mermaid
   cells need `%%| echo: false`.
+- Sidebar: the bold "Index" heading and the numbers "0." (Preface) and
+  "1.", "2.", … (parts) come from CSS in `styles/handbook.css` (a counter on
+  the top-level sections that link to a page); a new part is numbered
+  automatically. Do not put numbers in part titles.
 - Do not leave machine-specific paths (`/tmp/...`, `/root/...`) in outputs.
 
 ## Notes for Part II (C and C++, `cpp/`)

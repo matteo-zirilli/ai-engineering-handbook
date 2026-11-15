@@ -83,3 +83,23 @@ body.mode-essentials #TOC a.toc-deep { opacity: 0.55; font-style: italic; }
 
 /* Quarto copies the .deep class of a heading onto the <hN> element too: neutralise it */
 h1.deep, h2.deep, h3.deep, h4.deep, h5.deep { border: 0; background: none; padding: 0; margin-left: 0; border-radius: 0; }
+
+/* Sidebar: an "Index" heading and numbered entries (0 = Preface, 1… = parts).
+   Done in CSS so page titles and chapter numbers stay unchanged. Parts are the
+   top-level sections that link to a page; "Appendices" has no link and stays
+   unnumbered, as does "How to study with this book". */
+#quarto-sidebar .sidebar-menu-container > ul { counter-reset: part; }
+#quarto-sidebar .sidebar-menu-container > ul::before {
+  content: "Index"; display: block; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; font-size: 0.9em; margin: 0.2em 0 0.4em 0;
+}
+#quarto-sidebar .sidebar-menu-container > ul > li:first-child > .sidebar-item-container .menu-text,
+#quarto-sidebar .sidebar-menu-container > ul > li.sidebar-item-section > .sidebar-item-container > a[href] .menu-text {
+  display: inline-block; padding-left: 1.4em; text-indent: -1.4em;
+}
+#quarto-sidebar .sidebar-menu-container > ul > li:first-child > .sidebar-item-container .menu-text::before {
+  content: "0."; display: inline-block; width: 1.4em; text-indent: 0;
+}
+#quarto-sidebar .sidebar-menu-container > ul > li.sidebar-item-section > .sidebar-item-container > a[href] .menu-text::before {
+  counter-increment: part; content: counter(part) "."; display: inline-block; width: 1.4em; text-indent: 0;
+}
