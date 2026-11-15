@@ -1,0 +1,1114 @@
+# Decision trees and random forests {#sec-ch-mla-trees}
+
+> *"Random forests are a combination of tree predictors such that each tree
+> depends on the values of a random vector sampled independently and with the
+> same distribution for all trees in the forest."* — Leo Breiman, 2001
+> [@breiman2001rf]
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- grow a **decision tree** by recursive binary splitting, computing **Gini
+  impurity**, **entropy** and **information gain** by hand, and **prove** that
+  a concave impurity never increases when a node is split;
+- implement the best-split search and a small tree in NumPy, matching
+  scikit-learn, and read a tree as a set of rules;
+- control a tree's complexity by limiting its growth or by **cost-complexity
+  pruning**, **proving** the weakest-link formula;
+- explain why trees have high **variance**, **prove** the variance formula
+  for an average of correlated predictors and the $1/e$ out-of-bag fraction
+  of the bootstrap, and use **bagging**;
+- build **random forests**, explain how feature subsampling decorrelates the
+  trees, use the **out-of-bag** estimate, and interpret feature importances
+  (impurity-based and permutation) with their biases.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Decision trees; the bias–variance trade-off; bagging to reduce variance;
+random forests; in practice, decision trees and random forests in
+scikit-learn.
+:::
+
+## Intuition: twenty questions {#sec-tree-intuition}
+
+In the game of twenty questions, one player thinks of an object and the other
+identifies it by yes/no questions. A good player asks first the question that
+splits the remaining possibilities most evenly, then adapts the next question
+to the answer. A **decision tree** plays this game with data: "is the weight
+below 40 g?", then, depending on the answer, "is the diameter below 25 mm?",
+and so on, until the examples that reach a **leaf** mostly share a class. The
+learned tree is a set of nested rules that a person can read, check and
+apply with pen and paper.
+
+Trees are flexible — they can carve the feature space into many rectangles —
+and that is their weakness: a slightly different training sample can give a
+very different tree. Averaging many trees grown on perturbed versions of the
+data keeps the flexibility and removes much of the instability. That is
+**bagging**, and with an extra dose of randomness, the **random forest** — for
+two decades one of the most reliable off-the-shelf methods for tabular data.
+
+## Decision trees {#sec-tree-trees}
+
+A (binary) decision tree partitions the feature space by **axis-aligned
+splits**: each internal node tests $x_j \le t$ for one feature $j$ and a
+threshold $t$, sending the example left or right; each leaf predicts the
+majority class (classification) or the mean target (regression) of the
+training examples that reach it. Trees are grown **greedily**, top-down: at
+each node, choose the split that most reduces an **impurity** measure of the
+labels, then recurse on the two children, until a stopping rule. This is the
+CART algorithm of Breiman, Friedman, Olshen and Stone [@breiman1984]; Quinlan's
+ID3 and C4.5 are close relatives using entropy [@quinlan1986; @quinlan1993].
+
+### Impurity
+
+For a node whose examples have class proportions $p = (p_1, \dots, p_K)$:
+
+| Impurity | Formula | Pure node | Uniform ($p_k = 1/K$) |
+|---|---|---|---|
+| misclassification | $1 - \max_kp_k$ | 0 | $1 - 1/K$ |
+| **Gini** | $\sum_kp_k(1 - p_k) = 1 - \sum_kp_k^2$ | 0 | $1 - 1/K$ |
+| **entropy** | $-\sum_kp_k\log_2p_k$ | 0 | $\log_2K$ |
+
+: Impurity measures (scikit-learn's `criterion="gini"`, `"entropy"` or `"log_loss"`) {#tbl-tree-impurity}
+
+The Gini impurity is the probability that two examples drawn at random from
+the node (with replacement) have different classes; the entropy is the
+average number of bits needed to encode the class of an example of the node
+[@shannon1948]. Splitting a node $S$ of $n$ examples into $S_L$ and $S_R$ is
+scored by the **impurity decrease**
+$$
+\Delta = I(S) - \frac{n_L}{n}I(S_L) - \frac{n_R}{n}I(S_R),
+$$ {#eq-tree-gain}
+called **information gain** when $I$ is the entropy.
+
+::: {#thm-tree-concave}
+## Splitting never increases a concave impurity
+Let $I$ be a concave function of the class proportions. For every split,
+$\Delta \ge 0$. Gini and entropy are strictly concave, so $\Delta = 0$ only
+when both children have the same proportions as the parent.
+:::
+
+*In one line:* the parent's proportions are the weighted average of the
+children's, and a concave function of an average is at least the average of
+the function — so the weighted impurity of the children can only be lower.
+
+::: {.deep kind="proof"}
+## Proof of @thm-tree-concave
+With $p^L, p^R$ the children's proportions, the parent's are $p =
+\frac{n_L}{n}p^L + \frac{n_R}{n}p^R$ (count the class-$k$ examples on both
+sides). By concavity, $I(p) \ge \frac{n_L}{n}I(p^L) + \frac{n_R}{n}I(p^R)$,
+i.e. $\Delta \ge 0$, with equality for a strictly concave $I$ only if $p^L =
+p^R$. Gini: $1 - \lVert p\rVert^2$ is strictly concave because $\lVert
+p\rVert^2$ is strictly convex. Entropy: $-p\log p$ has second derivative
+$-1/(p\ln2) < 0$, and a sum of strictly concave functions of separate
+coordinates is strictly concave. $\blacksquare$ The misclassification
+impurity is concave but piecewise linear: many useful splits leave it
+unchanged, which is why it is a poor criterion for growing trees
+[@hastie2009, §9.2.3] (@exr-mla7-trees-easy).
+:::
+
+::: {#exm-tree-hand}
+## Choosing a split by hand
+A node holds 10 examples, 6 of class A and 4 of class B: Gini $1 - 0.6^2 -
+0.4^2 = 0.48$. Candidate split 1 sends 5 A and 1 B left, 1 A and 3 B right:
+Gini left $1 - (5/6)^2 - (1/6)^2 \approx 0.278$, right $1 - (1/4)^2 - (3/4)^2 =
+0.375$, weighted $0.6\cdot0.278 + 0.4\cdot0.375 \approx 0.317$, decrease $0.163$.
+Candidate 2 sends 3 A and 0 B left, 3 A and 4 B right: left $0$, right $1 -
+(3/7)^2 - (4/7)^2 \approx 0.490$, weighted $0.7\cdot0.490 = 0.343$, decrease
+$0.137$. Split 1 is chosen.
+:::
+
+For **regression** the impurity of a node is the mean squared deviation of
+its targets from their mean: the mean is the constant with the smallest
+squared error (@thm-regression-function, applied to the empirical
+distribution of the node), and @eq-tree-gain with this impurity is the
+reduction of the residual sum of squares.
+
+### Finding the best split
+
+For one feature, sort the node's examples by its value; the candidate
+thresholds are the midpoints between consecutive distinct values. Sweeping
+left to right, the class counts on each side are updated by one example at a
+time, so all candidates are scored in $O(n)$ after an $O(n\log n)$ sort. Over
+$d$ features, a node costs $O(dn\log n)$.
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.tree import DecisionTreeClassifier, export_text
+
+def gini(counts):
+    p = counts / counts.sum(axis=-1, keepdims=True)
+    return 1 - (p ** 2).sum(axis=-1)
+
+def best_split(X, y, classes):
+    """Best (feature, threshold, decrease) by Gini, scanning sorted values once per feature."""
+    n = len(y)
+    parent = gini(np.array([np.sum(y == c) for c in classes], float))
+    best = (None, None, 0.0)
+    Y = (y[:, None] == classes[None, :]).astype(float)           # one-hot labels
+    for j in range(X.shape[1]):
+        order = np.argsort(X[:, j], kind="stable")
+        xs, Ys = X[order, j], Y[order]
+        left = np.cumsum(Ys, axis=0)[:-1]                         # counts left of each cut position
+        right = Ys.sum(0) - left
+        nl = np.arange(1, n)[:, None]
+        valid = xs[1:] > xs[:-1]                                  # cut only between distinct values
+        dec = parent - (nl[:, 0] / n) * gini(left) - ((n - nl[:, 0]) / n) * gini(right)
+        dec[~valid] = -np.inf
+        i = int(np.argmax(dec))
+        if dec[i] > best[2] + 1e-12:
+            best = (j, (xs[i] + xs[i + 1]) / 2, dec[i])
+    return best
+
+def grow(X, y, classes, depth, max_depth):
+    """A depth-limited CART tree as nested dicts."""
+    counts = np.array([np.sum(y == c) for c in classes])
+    j, t, dec = best_split(X, y, classes) if depth < max_depth and len(np.unique(y)) > 1 else (None, None, 0)
+    if j is None:
+        return {"leaf": classes[np.argmax(counts)]}
+    m = X[:, j] <= t
+    return {"j": j, "t": t, "left": grow(X[m], y[m], classes, depth + 1, max_depth),
+            "right": grow(X[~m], y[~m], classes, depth + 1, max_depth)}
+
+def predict_one(node, x):
+    while "leaf" not in node:
+        node = node["left"] if x[node["j"]] <= node["t"] else node["right"]
+    return node["leaf"]
+
+from sklearn.datasets import load_wine
+wine = load_wine()
+Xw, yw, names = wine.data, wine.target, wine.feature_names
+tree_mine = grow(Xw, yw, np.unique(yw), 0, 3)
+tree_sk = DecisionTreeClassifier(max_depth=3, random_state=0).fit(Xw, yw)
+pm = np.array([predict_one(tree_mine, x) for x in Xw])
+print(f"root split: ours '{names[tree_mine['j']]} <= {tree_mine['t']:.3f}', "
+      f"scikit-learn '{names[tree_sk.tree_.feature[0]]} <= {tree_sk.tree_.threshold[0]:.3f}'")
+print(f"identical predictions on the training data: {np.array_equal(pm, tree_sk.predict(Xw))}")
+print(export_text(tree_sk, feature_names=list(names), decimals=2))
+```
+
+The rules printed by `export_text` are the whole model: three questions at
+most lead to a cultivar. scikit-learn also considers the features in a random
+order and breaks ties between equally good splits accordingly
+(`random_state`); with real-valued features exact ties are rare, and our
+greedy search finds the same tree.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla7-trees-easy}
+## Easy — three impurities, two splits
+For the node and the two candidate splits of @exm-tree-hand, compute the
+decrease of the entropy and of the misclassification impurity. Do the three
+criteria agree? Then consider a node with 400 A and 400 B and the splits
+(300 A, 100 B | 100 A, 300 B) and (200 A, 400 B | 200 A, 0 B): which does each
+criterion prefer?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Write a small function for each impurity and apply @eq-tree-gain. The second
+example is the classic one of @hastie2009, §9.2.3.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def entropy(c):
+    p = c / c.sum(); p = p[p > 0]
+    return -(p * np.log2(p)).sum()
+miscl = lambda c: 1 - c.max() / c.sum()
+gini1 = lambda c: 1 - ((c / c.sum()) ** 2).sum()
+def decrease(I, parent, left, right):
+    n = parent.sum()
+    return I(parent) - left.sum() / n * I(left) - right.sum() / n * I(right)
+cases = {"example, split 1": ([6, 4], [5, 1], [1, 3]), "example, split 2": ([6, 4], [3, 0], [3, 4]),
+         "800, split a": ([400, 400], [300, 100], [100, 300]), "800, split b": ([400, 400], [200, 400], [200, 0])}
+for name, (p, l, r) in cases.items():
+    p, l, r = (np.array(v, float) for v in (p, l, r))
+    print(f"{name:17s} Gini {decrease(gini1, p, l, r):.3f}  entropy {decrease(entropy, p, l, r):.3f}  misclassification {decrease(miscl, p, l, r):.3f}")
+```
+In the 10-example node, Gini and misclassification prefer split 1, while
+entropy prefers split 2, which creates a pure child: the criteria can
+disagree, and entropy rewards purity most. In the 800-example node
+misclassification cannot distinguish the splits (both leave 200 errors), but
+split b produces a **pure** node and Gini and entropy prefer it: a pure node needs no further splitting, which is what growing a
+tree should reward. The flat parts of the misclassification impurity are the
+reason it is not used for growing. A common slip is to forget the weights
+$n_L/n$, $n_R/n$.
+:::
+
+::: {#exr-mla7-trees-medium}
+## Medium — a regression stump from scratch
+Write the best-split search for **regression** (impurity: mean squared
+deviation) and check it against `DecisionTreeRegressor(max_depth=1)` on 200
+noisy points of $y = \sin(2\pi x)$. Then plot the depth-1, depth-3 and
+depth-8 regression trees: what kind of function does a regression tree fit?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+With prefix sums of $y$ and $y^2$ you get the sum of squared deviations on
+each side in $O(1)$ per cut: $\sum(y - \bar y)^2 = \sum y^2 - (\sum y)^2/m$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-tree-regression
+#| fig-cap: "Regression trees of depth 1, 3 and 8 on 200 noisy points of a sine: piecewise-constant fits, with up to 2, 8 and 256 steps. Depth 8 follows the noise."
+from sklearn.tree import DecisionTreeRegressor
+r = np.random.default_rng(0)
+x = np.sort(r.uniform(0, 1, 200)); yr = np.sin(2 * np.pi * x) + r.normal(0, 0.3, 200)
+def best_regression_cut(x, y):
+    o = np.argsort(x); xs, ys = x[o], y[o]
+    s1, s2 = np.cumsum(ys)[:-1], np.cumsum(ys ** 2)[:-1]
+    m = np.arange(1, len(ys))
+    sse_left = s2 - s1 ** 2 / m
+    sse_right = (ys ** 2).sum() - s2 - (ys.sum() - s1) ** 2 / (len(ys) - m)
+    total = np.where(xs[1:] > xs[:-1], sse_left + sse_right, np.inf)
+    i = int(np.argmin(total)); return (xs[i] + xs[i + 1]) / 2
+stump = DecisionTreeRegressor(max_depth=1).fit(x[:, None], yr)
+print(f"our cut {best_regression_cut(x, yr):.5f}, scikit-learn {stump.tree_.threshold[0]:.5f}")
+fig, ax = plt.subplots(figsize=(6.5, 3.2))
+ax.scatter(x, yr, s=8, color=mlalgbook.MUTED)
+grid = np.linspace(0, 1, 1000)[:, None]
+for depth, c in zip((1, 3, 8), mlalgbook.COLORS):
+    ax.plot(grid, DecisionTreeRegressor(max_depth=depth).fit(x[:, None], yr).predict(grid), color=c, lw=1.5, label=f"depth {depth}")
+ax.legend(); ax.set_xlabel("x"); ax.set_ylabel("y"); plt.show()
+```
+The cut points coincide. A regression tree fits a **step function**: each
+leaf is a constant, the mean of its examples. Shallow trees are too coarse
+(bias), deep ones fit individual noisy points (variance) — the same trade-off
+as $k$ in $k$-NN, with the leaf size playing the role of $k$. A common bug in
+the prefix-sum version is an off-by-one between the cut position and the
+counts on each side.
+:::
+
+::: {#exr-mla7-trees-hard}
+## Hard — a tree that people can read
+On the wine data, fit a tree with `max_depth` chosen by 5-fold
+cross-validation among $1, \dots, 8$ on a training split; print its rules;
+report test accuracy and the confusion matrix; and rewrite the tree's first
+two levels as a sentence a non-specialist could apply. Which features does it
+use, and does that agree with `feature_importances_`?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`GridSearchCV(DecisionTreeClassifier(random_state=0), {"max_depth": range(1, 9)})`;
+`export_text(best, feature_names=...)`. Trees need no scaling — splits are
+invariant to monotone transformations of a feature.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold, cross_val_score
+from sklearn.metrics import confusion_matrix
+Xtr, Xte, ytr, yte = train_test_split(Xw, yw, test_size=0.3, stratify=yw, random_state=0)
+gs = GridSearchCV(DecisionTreeClassifier(random_state=0), {"max_depth": range(1, 9)},
+                  cv=StratifiedKFold(5, shuffle=True, random_state=0)).fit(Xtr, ytr)
+best_tree = gs.best_estimator_
+print(f"chosen depth {gs.best_params_['max_depth']} (CV accuracy {gs.best_score_:.3f}); test accuracy {best_tree.score(Xte, yte):.3f}")
+print(confusion_matrix(yte, best_tree.predict(Xte)))
+print(export_text(best_tree, feature_names=list(names), decimals=2, max_depth=2))
+imp = pd.Series(best_tree.feature_importances_, index=names).sort_values(ascending=False)
+print(imp[imp > 0].round(3).to_string())
+```
+The rules read like a checklist (e.g. "if the proline content is high, it is
+cultivar 0 unless …"); only a few of the 13 measurements are used, and they
+are the ones with the largest importances. The test accuracy is typically a
+few points below that of the models of earlier chapters on these data: a
+single tree pays for readability with variance (@sec-tree-bagging). That
+trade-off — a slightly less accurate model that operators can check by hand
+— can be the right choice for a warehouse. Mistakes to avoid: reading
+`feature_importances_` as causal effects, and presenting a deep, unreadable
+tree as "interpretable".
+:::
+
+## Controlling the complexity: pruning {#sec-tree-pruning}
+
+Grown until its leaves are pure, a tree fits the training data perfectly
+(unless identical inputs have different labels) and overfits. Two families of
+remedies exist. **Pre-pruning** stops growth early: `max_depth`,
+`min_samples_split`, `min_samples_leaf`, `max_leaf_nodes`,
+`min_impurity_decrease`. It is simple, but greedy: a split that looks useless
+can enable very useful ones below it (XOR again). **Post-pruning** grows a
+large tree and then removes branches that do not pay for their complexity.
+
+**Cost-complexity pruning** [@breiman1984, ch. 3] measures a tree $T$ by
+$$
+R_\alpha(T) = R(T) + \alpha\,|\tilde T| ,
+$$ {#eq-tree-ccp}
+where $R(T)$ is the training impurity summed over the leaves (weighted by the
+fraction of examples in each) and $|\tilde T|$ the number of leaves; $\alpha
+\ge 0$ prices each leaf. For each $\alpha$ there is a smallest subtree
+$T(\alpha)$ of the full tree minimising $R_\alpha$, and as $\alpha$ grows
+these subtrees are **nested** — each obtained from the previous one by
+collapsing branches — a result of Breiman and colleagues that we use without
+proof. The sequence is computed by the **weakest-link** rule.
+
+::: {#prp-tree-weakest-link}
+## When a branch is worth keeping
+Let $t$ be an internal node, $T_t$ the branch rooted at it, $R(t)$ the
+impurity of $t$ if it were made a leaf, and $R(T_t)$ the summed impurity of
+the branch's leaves. Collapsing $T_t$ into the leaf $t$ does not increase
+$R_\alpha$ if and only if
+$$
+\alpha \ge g(t) = \frac{R(t) - R(T_t)}{|\tilde T_t| - 1} .
+$$
+The weakest link is the internal node with the smallest $g(t)$; pruning it
+gives the next subtree of the sequence, at $\alpha = g(t)$.
+:::
+
+*In one line:* $g(t)$ is the impurity a branch removes per extra leaf it
+costs; as the price per leaf rises, the branches that buy the least
+improvement per leaf are cut first.
+
+::: {.deep kind="proof"}
+## Proof of @prp-tree-weakest-link
+Collapsing $T_t$ changes only the part of $R_\alpha$ due to the branch: before,
+$R(T_t) + \alpha|\tilde T_t|$; after, $R(t) + \alpha\cdot1$. The collapse does
+not increase $R_\alpha$ iff $R(t) + \alpha \le R(T_t) + \alpha|\tilde T_t|$,
+i.e. $\alpha(|\tilde T_t| - 1) \ge R(t) - R(T_t)$, which is the claim
+(an internal node's branch has at least two leaves). Raising $\alpha$ from 0,
+the first collapse that becomes worthwhile is at the smallest $g(t)$.
+$\blacksquare$
+:::
+
+scikit-learn computes the sequence with `cost_complexity_pruning_path` and
+prunes with `ccp_alpha`; $\alpha$ is then chosen by cross-validation like any
+penalty. The widget shows the simpler pre-pruning knob, the depth, on a
+two-class problem.
+
+```{python}
+#| echo: false
+from sklearn.datasets import make_moons
+_X, _y = make_moons(300, noise=0.3, random_state=2)
+_g = np.linspace(-2, 3, 60); _gy = np.linspace(-1.6, 2.1, 60)
+_xx, _yy = np.meshgrid(_g, _gy); _P = np.column_stack([_xx.ravel(), _yy.ravel()])
+_fits = []
+for _d in range(1, 16):
+    _m = DecisionTreeClassifier(max_depth=_d, random_state=0).fit(_X, _y)
+    _fits.append({"depth": _d, "pred": _m.predict(_P).astype(int).tolist(), "leaves": int(_m.get_n_leaves()),
+                  "train": float(_m.score(_X, _y)),
+                  "cv": float(cross_val_score(DecisionTreeClassifier(max_depth=_d, random_state=0), _X, _y, cv=StratifiedKFold(5, shuffle=True, random_state=0)).mean())})
+ojs_define(treePts=[{"x": float(a), "y": float(b), "label": int(c)} for (a, b), c in zip(_X, _y)], treeFits=_fits, treeGx=_g.tolist(), treeGy=_gy.tolist())
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof treeDepth = Inputs.range([1, 15], {step: 1, value: 4, label: "max_depth"})
+```
+
+```{ojs}
+//| echo: false
+treeFit = treeFits[treeDepth - 1]
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">depth ${treeFit.depth} — ${treeFit.leaves} leaves, training accuracy ${treeFit.train.toFixed(3)}, 5-fold CV accuracy ${treeFit.cv.toFixed(3)}</p>`
+```
+
+```{ojs}
+//| echo: false
+treeCells = {
+  const gx = treeGx, gy = treeGy, n = gx.length, hx = (gx[1] - gx[0]) / 2, hy = (gy[1] - gy[0]) / 2, out = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++)
+    out.push({x1: gx[j] - hx, x2: gx[j] + hx, y1: gy[i] - hy, y2: gy[i] + hy, label: treeFit.pred[i * n + j]});
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-tree-depth-widget
+//| fig-cap: "A decision tree on 300 points of the two-moons problem, for max_depth from 1 to 15. The regions are unions of axis-aligned rectangles; deep trees isolate individual noisy points (training accuracy → 1) while the cross-validated accuracy peaks at a moderate depth."
+Plot.plot({
+  height: 340, width: 440, x: {domain: [-2, 3], label: "x₁"}, y: {domain: [-1.6, 2.1], label: "x₂"},
+  color: {type: "ordinal", domain: [0, 1], range: ["#2a78d6", "#eb6834"]},
+  marks: [
+    Plot.rect(treeCells, {x1: "x1", x2: "x2", y1: "y1", y2: "y2", fill: "label", fillOpacity: 0.22}),
+    Plot.dot(treePts, {x: "x", y: "y", fill: "label", r: 3, stroke: "#fcfcfb", strokeWidth: 0.5})
+  ]
+})
+```
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-mla7-pruning-easy}
+## Easy — the weakest link by hand
+A tree has two internal nodes. Node $a$ (the root) has impurity $R(a) = 0.30$
+as a leaf; its full branch has 4 leaves with total impurity $0.06$. Node $b$,
+a child of $a$, has $R(b) = 0.12$ as a leaf and its branch has 2 leaves with
+total $0.08$. Compute $g(a)$ and $g(b)$. Which node is pruned first, and at
+which $\alpha$? Which tree is optimal for $\alpha = 0.05$?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$g(t) = (R(t) - R(T_t))/(|\tilde T_t| - 1)$. After pruning $b$, recompute
+$g(a)$ for the smaller tree.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$g(a) = (0.30 - 0.06)/3 = 0.08$; $g(b) = (0.12 - 0.08)/1 = 0.04$. Node $b$
+is pruned first, at $\alpha = 0.04$. The tree then has 3 leaves with total
+impurity $0.06 - 0.08 + 0.12 = 0.10$, and $g(a) = (0.30 - 0.10)/2 = 0.10$. For
+$\alpha = 0.05$ the optimal subtree is the 3-leaf tree ($b$ pruned, $a$
+kept); $a$ is pruned only for $\alpha \ge 0.10$.
+```{python}
+for name, (R_leaf, R_branch, leaves) in {"a": (0.30, 0.06, 4), "b": (0.12, 0.08, 2), "a after b": (0.30, 0.10, 3)}.items():
+    print(name, round((R_leaf - R_branch) / (leaves - 1), 3))
+```
+Note that $g(a)$ changes after $b$ is pruned: the weakest-link values must be
+recomputed along the sequence. A frequent slip is to divide by the number of
+leaves instead of the number of leaves minus one.
+:::
+
+::: {#exr-mla7-pruning-medium}
+## Medium — choosing `ccp_alpha` by cross-validation
+On the breast-cancer data (training split), compute the pruning path of a full
+tree, choose `ccp_alpha` by 5-fold cross-validation over the path's values, and
+compare test accuracy and number of leaves with the unpruned tree and with the
+best `max_depth`.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`DecisionTreeClassifier().cost_complexity_pruning_path(X, y).ccp_alphas`
+gives the breakpoints; drop the last one (it prunes to the root).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_breast_cancer
+Xb, yb = load_breast_cancer(return_X_y=True)
+Xb_tr, Xb_te, yb_tr, yb_te = train_test_split(Xb, yb, test_size=0.3, stratify=yb, random_state=0)
+alphas = DecisionTreeClassifier(random_state=0).cost_complexity_pruning_path(Xb_tr, yb_tr).ccp_alphas[:-1]
+cv5 = StratifiedKFold(5, shuffle=True, random_state=0)
+by_alpha = GridSearchCV(DecisionTreeClassifier(random_state=0), {"ccp_alpha": alphas}, cv=cv5).fit(Xb_tr, yb_tr)
+by_depth = GridSearchCV(DecisionTreeClassifier(random_state=0), {"max_depth": range(1, 12)}, cv=cv5).fit(Xb_tr, yb_tr)
+full = DecisionTreeClassifier(random_state=0).fit(Xb_tr, yb_tr)
+for name, m in (("unpruned", full), (f"ccp_alpha = {by_alpha.best_params_['ccp_alpha']:.4f}", by_alpha.best_estimator_),
+                (f"max_depth = {by_depth.best_params_['max_depth']}", by_depth.best_estimator_)):
+    print(f"{name:22s}: {m.get_n_leaves():3d} leaves, test accuracy {m.score(Xb_te, yb_te):.3f}")
+```
+Pruning removes most of the leaves at little or no cost in accuracy; the
+pruned and the depth-limited trees perform similarly here, the pruned one
+usually with fewer leaves because it keeps depth only where it pays. With a
+test set of 171 cases, differences of one or two points are within noise.
+Mistake to avoid: choosing $\alpha$ on the test set — the path offers many
+candidates, and the best on the test set is optimistic.
+:::
+
+::: {#exr-mla7-pruning-hard}
+## Hard — how unstable is a tree?
+Draw 50 bootstrap samples of the wine data, fit a tree of depth 3 to each, and
+record the feature used at the root and the test accuracy on the out-of-bag
+wines. How many different root features appear? How much does the accuracy
+vary? Relate this to the variance term of @thm-bias-variance.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A bootstrap sample draws $n$ indices with replacement; the out-of-bag examples
+are those never drawn. `tree_.feature[0]` is the root feature.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+r = np.random.default_rng(1)
+roots, accs = [], []
+for b in range(50):
+    idx = r.integers(0, len(yw), len(yw)); oob = np.setdiff1d(np.arange(len(yw)), idx)
+    t = DecisionTreeClassifier(max_depth=3, random_state=0).fit(Xw[idx], yw[idx])
+    roots.append(names[t.tree_.feature[0]]); accs.append(t.score(Xw[oob], yw[oob]))
+print(pd.Series(roots).value_counts().to_string())
+print(f"out-of-bag accuracy: mean {np.mean(accs):.3f}, standard deviation {np.std(accs):.3f}, range {min(accs):.3f}–{max(accs):.3f}")
+```
+Several different features appear at the root, and with them different trees
+and different rules; the accuracy varies by many points from one sample to
+the next. A small change in the data changes the first split, and the change
+propagates to everything below it: trees are **high-variance** learners. That
+is a disaster for interpretation ("the key measurement is…" depends on the
+sample) and an opportunity for prediction: averaging many such trees reduces
+the variance — the subject of the next section.
+:::
+
+## Bagging {#sec-tree-bagging}
+
+The bias–variance decomposition (@thm-bias-variance) suggests a cure for
+high-variance learners: average many of them. With one data set, Breiman's
+**bootstrap aggregating** (bagging) [@breiman1996] simulates many training
+sets by **bootstrap sampling** — drawing $n$ examples *with replacement* from
+the $n$ available [@efron1979] — fits one tree per sample, and averages their
+predictions (or takes the majority vote).
+
+::: {#prp-tree-bootstrap}
+## The out-of-bag fraction
+In a bootstrap sample of size $n$, a given example is absent with probability
+$(1 - 1/n)^n$, which increases to $e^{-1} \approx 0.368$ as $n \to \infty$.
+:::
+
+*In one line:* each tree sees about 63 % of the distinct examples; the other
+37 % are a free validation set for that tree.
+
+::: {.deep kind="proof"}
+## Proof of @prp-tree-bootstrap
+Each of the $n$ independent draws misses the example with probability $1 -
+1/n$, so all of them miss it with probability $(1 - 1/n)^n$. Taking logs,
+$n\ln(1 - 1/n) = -1 - \frac{1}{2n} - \frac{1}{3n^2} - \dots$ (series of
+$\ln(1 - u)$), which increases to $-1$. $\blacksquare$
+:::
+
+Predicting each training example with only the trees that did not see it
+gives the **out-of-bag** (OOB) estimate of the error — an almost free
+alternative to cross-validation (`oob_score=True`) [@breiman1996oob]. Why
+does averaging help, and how much?
+
+::: {#thm-tree-average-variance}
+## The variance of an average of correlated predictors
+Let $f_1, \dots, f_B$ be identically distributed random variables (the
+predictions of $B$ trees at a point) with variance $\sigma^2$ and pairwise
+correlation $\rho$. Then
+$$
+\operatorname{Var}\Big(\frac1B\sum_{b=1}^Bf_b\Big) = \rho\sigma^2 + \frac{1 - \rho}{B}\sigma^2 ,
+$$
+while the mean, and therefore the bias, is that of a single $f_b$.
+:::
+
+*In one line:* averaging removes the independent part of the trees'
+fluctuations as $B$ grows, but not the part they share; the floor is
+$\rho\sigma^2$ — so to gain more, make the trees less correlated.
+
+::: {.deep kind="proof"}
+## Proof of @thm-tree-average-variance
+$\operatorname{Var}(\sum_bf_b) = \sum_b\operatorname{Var}f_b +
+\sum_{b\ne c}\operatorname{Cov}(f_b, f_c) = B\sigma^2 + B(B - 1)\rho\sigma^2$.
+Dividing by $B^2$: $\frac{\sigma^2}{B} + \frac{B-1}{B}\rho\sigma^2 = \rho\sigma^2
++ \frac{1 - \rho}{B}\sigma^2$. The mean of the average is the common mean
+$\mathbb{E}f_b$ by linearity [@hastie2009, §15.2]. $\blacksquare$
+:::
+
+Bagging therefore helps unstable, low-bias learners — deep trees — and does
+little for stable ones such as linear models. The simulation below estimates
+bias² and variance of a deep regression tree and of bagged trees, as in
+@fig-bias-variance.
+
+```{python}
+#| label: fig-tree-bagging-bv
+#| fig-cap: "Squared bias and variance (averaged over 200 test inputs, 200 simulated training sets of 100 noisy points of a sine) of a fully grown regression tree and of bagging with B trees. Averaging leaves the bias essentially unchanged and removes most of the variance."
+from sklearn.ensemble import BaggingRegressor
+r = np.random.default_rng(2)
+truth = lambda x: np.sin(2 * np.pi * x)
+x0 = np.linspace(0.02, 0.98, 200)[:, None]
+Bs = [1, 2, 5, 10, 25, 50, 100]
+preds = {B: [] for B in Bs}
+for s in range(200):
+    xs_ = r.uniform(0, 1, 100); ys_ = truth(xs_) + r.normal(0, 0.3, 100)
+    for B in Bs:
+        m = DecisionTreeRegressor(random_state=s) if B == 1 else BaggingRegressor(DecisionTreeRegressor(), n_estimators=B, random_state=s)
+        preds[B].append(m.fit(xs_[:, None], ys_).predict(x0))
+bias2 = [np.mean((np.mean(preds[B], 0) - truth(x0[:, 0])) ** 2) for B in Bs]
+var = [np.mean(np.var(preds[B], 0)) for B in Bs]
+fig, ax = plt.subplots(figsize=(6, 3.2))
+ax.plot(Bs, var, marker="o", ms=4, label="variance"); ax.plot(Bs, bias2, marker="o", ms=4, label="bias²")
+ax.set_xscale("log"); ax.set_xlabel("number of bagged trees B (B = 1: a single tree)"); ax.legend(); plt.show()
+print("B:        ", Bs); print("variance: ", np.round(var, 4)); print("bias^2:   ", np.round(bias2, 4))
+```
+
+The variance falls quickly over the first few trees and then levels off at
+the floor $\rho\sigma^2$ set by the correlation between trees grown on
+overlapping bootstrap samples; the bias stays essentially where it was, close to
+zero for these fully grown trees.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla7-bagging-easy}
+## Easy — two numbers to remember
+(a) Compute $(1 - 1/n)^n$ for $n = 2, 10, 100, 10\,000$. (b) Trees with
+$\sigma^2 = 1$ and $\rho = 0.3$: what is the variance of the average of 10,
+100 and infinitely many trees? How many trees bring it within 5 % of the
+floor?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use @thm-tree-average-variance; the excess over the floor is $(1 - \rho)/B$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) $0.25, 0.349, 0.366, 0.368$. (b) $0.3 + 0.7/B$: $0.37$, $0.307$, $0.3$.
+Within 5 % of the floor means $0.7/B \le 0.015$, i.e. $B \ge 47$.
+```{python}
+print([round((1 - 1 / n) ** n, 4) for n in (2, 10, 100, 10_000)], [0.3 + 0.7 / B for B in (10, 100)], int(np.ceil(0.7 / 0.015)))
+```
+Beyond a few dozen trees, adding more changes almost nothing — more trees
+never hurt accuracy, they only cost time. The correlation, not the number of
+trees, sets the limit.
+:::
+
+::: {#exr-mla7-bagging-medium}
+## Medium — bagging and OOB from scratch
+Implement bagging of `DecisionTreeClassifier`s on the wine data (100 trees,
+majority vote), compute its out-of-bag accuracy yourself, and compare with
+`BaggingClassifier(oob_score=True)` and with 5-fold cross-validation.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For each example, collect the votes of the trees for which it was out of bag.
+A handful of examples may be in every bootstrap sample — with 100 trees the
+chance is negligible, but guard against it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.ensemble import BaggingClassifier
+r = np.random.default_rng(3)
+n, K, B = len(yw), 3, 100
+votes = np.zeros((n, K))
+for b in range(B):
+    idx = r.integers(0, n, n); oob = np.setdiff1d(np.arange(n), idx)
+    t = DecisionTreeClassifier(random_state=b).fit(Xw[idx], yw[idx])
+    votes[oob, t.predict(Xw[oob])] += 1
+has = votes.sum(1) > 0
+oob_mine = np.mean(votes[has].argmax(1) == yw[has])
+bag = BaggingClassifier(DecisionTreeClassifier(), n_estimators=B, oob_score=True, random_state=0).fit(Xw, yw)
+cv_bag = cross_val_score(BaggingClassifier(DecisionTreeClassifier(), n_estimators=B, random_state=0), Xw, yw, cv=StratifiedKFold(5, shuffle=True, random_state=0)).mean()
+cv_tree = cross_val_score(DecisionTreeClassifier(random_state=0), Xw, yw, cv=StratifiedKFold(5, shuffle=True, random_state=0)).mean()
+print(f"OOB accuracy: ours {oob_mine:.3f} ({has.sum()} wines with OOB votes), BaggingClassifier {bag.oob_score_:.3f}; 5-fold CV {cv_bag:.3f}; single tree CV {cv_tree:.3f}")
+```
+Our OOB accuracy and scikit-learn's agree up to the randomness of the
+bootstrap samples, and both are close to the cross-validated accuracy —
+obtained here at the cost of one fit instead of five. Bagging is clearly more
+accurate than a single tree. (scikit-learn averages the trees' class
+*probabilities* rather than counting votes; with fully grown trees, whose
+leaves are pure, the two coincide.)
+:::
+
+::: {#exr-mla7-bagging-hard}
+## Hard — measuring the correlation between trees
+On the breast-cancer data, estimate the floor of @thm-tree-average-variance:
+fit 200 trees on bootstrap samples, and on a held-out set compute, for each
+point, the variance of the trees' predicted probabilities and the average
+pairwise correlation between trees across points. Repeat for random forests
+with `max_features` $= 1, 5, 30$ (all features = bagging). Which setting gives
+the least correlated trees, and is it the most accurate?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`RandomForestClassifier(max_features=m, n_estimators=200).estimators_` gives
+the trees; stack their `predict_proba(X)[:, 1]` into a $200 \times n$ matrix and
+use `np.corrcoef` on it (rows = trees). Bagging is `max_features=None` (or 30).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.ensemble import RandomForestClassifier
+for m in (1, 5, 30):
+    rf = RandomForestClassifier(n_estimators=200, max_features=m, random_state=0).fit(Xb_tr, yb_tr)
+    P = np.stack([t.predict_proba(Xb_te)[:, 1] for t in rf.estimators_])      # trees x points
+    C = np.corrcoef(P); rho = C[np.triu_indices_from(C, 1)].mean()
+    print(f"max_features = {m:2d}: mean correlation between trees {rho:.3f}, mean per-point variance {P.var(0).mean():.4f}, "
+          f"test accuracy {rf.score(Xb_te, yb_te):.3f}")
+```
+Fewer candidate features per split make the trees less correlated — and each
+tree individually worse (more variance per tree). The ensemble's accuracy
+balances the two: very small `max_features` decorrelates the trees but makes
+them weak; all features (bagging) makes them strong but similar. An
+intermediate value, such as $\sqrt{30} \approx 5$, is usually best. This is
+the trade-off random forests tune, and the topic of the next section.
+:::
+
+## Random forests {#sec-tree-forest}
+
+Bagged trees are correlated because they are grown from similar samples with
+the same greedy rule: a strong feature is chosen at the root of almost every
+tree. Breiman's **random forest** [@breiman2001rf] adds a second source of
+randomness: at **each split**, only a random subset of `max_features`
+features is considered. Strong features are then sometimes unavailable, other
+features get their chance, the trees become more diverse, $\rho$ falls, and by
+@thm-tree-average-variance so does the variance of the average — usually more
+than the individual trees get worse.
+
+In scikit-learn, `RandomForestClassifier` uses `max_features="sqrt"` by
+default ($\lfloor\sqrt d\rfloor$ candidates per split) and fully grown trees;
+`RandomForestRegressor` uses all features (`max_features=1.0`), i.e. bagging,
+by default. The main knobs are `n_estimators` (more is never worse, only
+slower), `max_features`, and the leaf size (`min_samples_leaf`), which
+smooths each tree. Forests need no scaling, handle interactions naturally,
+and give an OOB estimate for free. The widget shows a forest's decision
+regions as trees are added.
+
+```{python}
+#| echo: false
+_ns = [1, 2, 3, 5, 10, 25, 50, 100, 300]
+_rf_fits = []
+for _n in _ns:
+    _m = RandomForestClassifier(n_estimators=_n, random_state=0, oob_score=_n >= 25).fit(_X, _y)
+    _rf_fits.append({"n": _n, "pred": _m.predict(_P).astype(int).tolist(), "train": float(_m.score(_X, _y)),
+                     "oob": float(_m.oob_score_) if _n >= 25 else None,
+                     "cv": float(cross_val_score(RandomForestClassifier(n_estimators=_n, random_state=0), _X, _y, cv=StratifiedKFold(5, shuffle=True, random_state=0)).mean())})
+ojs_define(rfFits=_rf_fits)
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof rfN = Inputs.radio(rfFits.map(d => d.n), {value: 10, label: "number of trees"})
+```
+
+```{ojs}
+//| echo: false
+rfFit = rfFits.find(d => d.n === rfN)
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">${rfFit.n} tree${rfFit.n > 1 ? "s" : ""} — training accuracy ${rfFit.train.toFixed(3)}, 5-fold CV accuracy ${rfFit.cv.toFixed(3)}${rfFit.oob === null ? "" : `, OOB accuracy ${rfFit.oob.toFixed(3)}`}</p>`
+```
+
+```{ojs}
+//| echo: false
+rfCells = {
+  const gx = treeGx, gy = treeGy, n = gx.length, hx = (gx[1] - gx[0]) / 2, hy = (gy[1] - gy[0]) / 2, out = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++)
+    out.push({x1: gx[j] - hx, x2: gx[j] + hx, y1: gy[i] - hy, y2: gy[i] + hy, label: rfFit.pred[i * n + j]});
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-tree-forest-widget
+//| fig-cap: "A random forest on the two-moons data of @fig-tree-depth-widget as trees are added (fully grown trees, max_features = sqrt). One tree has jagged, noisy regions; the average of many is smoother and its cross-validated accuracy higher than a single tree's, although every tree fits the training data perfectly. (Beyond a few trees the CV accuracy fluctuates by about one point, within the noise of 5-fold CV on 300 points.)"
+Plot.plot({
+  height: 340, width: 440, x: {domain: [-2, 3], label: "x₁"}, y: {domain: [-1.6, 2.1], label: "x₂"},
+  color: {type: "ordinal", domain: [0, 1], range: ["#2a78d6", "#eb6834"]},
+  marks: [
+    Plot.rect(rfCells, {x1: "x1", x2: "x2", y1: "y1", y2: "y2", fill: "label", fillOpacity: 0.22}),
+    Plot.dot(treePts, {x: "x", y: "y", fill: "label", r: 3, stroke: "#fcfcfb", strokeWidth: 0.5})
+  ]
+})
+```
+:::
+
+### Feature importance
+
+Forests are less readable than a single tree, so they are often summarised by
+**feature importances**. Two definitions are common, and they can disagree.
+
+- **Mean decrease in impurity** (MDI, `feature_importances_`): the total
+  impurity decrease @eq-tree-gain brought by the splits on each feature,
+  weighted by the fraction of examples reaching them, averaged over the trees
+  and normalised to sum to one. It is free, but computed on the **training**
+  data, and it is biased towards features with many possible split points —
+  continuous or high-cardinality features, even pure noise [@strobl2007].
+- **Permutation importance** (`sklearn.inspection.permutation_importance`):
+  the drop in a score on **held-out** data when one feature's values are
+  randomly shuffled, breaking its link with the target [@breiman2001rf]. It
+  measures what the model actually uses to predict new data, at the cost of
+  extra predictions; with strongly correlated features it understates both
+  (each can stand in for the other).
+
+```{python}
+#| label: fig-tree-importance
+#| fig-cap: "Feature importances of a random forest on synthetic data in which the label depends strongly on a binary feature, weakly on a four-level feature, and not at all on a continuous noise feature. Impurity-based importance (MDI, training data) ranks the noise first; permutation importance on held-out data ranks it near zero."
+from sklearn.inspection import permutation_importance
+rn = np.random.default_rng(4)
+n_imp = 1000
+binary, levels, noise = rn.integers(0, 2, n_imp), rn.integers(0, 4, n_imp), rn.uniform(size=n_imp)
+p_true = 0.2 + 0.6 * binary + 0.05 * (levels - 1.5)                  # the noise feature plays no role
+y_imp = (rn.random(n_imp) < p_true).astype(int)
+X_imp = np.column_stack([binary, levels, noise]); fnames = ["binary (strong)", "4 levels (weak)", "continuous noise"]
+Xi_tr, Xi_te, yi_tr, yi_te = train_test_split(X_imp, y_imp, test_size=0.5, stratify=y_imp, random_state=0)
+rf = RandomForestClassifier(n_estimators=300, random_state=0).fit(Xi_tr, yi_tr)
+mdi = pd.Series(rf.feature_importances_, index=fnames)
+perm = pd.Series(permutation_importance(rf, Xi_te, yi_te, n_repeats=20, random_state=0).importances_mean, index=fnames)
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 2.6), sharey=True)
+for ax, (title, s_), c in zip(axes, (("MDI (training data)", mdi), ("permutation (held-out data)", perm)), mlalgbook.COLORS):
+    ax.barh(s_.index[::-1], s_.values[::-1], color=c); ax.set_title(title)
+fig.tight_layout(); plt.show()
+print("MDI:", ", ".join(f"{k} {v:.3f}" for k, v in mdi.items()))
+print("permutation:", ", ".join(f"{k} {v:.3f}" for k, v in perm.items()), f"| test accuracy {rf.score(Xi_te, yi_te):.3f}")
+```
+
+The fully grown trees use the continuous noise feature to fit the label noise
+of the training data — it offers hundreds of possible thresholds, the binary
+feature only one — and MDI, computed on those same training data, credits it
+with the largest share. On held-out data, shuffling the noise feature barely
+changes the accuracy. Neither number is a causal effect; both describe a
+model. When the question is "which measurements does the classifier rely on
+for new data?", permutation importance on held-out data is the more
+trustworthy answer [@molnar2022, §8.5].
+
+::: {.deep}
+## Beyond bagging: boosting
+Bagging and random forests reduce variance by averaging independent-ish
+trees. **Boosting** builds trees sequentially, each fitted to the errors of
+the current ensemble, and mainly reduces **bias**: AdaBoost [@freund1997] and
+gradient boosting [@friedman2001] (in scikit-learn
+`HistGradientBoostingClassifier`) are often the most accurate models on
+tabular data. They are not part of this course's syllabus; @hastie2009, ch. 10
+develops them in the same spirit as this chapter.
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-mla7-forest-easy}
+## Easy — how many candidates?
+With 30 features, how many candidate features does a split of
+`RandomForestClassifier` consider by default? What is the probability that a
+given feature is among them? With 5 features?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$\lfloor\sqrt{d}\rfloor$ features drawn without replacement: a given feature
+is included with probability $\lfloor\sqrt d\rfloor/d$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$d = 30$: $\lfloor\sqrt{30}\rfloor = 5$ candidates, each feature included with
+probability $5/30 \approx 0.167$. $d = 5$: $\lfloor\sqrt5\rfloor = 2$
+candidates, probability $2/5 = 0.4$.
+```{python}
+print([(d, int(np.sqrt(d)), round(int(np.sqrt(d)) / d, 3)) for d in (30, 5)])
+```
+With five features — the size of the fruit table — a strong feature is
+unavailable at 60 % of the splits, so the forest is pushed to use the others:
+a substantial decorrelation even with few features. Note that if none of the
+drawn candidates gives a valid split, scikit-learn keeps drawing beyond
+`max_features`.
+:::
+
+::: {#exr-mla7-forest-medium}
+## Medium — is the OOB estimate honest?
+On the wine data, compare for `RandomForestClassifier` with $n_{\text{est}} =
+10, 50, 200, 500$ the OOB accuracy with the repeated 5-fold CV accuracy. When
+are they close, and why can the OOB estimate be pessimistic with few trees?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+With few trees, each example is out of bag for only about $0.37\,n_{\text{est}}$
+trees, so its OOB prediction comes from a small forest.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import warnings
+from sklearn.model_selection import RepeatedStratifiedKFold
+cvr = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=0)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", UserWarning)                     # few trees: some points have no OOB prediction
+    for n_est in (10, 50, 200, 500):
+        rf_ = RandomForestClassifier(n_estimators=n_est, oob_score=True, random_state=0).fit(Xw, yw)
+        cvs = cross_val_score(RandomForestClassifier(n_estimators=n_est, random_state=0), Xw, yw, cv=cvr).mean()
+        print(f"{n_est:3d} trees: OOB {rf_.oob_score_:.3f}, repeated 5-fold CV {cvs:.3f}")
+```
+With many trees the two agree closely. With 10 trees each wine's OOB
+prediction comes from only three or four trees — a much weaker forest than the
+10-tree forest being evaluated — so the OOB estimate is pessimistic, and a
+few wines may get no OOB prediction at all. Use OOB with a few hundred trees,
+where it is a cheap substitute for cross-validation; for comparisons across
+model families, use the same cross-validation folds for every model.
+:::
+
+::: {#exr-mla7-forest-hard}
+## Hard — a forest among the other models
+On the wine data, compare by nested cross-validation (same outer folds for
+all) a random forest (tuning `max_features` $\in \{1, 2, 3, 6, 13\}$ and
+`min_samples_leaf` $\in \{1, 3, 5\}$), $k$-NN with scaling (tuning $k$), an RBF
+SVM with scaling (tuning $C$ and $\gamma$), Gaussian naive Bayes and a single
+tuned tree. Report means ± standard errors. Then, for the forest fitted on a
+training split, report the permutation importances on the test split. Which
+measurements matter, and do the models agree on the difficulty of the
+problem?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Build a dictionary of `GridSearchCV` objects (naive Bayes needs no tuning) and
+loop over them with `cross_val_score` and the same `outer` splitter. Keep
+`n_estimators` fixed (e.g. 300): it is not a parameter to tune.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
+inner = StratifiedKFold(3, shuffle=True, random_state=0)
+outer = StratifiedKFold(5, shuffle=True, random_state=1)
+contenders = {
+    "random forest": GridSearchCV(RandomForestClassifier(n_estimators=300, random_state=0),
+                                  {"max_features": [1, 2, 3, 6, 13], "min_samples_leaf": [1, 3, 5]}, cv=inner),
+    "k-NN": GridSearchCV(make_pipeline(StandardScaler(), KNeighborsClassifier()), {"kneighborsclassifier__n_neighbors": list(range(1, 31, 2))}, cv=inner),
+    "RBF SVM": GridSearchCV(make_pipeline(StandardScaler(), SVC()), {"svc__C": np.logspace(-1, 2, 4), "svc__gamma": np.logspace(-3, 0, 4)}, cv=inner),
+    "Gaussian naive Bayes": GaussianNB(),
+    "single tree": GridSearchCV(DecisionTreeClassifier(random_state=0), {"max_depth": range(1, 9)}, cv=inner),
+}
+for name, m in contenders.items():
+    s = cross_val_score(m, Xw, yw, cv=outer)
+    print(f"{name:21s} {s.mean():.3f} ± {s.std(ddof=1) / np.sqrt(len(s)):.3f}")
+rf_w = contenders["random forest"].fit(Xtr, ytr).best_estimator_
+pi = permutation_importance(rf_w, Xte, yte, n_repeats=30, random_state=0)
+print(pd.Series(pi.importances_mean, index=names).sort_values(ascending=False).head(5).round(3).to_string())
+```
+The forest, $k$-NN, the SVM and naive Bayes all reach high accuracy on the
+wine data, within a couple of standard errors of each other; the single tree
+is clearly behind — the variance that the forest averages away. The
+permutation importances single out a few measurements, which overlap with
+those the single tree chose (@exr-mla7-trees-hard). When strong models of
+very different kinds agree, the problem is easy for this representation of
+the data, and the choice among them can be made on other grounds:
+readability, prediction cost, robustness. Mistakes to avoid: tuning the
+favourite model more generously than the others, and reporting importances
+computed on the training data as if they described generalisation.
+:::
+
+::: {.project-link}
+**In the project.** Trees and forests are natural comparison models for the
+fruit classifier: they need **no scaling** (a split on grams is unaffected by
+expressing them in kilograms), they handle interactions between
+measurements, and a shallow tree turns the classification into rules an
+operator can apply at the warehouse door. They also help with the
+exploratory question of **which measurements separate which fruits**: if one
+feature alone isolates a class, the root of a tree will find it immediately —
+a strong hint to check whether that feature is genuine or an artefact of the
+data. Use permutation importance on held-out data, not MDI, to say which
+measurements the model relies on.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Unconstrained trees**: perfect training accuracy, poor generalisation;
+  prune or limit growth, or use a forest.
+- **Interpreting one tree's structure** as a stable truth about the data: a
+  different sample can give a different tree.
+- **MDI importances** as evidence: they are biased towards continuous and
+  high-cardinality features and computed on training data.
+- **Tuning `n_estimators`**: more trees never hurt accuracy; tune
+  `max_features` and the leaf size instead.
+- **OOB with few trees**: pessimistic and incomplete.
+- **Scaling "for safety"** before trees: harmless but useless; spend the
+  effort on features.
+- **Extrapolation**: trees predict constants outside the training range; a
+  forest cannot predict beyond the largest training target.
+:::
+
+## Summary
+
+- A tree splits on one feature at a time, greedily maximising the impurity
+  decrease; Gini and entropy are strictly concave, so splits never increase
+  them; leaves predict majorities or means.
+- Complexity is controlled by pre-pruning parameters or by cost-complexity
+  pruning, where a branch is kept iff $\alpha < (R(t) - R(T_t))/(|\tilde T_t| -
+  1)$.
+- Trees are low-bias, high-variance learners: small data changes reshape them.
+- Bagging averages trees grown on bootstrap samples (each misses about $1/e$
+  of the data, giving the OOB estimate); the variance of the average is $\rho
+  \sigma^2 + (1 - \rho)\sigma^2/B$.
+- Random forests also subsample features at each split, lowering $\rho$; they
+  need little tuning; permutation importance on held-out data describes what
+  they use.
+
+## Exercises
+
+::: {#exr-mla7-xor-tree}
+**Greedy splitting and XOR.** Generate 400 points uniform in $[-1, 1]^2$ with
+label $\mathbb{1}\{x_1x_2 > 0\}$. Fit trees of depth 1, 2 and 4 and report
+their accuracies. Why does the depth-1 tree fail, and why does a depth-2 tree
+still struggle although two splits suffice in principle?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+r = np.random.default_rng(5)
+Xx = r.uniform(-1, 1, (400, 2)); yx = (Xx[:, 0] * Xx[:, 1] > 0).astype(int)
+Xx_te = r.uniform(-1, 1, (4000, 2)); yx_te = (Xx_te[:, 0] * Xx_te[:, 1] > 0).astype(int)
+for depth in (1, 2, 4):
+    t = DecisionTreeClassifier(max_depth=depth, random_state=0).fit(Xx, yx)
+    print(f"depth {depth}: root split on x{t.tree_.feature[0] + 1} at {t.tree_.threshold[0]:+.3f}, test accuracy {t.score(Xx_te, yx_te):.3f}")
+```
+Every single split leaves each side with about half of each class: no first
+split reduces the impurity much, and the greedy rule picks a threshold
+essentially at random — usually not at 0, where it should be. A depth-2 tree
+then has the right structure only if the root happened to cut near 0; deeper
+trees recover by cutting again. Greedy growth cannot see that a useless split
+enables a perfect one below it — the limitation of pre-pruning noted in
+@sec-tree-pruning.
+:::
+
+::: {#exr-mla7-monotone}
+**Invariance to monotone transformations.** Show that replacing a feature $x_j$
+by $\phi(x_j)$ with $\phi$ strictly increasing does not change the partition
+of the training data produced by a tree (only the thresholds). Check it with
+scikit-learn on the wine data using $\phi = \log$ on proline. What does this
+imply for preprocessing before trees?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+A split $x_j \le t$ partitions the examples according to the order of their
+$x_j$ values; a strictly increasing $\phi$ preserves that order, so every
+partition reachable with $x_j$ is reachable with $\phi(x_j)$ (with threshold
+between the images of the two neighbouring values) and the impurity of each
+partition is unchanged. The greedy search therefore finds the same partitions.
+```{python}
+Xlog = Xw.copy(); Xlog[:, 12] = np.log(Xlog[:, 12])
+t1 = DecisionTreeClassifier(random_state=0).fit(Xw, yw); t2 = DecisionTreeClassifier(random_state=0).fit(Xlog, yw)
+print("same leaves for every training wine:", np.array_equal(t1.apply(Xw), t2.apply(Xlog)))
+```
+Scaling, standardisation and monotone transformations (log, Box–Cox,
+Yeo–Johnson) are pointless for trees and forests — unlike for $k$-NN, SVMs
+and networks. (scikit-learn places thresholds at midpoints, so the thresholds
+themselves differ, and on unseen data the two trees can disagree slightly.)
+:::
+
+## Further reading {.unnumbered}
+
+- @james2023, ch. 8 — trees, bagging, random forests (and boosting), with a
+  Python lab; @hastie2009, §9.2 (trees), ch. 15 (random forests), §8.7
+  (bagging).
+- @breiman1984 — the CART monograph, including cost-complexity pruning (ch.
+  3); @quinlan1986 and @quinlan1993 — ID3 and C4.5.
+- @breiman1996 and @breiman2001rf — bagging and random forests;
+  @efron1979 — the bootstrap.
+- @strobl2007 — the bias of impurity importances; @molnar2022, ch. 8 —
+  permutation importance and other model-agnostic interpretation methods
+  (free online).
+- @louppe2014 — a thorough modern account of random forests (free on arXiv).
+- scikit-learn user guide, "Decision Trees" and "Ensembles" — the exact
+  criteria, pruning and importance computations [@pedregosa2011].

@@ -35,7 +35,8 @@ repository [`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-p
 | I | Programming with Python | Terminal phone-book prototype | ✅ |
 | II | High-performance programming with C and C++ | Command-line CRM for an insurance company | ✅ |
 | III | Foundations of machine learning | Regularised models for house-price prediction | ✅ |
-| IV–XII | remaining courses of the master | — | 🛠 in preparation |
+| IV | Machine learning: models and algorithms | Classification of fruit types with k-nearest neighbours | ✅ theory · 🛠 project chapter |
+| V–XII | remaining courses of the master | — | 🛠 in preparation |
 
 ## Repository layout
 
@@ -50,6 +51,8 @@ cpp/_crm/              reference implementation of the Part II project (CMake pr
 ml/                    Part III — Foundations of machine learning (one .qmd per module + project)
 ml/mlbook.py           helper for Part III (figure style, data loader)
 ml/_data/              data used by Part III (CC0 house sales, with provenance notes)
+mlalg/                 Part IV — Machine learning: models and algorithms (one .qmd per module + project)
+mlalg/mlalgbook.py     helper for Part IV (reuses Part III's style; decision regions; fruit-data loader)
 appendices/            finding and reading the sources
 references.qmd         the bibliography page
 references.bib         all sources (BibTeX), with DOI/arXiv/ISBN/URL and access notes

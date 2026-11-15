@@ -1,0 +1,1196 @@
+# Neural networks {#sec-ch-mla-nn}
+
+> *"We describe a new learning procedure, back-propagation, for networks of
+> neurone-like units."* — David Rumelhart, Geoffrey Hinton and Ronald
+> Williams, 1986 [@rumelhart1986]
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- describe the **artificial neuron** and the **perceptron**, **prove** the
+  perceptron convergence theorem and why a single neuron cannot compute XOR;
+- explain what **activation functions** do, **prove** that without them a deep
+  network collapses into a linear model, and why sigmoids make gradients
+  vanish;
+- write the **forward pass** of a multilayer perceptron, **derive
+  backpropagation** from the chain rule, and implement both in NumPy, checked
+  against finite differences and scikit-learn;
+- train networks sensibly: initialisation (with the variance argument behind
+  Glorot and He), scaling, optimisers, L2 penalty and early stopping;
+- state the **universal approximation theorem** and **prove** its
+  one-dimensional version constructively — and say what it does *not*
+  promise.
+:::
+
+::: {.callout-tip}
+## Topics covered
+The artificial neuron; activation functions; the multilayer perceptron;
+training a deep network; the universal approximation theorem; in practice,
+training a perceptron, comparing it with logistic regression, training a
+multilayer perceptron, exploring its layers, and the role of the activation
+function.
+:::
+
+## Intuition: many simple units, composed {#sec-nn-intuition}
+
+A logistic regression computes a weighted sum of the inputs and squashes it
+into a probability. Call that unit a **neuron**. One neuron can only draw a
+straight boundary. But the outputs of several neurons can be fed as inputs to
+other neurons: the first layer bends the space — each of its neurons detects
+on which side of *its* line a point lies — and the next layer combines these
+detections into curved, even disconnected, regions. Stack enough of them and
+the network can represent remarkably complicated functions.
+
+The price is that the parameters of all layers must be fitted together, and
+the loss is no longer convex. The algorithm that makes this practical is
+**backpropagation**: the chain rule of calculus, organised so that the
+gradient with respect to every weight costs about as much as one evaluation of
+the network. The optimisers of @sec-ch-mla-optim do the rest. This chapter
+builds a network from a single neuron to a trained multilayer perceptron,
+proving each step, and ends with the theorem that explains why the
+construction is so expressive — and with its limits.
+
+## The artificial neuron and the perceptron {#sec-nn-perceptron}
+
+McCulloch and Pitts described in 1943 an idealised neuron that fires when a
+weighted sum of its inputs exceeds a threshold [@mcculloch1943]. With inputs
+$x \in \mathbb{R}^d$, weights $w$ and bias $b$, its output is $\operatorname
+{sign}(w^\top x + b)$ — a linear classifier. Rosenblatt's **perceptron**
+[@rosenblatt1958] added a learning rule: go through the examples (labels $y_i
+\in \{-1, +1\}$) and, whenever one is misclassified, move the weights towards
+it:
+$$
+\text{if } y_i(w^\top x_i + b) \le 0:\quad w \leftarrow w + y_ix_i,\quad b \leftarrow b + y_i .
+$$ {#eq-nn-perceptron}
+The update adds $y_i\lVert x_i\rVert^2 + y_i^2 > 0$ times $y_i$ to the score of
+$x_i$: it makes that example more correct. Absorbing $b$ into $w$ (append a
+constant input 1), the rule has a remarkable guarantee.
+
+::: {#thm-nn-novikoff}
+## Perceptron convergence (Novikoff)
+Suppose $\lVert x_i\rVert \le R$ for all $i$ and there is a unit vector $u$
+and $\gamma > 0$ with $y_iu^\top x_i \ge \gamma$ for all $i$ (the data are
+linearly separable with margin $\gamma$). Then the perceptron, started at $w
+= 0$ and cycling through the data in any order, makes at most
+$(R/\gamma)^2$ updates.
+:::
+
+*In one line:* on separable data the perceptron stops after a number of
+mistakes that depends only on how wide the gap between the classes is
+relative to the size of the data — not on the number of examples or the
+dimension.
+
+::: {.deep kind="proof"}
+## Proof of @thm-nn-novikoff
+Let $w_k$ be the weights after $k$ updates. Each update on a misclassified
+$(x_i, y_i)$ gives $u^\top w_{k+1} = u^\top w_k + y_iu^\top x_i \ge u^\top w_k
++ \gamma$, so $u^\top w_k \ge k\gamma$. Also $\lVert w_{k+1}\rVert^2 = \lVert
+w_k\rVert^2 + 2y_iw_k^\top x_i + \lVert x_i\rVert^2 \le \lVert w_k\rVert^2 +
+R^2$, because $y_iw_k^\top x_i \le 0$ (the example was misclassified); hence
+$\lVert w_k\rVert^2 \le kR^2$. By Cauchy–Schwarz, $k\gamma \le u^\top w_k \le
+\lVert w_k\rVert \le \sqrt kR$, i.e. $k \le R^2/\gamma^2$. $\blacksquare$
+[@novikoff1962]
+:::
+
+The theorem says nothing about non-separable data, where the perceptron never
+stops changing its mind; and it says nothing good about the boundary it
+stops at, which is *some* separating line, not the widest one (@sec-ch-mla-svm).
+And one neuron cannot represent every classifier.
+
+::: {#prp-nn-xor}
+## A single neuron cannot compute XOR
+There are no $w_1, w_2, b$ such that $\operatorname{sign}(w_1x_1 + w_2x_2 + b)$
+equals $+1$ on $(0,1)$ and $(1,0)$ and $-1$ on $(0,0)$ and $(1,1)$.
+:::
+
+*In one line:* the two diagonals of a square cannot be separated by one
+straight line.
+
+::: {.deep kind="proof"}
+## Proof of @prp-nn-xor
+The four requirements are $b < 0$ (or $\le 0$), $w_2 + b > 0$, $w_1 + b > 0$,
+$w_1 + w_2 + b < 0$ (with the convention $\operatorname{sign}(0) = -1$; the
+other convention gives the same contradiction). Adding the two positive ones,
+$w_1 + w_2 + 2b > 0$; adding the two negative ones, $w_1 + w_2 + 2b < 0$.
+$\blacksquare$ Minsky and Papert's analysis of such limitations [@minsky1969]
+was long read as a verdict against neural networks; the way out — hidden
+layers trained by backpropagation — came in the 1980s.
+:::
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import Perceptron, LogisticRegression
+
+def perceptron(X, y, max_epochs=100, seed=0):
+    """Rosenblatt's rule @eq-nn-perceptron; returns weights (last = bias) and the number of updates."""
+    X1 = np.column_stack([X, np.ones(len(X))])
+    w, updates, order_rng = np.zeros(X1.shape[1]), 0, np.random.default_rng(seed)
+    for _ in range(max_epochs):
+        mistakes = 0
+        for i in order_rng.permutation(len(y)):
+            if y[i] * (X1[i] @ w) <= 0:
+                w += y[i] * X1[i]; updates += 1; mistakes += 1
+        if mistakes == 0:
+            break
+    return w, updates
+
+rng = np.random.default_rng(0)
+Xp = rng.uniform(-1, 1, size=(200, 2))
+u = np.array([1.0, 0.5]) / np.hypot(1, 0.5)
+keep = np.abs(Xp @ u) > 0.1                       # a gap of half-width 0.1 around the line u.x = 0
+Xp, yp = Xp[keep], np.sign(Xp[keep] @ u)
+w, k = perceptron(Xp, yp)
+X1p = np.column_stack([Xp, np.ones(len(Xp))])
+R, gamma = np.linalg.norm(X1p, axis=1).max(), np.min(yp * (X1p @ np.append(u, 0)))
+print(f"{len(yp)} separable points: {k} updates; Novikoff bound (R/gamma)^2 = {(R / gamma) ** 2:.0f}; "
+      f"training errors at the end: {np.sum(yp * (X1p @ w) <= 0)}")
+sk = Perceptron(random_state=0).fit(Xp, yp)
+print(f"scikit-learn Perceptron training accuracy {sk.score(Xp, yp):.3f}; logistic regression {LogisticRegression().fit(Xp, yp).score(Xp, yp):.3f}")
+```
+
+The number of updates is far below the worst case — the bound is for the
+most adversarial order of the examples. (The vector $u$ used for the bound,
+with the bias coordinate 0, is one separator with margin at least $0.1$ in the
+augmented space; the best one has a larger margin and a smaller bound.)
+
+### Practice {.unnumbered}
+
+::: {#exr-mla5-perceptron-easy}
+## Easy — the perceptron by hand
+Run @eq-nn-perceptron by hand on the points $(2, 1)$ with $y = +1$, $(-1, -1)$
+with $y = -1$, $(1, -1)$ with $y = -1$, in this order, starting from $w = 0$,
+$b = 0$, until an epoch without mistakes. Give the final line.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A point with score exactly $0$ counts as a mistake. Keep a table: point,
+score, mistake?, new $(w, b)$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Epoch 1: $(2,1)$: score $0$ → update $w = (2, 1)$, $b = 1$. $(-1,-1)$: score
+$-2 - 1 + 1 = -2$, $y = -1$ → correct. $(1,-1)$: score $2 - 1 + 1 = 2$, $y =
+-1$ → mistake → $w = (1, 2)$, $b = 0$. Epoch 2: $(2,1)$: $4 > 0$ correct;
+$(-1,-1)$: $-3$ correct; $(1,-1)$: $1 - 2 = -1$ correct. Final line $x_1 +
+2x_2 = 0$.
+```{python}
+w_, b_ = np.zeros(2), 0.0
+pts, labs = np.array([[2, 1], [-1, -1], [1, -1]]), np.array([1, -1, -1])
+for epoch in range(10):
+    mistakes = 0
+    for x_, y_ in zip(pts, labs):
+        if y_ * (x_ @ w_ + b_) <= 0:
+            w_, b_, mistakes = w_ + y_ * x_, b_ + y_, mistakes + 1
+    print(f"epoch {epoch + 1}: w = {w_}, b = {b_}, mistakes {mistakes}")
+    if mistakes == 0:
+        break
+```
+The final line separates the data but passes very close to $(1, -1)$ (score
+$-1$ with $\lVert w\rVert = \sqrt5$: distance $0.45$), illustrating that the
+perceptron stops at the first separator found, not at a wide-margin one. The
+usual slip: treating a score of zero as correct, which would leave $w = 0$
+forever.
+:::
+
+::: {#exr-mla5-perceptron-medium}
+## Medium — the bound against the margin
+Generate separable data in $\mathbb{R}^2$ with gaps of half-width $\gamma \in
+\{0.4, 0.2, 0.1, 0.05, 0.02\}$ (as in the code above), run the perceptron
+from 20 random orders each, and plot the maximum number of updates against
+$(R/\gamma)^2$ on log–log axes.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Reuse `perceptron` with different `seed`s to change the order. Keep the
+number of points fixed (e.g. by generating more and keeping the first 200 that
+fall outside the gap).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-nn-novikoff
+#| fig-cap: "Largest number of perceptron updates over 20 orders against the Novikoff bound (R/γ)², for five gap widths. The updates grow with the bound but stay well below it (dashed: equality)."
+r = np.random.default_rng(1)
+rows = []
+for g in (0.4, 0.2, 0.1, 0.05, 0.02):
+    Z = r.uniform(-1, 1, size=(20_000, 2)); Z = Z[np.abs(Z @ u) > g][:200]; yz = np.sign(Z @ u)
+    Z1 = np.column_stack([Z, np.ones(len(Z))])
+    bound = (np.linalg.norm(Z1, axis=1).max() / np.min(yz * (Z1 @ np.append(u, 0)))) ** 2
+    worst = max(perceptron(Z, yz, max_epochs=10_000, seed=s)[1] for s in range(20))
+    rows.append((g, bound, worst))
+rows = np.array(rows)
+fig, ax = plt.subplots(figsize=(5, 3.4))
+ax.loglog(rows[:, 1], rows[:, 2], marker="o"); ax.loglog(rows[:, 1], rows[:, 1], ls="--", color=mlalgbook.MUTED)
+ax.set_xlabel("Novikoff bound (R/γ)²"); ax.set_ylabel("max updates (20 orders)"); plt.show()
+print(np.round(rows, 1))
+```
+The number of updates grows as the gap narrows, roughly like the bound but
+far below it: the bound is a worst case over all orders and all data with the
+given $R$ and $\gamma$. Mistake to avoid: computing $\gamma$ from the nominal
+gap without the bias coordinate, or with the data before augmentation, which
+changes $R$.
+:::
+
+::: {#exr-mla5-perceptron-hard}
+## Hard — perceptron or logistic regression on real measurements?
+On the breast-cancer data (standardised in a pipeline), compare by repeated
+stratified 5-fold cross-validation the `Perceptron`, the **averaged**
+perceptron (`SGDClassifier(loss="perceptron", average=True)`) and logistic
+regression. Then plot, for one training split, the training accuracy of the
+plain perceptron after each epoch (with `partial_fit`). Why does it oscillate,
+and why does averaging help?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The data are not perfectly separable: the plain perceptron never settles.
+Averaging the weight vectors over all steps (Freund and Schapire's "voted"
+perceptron in its simplest form [@freund1999]) smooths the oscillation.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-nn-perceptron-epochs
+#| fig-cap: "Training accuracy of the plain perceptron on the breast-cancer data after each epoch: on non-separable data it keeps oscillating."
+from sklearn.datasets import load_breast_cancer
+from sklearn.linear_model import SGDClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score, RepeatedStratifiedKFold, train_test_split, StratifiedKFold
+
+Xb, yb = load_breast_cancer(return_X_y=True)
+cvr = RepeatedStratifiedKFold(n_splits=5, n_repeats=5, random_state=0)
+for name, clf in (("perceptron", Perceptron(random_state=0)),
+                  ("averaged perceptron", SGDClassifier(loss="perceptron", learning_rate="constant", eta0=1.0, penalty=None, average=True, random_state=0)),
+                  ("logistic regression", LogisticRegression(max_iter=5000))):
+    s = cross_val_score(make_pipeline(StandardScaler(), clf), Xb, yb, cv=cvr)
+    print(f"{name:20s} accuracy {s.mean():.3f} ± {s.std(ddof=1) / np.sqrt(len(s)):.3f}")
+Xa, _, ya, _ = train_test_split(Xb, yb, test_size=0.3, stratify=yb, random_state=0)
+sc = StandardScaler().fit(Xa); Za = sc.transform(Xa)
+plain = Perceptron(random_state=0, shuffle=True)
+hist = []
+for epoch in range(60):
+    plain.partial_fit(Za, ya, classes=[0, 1]); hist.append(plain.score(Za, ya))
+fig, ax = plt.subplots(figsize=(6, 2.8))
+ax.plot(range(1, 61), hist, marker="o", ms=3); ax.set_xlabel("epoch"); ax.set_ylabel("training accuracy"); plt.show()
+print(f"training accuracy over epochs 41-60: min {min(hist[40:]):.3f}, max {max(hist[40:]):.3f}")
+```
+On non-separable data each mistake causes a full-size update, so the weights
+jump between different separators and the training accuracy fluctuates
+indefinitely. Averaging the iterates cancels the jumps — the same effect as
+Polyak averaging for SGD (@sec-opt-sgd) — and makes the perceptron
+competitive. Logistic regression, which minimises a smooth convex loss, is
+both stable and at least as accurate, and gives probabilities. Mistake to
+avoid: concluding from a single epoch count that the perceptron "converged".
+:::
+
+## The multilayer perceptron {#sec-nn-mlp}
+
+A **multilayer perceptron** (MLP), or fully connected feed-forward network,
+composes layers of neurons. With input $a^{(0)} = x$, layer $\ell = 1, \dots,
+L$ computes
+$$
+z^{(\ell)} = W^{(\ell)}a^{(\ell-1)} + b^{(\ell)}, \qquad a^{(\ell)} = g\big(z^{(\ell)}\big),
+$$ {#eq-nn-forward}
+where $W^{(\ell)}$ is a matrix with one row per neuron of layer $\ell$ and $g$
+an **activation function** applied element by element. Layers $1, \dots,
+L-1$ are **hidden**; the output layer uses an activation matched to the task —
+the identity for regression, the sigmoid for two classes, the **softmax** for
+$K$ classes, giving the probabilities of @sec-multiclass. With the
+cross-entropy loss, the output layer *is* a logistic or softmax regression on
+the features $a^{(L-1)}$ computed by the hidden layers: the network learns its
+own features.
+
+### Activation functions
+
+| Activation | $g(t)$ | $g'(t)$ | Range |
+|---|---|---|---|
+| step (McCulloch–Pitts) | $\mathbb{1}\{t > 0\}$ | $0$ (where defined) | $\{0, 1\}$ |
+| sigmoid (logistic) | $\sigma(t) = 1/(1 + e^{-t})$ | $\sigma(t)(1 - \sigma(t))$ | $(0, 1)$ |
+| hyperbolic tangent | $\tanh t = 2\sigma(2t) - 1$ | $1 - \tanh^2t$ | $(-1, 1)$ |
+| ReLU | $\max(0, t)$ | $\mathbb{1}\{t > 0\}$ | $[0, \infty)$ |
+| identity | $t$ | $1$ | $\mathbb{R}$ |
+
+: Common activation functions (scikit-learn's `activation=` accepts `"logistic"`, `"tanh"`, `"relu"` and `"identity"`) {#tbl-nn-activations}
+
+The step function has zero derivative almost everywhere, so gradient methods
+cannot train it; smooth or piecewise-linear activations replaced it. The
+identity is never used in hidden layers, for a simple reason.
+
+::: {#prp-nn-linear-collapse}
+## Without non-linearity, depth adds nothing
+If every hidden layer uses the identity activation, the network computes an
+affine function of the input, $W x + b$ with $W = W^{(L)}\cdots W^{(1)}$ — the
+same family as a model with no hidden layer.
+:::
+
+*In one line:* stacking linear maps gives a linear map; the activation
+function is what makes depth useful.
+
+::: {.deep kind="proof"}
+## Proof of @prp-nn-linear-collapse
+By induction on $\ell$: $a^{(1)} = W^{(1)}x + b^{(1)}$ is affine in $x$; if
+$a^{(\ell-1)} = A x + c$, then $a^{(\ell)} = W^{(\ell)}(Ax + c) + b^{(\ell)} =
+(W^{(\ell)}A)x + (W^{(\ell)}c + b^{(\ell)})$, again affine. (The product of
+matrices may have lower rank than the factors — a narrow layer restricts the
+family — but never escapes affine maps.) $\blacksquare$
+:::
+
+The sigmoid has another defect that matters in deep networks.
+
+::: {#prp-nn-vanishing}
+## Vanishing gradients with sigmoid activations
+$\sigma'(t) = \sigma(t)(1 - \sigma(t)) \le \frac14$ for all $t$, with
+equality only at $t = 0$. In a chain of $L$ sigmoid units $a_\ell =
+\sigma(w_\ell a_{\ell-1})$, the derivative of the output with respect to the
+input satisfies $\big|\frac{\partial a_L}{\partial a_0}\big| \le
+\prod_\ell\frac{|w_\ell|}{4}$.
+:::
+
+*In one line:* each sigmoid layer multiplies the gradient by at most
+$\frac14$ times the weight, so with moderate weights the signal reaching the
+first layers shrinks exponentially with depth.
+
+::: {.deep kind="proof"}
+## Proof of @prp-nn-vanishing
+With $s = \sigma(t) \in (0, 1)$, $s(1 - s) \le \frac14$ by the AM–GM
+inequality ($\sqrt{s(1-s)} \le \frac{s + (1 - s)}{2}$), with equality iff $s =
+\frac12$, i.e. $t = 0$. The derivative $\sigma'$ follows from $\sigma(t) = (1
++ e^{-t})^{-1}$: $\sigma' = e^{-t}(1 + e^{-t})^{-2} = \sigma(1 - \sigma)$. By
+the chain rule $\frac{\partial a_L}{\partial a_0} = \prod_\ell\sigma'(w_\ell
+a_{\ell-1})w_\ell$, and each factor is at most $|w_\ell|/4$ in absolute value.
+$\blacksquare$ [@hochreiter1991; @glorot2010]
+:::
+
+ReLU's derivative is exactly 1 on active units, which is the main reason it
+became the default for deep networks [@glorot2011]; its weakness — a unit
+whose input is always negative has zero gradient and never recovers ("dead
+ReLU") — is usually mild.
+
+### Backpropagation
+
+Training minimises the average loss over the examples by gradient methods, so
+we need the gradient with respect to every $W^{(\ell)}$ and $b^{(\ell)}$.
+Define for one example the **error signals** $\delta^{(\ell)} = \partial
+\text{loss}/\partial z^{(\ell)}$.
+
+::: {#thm-nn-backprop}
+## Backpropagation
+For one example with softmax output and cross-entropy loss (or sigmoid output
+with binary cross-entropy, or identity output with $\frac12$ squared error),
+$$
+\delta^{(L)} = a^{(L)} - y, \qquad
+\delta^{(\ell)} = \big(W^{(\ell+1)\top}\delta^{(\ell+1)}\big) \odot g'\big(z^{(\ell)}\big)\quad(\ell < L),
+$$ {#eq-nn-backprop}
+$$
+\frac{\partial\,\text{loss}}{\partial W^{(\ell)}} = \delta^{(\ell)}a^{(\ell-1)\top}, \qquad
+\frac{\partial\,\text{loss}}{\partial b^{(\ell)}} = \delta^{(\ell)},
+$$
+where $y$ is the one-hot label (or the target) and $\odot$ the element-wise
+product. Computing all gradients costs a small constant times the cost of the
+forward pass.
+:::
+
+*In one line:* the error at the output is "prediction minus target"; each
+layer passes it backwards through the transposed weights, damped by the
+slope of its activation; and each weight's gradient is the error at its
+output times the activity at its input.
+
+::: {.deep kind="proof"}
+## Proof of @thm-nn-backprop
+Output layer: for softmax with cross-entropy, $\partial\,\text{loss}/\partial
+z^{(L)} = p - y$ is @prp-softmax-gradient; the sigmoid/binary and the
+identity/squared-error cases give the same expression (@thm-logistic-loss;
+$\frac{d}{dz}\frac12(z - y)^2 = z - y$). Hidden layers: the loss depends on
+$z^{(\ell)}_j$ only through $a^{(\ell)}_j = g(z^{(\ell)}_j)$, which enters every
+$z^{(\ell+1)}_k = \sum_jW^{(\ell+1)}_{kj}a^{(\ell)}_j + b^{(\ell+1)}_k$. By the
+chain rule,
+$\delta^{(\ell)}_j = \sum_k\delta^{(\ell+1)}_kW^{(\ell+1)}_{kj}\,g'(z^{(\ell)}_j)$,
+which is @eq-nn-backprop in vector form. Parameters: $z^{(\ell)}_k$ depends on
+$W^{(\ell)}_{kj}$ linearly with coefficient $a^{(\ell-1)}_j$, and on
+$b^{(\ell)}_k$ with coefficient 1, so $\partial\,\text{loss}/\partial
+W^{(\ell)}_{kj} = \delta^{(\ell)}_ka^{(\ell-1)}_j$. Cost: the backward pass
+performs one product with each $W^{(\ell)\top}$ and one outer product per layer
+— the same number of multiplications, up to a factor, as the forward pass,
+which performs one product with each $W^{(\ell)}$. $\blacksquare$
+
+The method is reverse-mode automatic differentiation [@linnainmaa1970;
+@griewank2008], applied to networks by Werbos [@werbos1974] and popularised by
+Rumelhart, Hinton and Williams [@rumelhart1986]. Averaging over a mini-batch
+averages the per-example gradients (@sec-opt-sgd).
+:::
+
+Here is a complete MLP with one hidden layer of $\tanh$ units and a softmax
+output, trained by full-batch gradient descent with momentum
+(@eq-opt-momentum), its gradient checked by finite differences, on the
+two-moons data.
+
+```{python}
+from sklearn.datasets import make_moons
+from sklearn.neural_network import MLPClassifier
+
+def init(sizes, rng):
+    """Weights scaled by 1/sqrt(fan-in) (@sec-nn-training), biases zero."""
+    return [(rng.normal(0, 1 / np.sqrt(m), size=(n, m)), np.zeros(n)) for m, n in zip(sizes[:-1], sizes[1:])]
+
+def forward(params, X):
+    """Returns the list of activations (inputs, hidden layers, softmax output)."""
+    acts = [X]
+    for l, (W, b) in enumerate(params):
+        z = acts[-1] @ W.T + b
+        if l < len(params) - 1:
+            acts.append(np.tanh(z))
+        else:
+            z = z - z.max(1, keepdims=True); e = np.exp(z); acts.append(e / e.sum(1, keepdims=True))
+    return acts
+
+def loss_and_grads(params, X, Y):
+    """Mean cross-entropy and its gradients by backpropagation (@eq-nn-backprop), rows = examples."""
+    acts = forward(params, X)
+    n = len(X)
+    loss = -np.mean(np.sum(Y * np.log(acts[-1] + 1e-300), axis=1))
+    delta = (acts[-1] - Y) / n                                   # output error, averaged over examples
+    grads = [None] * len(params)
+    for l in range(len(params) - 1, -1, -1):
+        W, _ = params[l]
+        grads[l] = (delta.T @ acts[l], delta.sum(0))             # delta^(l) a^(l-1)^T, summed over examples
+        if l > 0:
+            delta = (delta @ W) * (1 - acts[l] ** 2)             # back through W, times tanh'(z) = 1 - tanh^2
+    return loss, grads
+
+Xm, ym = make_moons(300, noise=0.2, random_state=0)
+Ym = np.eye(2)[ym]
+params = init([2, 16, 2], np.random.default_rng(0))
+
+flat = lambda ps: np.concatenate([np.concatenate([W.ravel(), b]) for W, b in ps])
+def unflat(v, like):
+    out, i = [], 0
+    for W, b in like:
+        out.append((v[i:i + W.size].reshape(W.shape), v[i + W.size:i + W.size + b.size])); i += W.size + b.size
+    return out
+v0 = flat(params)
+num = np.array([(loss_and_grads(unflat(v0 + e, params), Xm, Ym)[0] - loss_and_grads(unflat(v0 - e, params), Xm, Ym)[0]) / 2e-6
+                for e in np.eye(len(v0)) * 1e-6])
+ana = flat(loss_and_grads(params, Xm, Ym)[1])
+print(f"{len(v0)} parameters; gradient check: relative error {np.linalg.norm(num - ana) / np.linalg.norm(num):.1e}")
+
+vel = [(np.zeros_like(W), np.zeros_like(b)) for W, b in params]
+history = []
+for it in range(3000):
+    loss, grads = loss_and_grads(params, Xm, Ym)
+    vel = [(0.9 * vW - 0.5 * gW, 0.9 * vb - 0.5 * gb) for (vW, vb), (gW, gb) in zip(vel, grads)]
+    params = [(W + vW, b + vb) for (W, b), (vW, vb) in zip(params, vel)]
+    history.append(loss)
+acc_mine = np.mean(forward(params, Xm)[-1].argmax(1) == ym)
+sk_mlp = MLPClassifier(hidden_layer_sizes=(16,), activation="tanh", solver="lbfgs", alpha=1e-6,
+                       max_iter=3000, random_state=0).fit(Xm, ym)
+print(f"our MLP: final training loss {history[-1]:.4f}, training accuracy {acc_mine:.3f} | "
+      f"MLPClassifier (L-BFGS, same architecture): loss {sk_mlp.loss_:.4f}, accuracy {sk_mlp.score(Xm, ym):.3f}")
+```
+
+```{python}
+#| label: fig-nn-hidden
+#| fig-cap: "Inside the trained network. Left: decision regions of our 16-unit MLP on the two-moons data. Right: the 16 hidden units' boundaries (lines where each tanh unit changes sign); the output layer combines these 16 half-plane detectors into the curved boundary."
+class Wrapped:                                                  # minimal predict() for the plotting helper
+    def __init__(self, ps): self.ps = ps
+    def predict(self, X): return forward(self.ps, X)[-1].argmax(1)
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.8), sharey=True)
+mlalgbook.regions(axes[0], Wrapped(params), Xm, ym, s=10); axes[0].set_title("decision regions")
+W1, b1 = params[0]
+mlalgbook.regions(axes[1], Wrapped(params), Xm, ym, s=6, boundary=False)
+xs = np.linspace(-2, 3, 2)
+for wv, bv in zip(W1, b1):
+    axes[1].plot(xs, -(wv[0] * xs + bv) / wv[1], color=mlalgbook.INK2, lw=0.8)
+axes[1].set_ylim(-1.5, 2); axes[1].set_title("hidden units: where each changes sign")
+fig.tight_layout(); plt.show()
+```
+
+The figure shows what "learning features" means: each hidden unit is a soft
+half-plane detector, oriented and placed by training; the output layer is a
+logistic regression on their 16 outputs.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla5-mlp-easy}
+## Easy — a forward and a backward pass by hand
+A network with one input, one hidden ReLU unit and a sigmoid output: $z_1 =
+2x - 1$, $a_1 = \max(0, z_1)$, $z_2 = 3a_1 - 2$, $p = \sigma(z_2)$, binary
+cross-entropy. For $x = 1$ and label $y = 1$, compute $p$, the loss, and the
+gradients with respect to the four parameters (2, −1, 3, −2).
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Forward: $z_1 = 1$, $a_1 = 1$, $z_2 = 1$. Backward: $\delta_2 = p - y$;
+$\delta_1 = 3\delta_2\cdot\mathbb{1}\{z_1 > 0\}$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$p = \sigma(1) \approx 0.7311$, loss $-\ln p \approx 0.3133$. $\delta_2 = p - 1
+\approx -0.2689$; gradients for the output weight and bias: $\delta_2a_1
+\approx -0.2689$ and $-0.2689$. $\delta_1 = 3\cdot(-0.2689)\cdot1 \approx
+-0.8068$; for the hidden weight and bias: $\delta_1x \approx -0.8068$ and
+$-0.8068$.
+```{python}
+sig = lambda t: 1 / (1 + np.exp(-t))
+def tiny_loss(th, x=1.0, y=1.0):
+    w1, b1_, w2, b2_ = th
+    p = sig(w2 * max(0.0, w1 * x + b1_) + b2_)
+    return -(y * np.log(p) + (1 - y) * np.log(1 - p))
+th = np.array([2.0, -1.0, 3.0, -2.0])
+print("numerical gradient:", np.array([(tiny_loss(th + e) - tiny_loss(th - e)) / 2e-6 for e in np.eye(4) * 1e-6]).round(4))
+```
+All four gradients are negative: increasing any parameter would raise $p$
+towards the label 1. If $x$ had been $0$, $z_1 = -1$ and the ReLU would block
+the gradient to the hidden layer entirely — a "dead" unit for that example.
+:::
+
+::: {#exr-mla5-mlp-medium}
+## Medium — XOR with two hidden units
+Train our NumPy MLP with **two** hidden $\tanh$ units on the four XOR points
+from 20 random initialisations. How often does it reach zero training error
+within 5 000 iterations? Show the hidden representation of the four points for
+a successful run, and explain with @prp-nn-xor why the hidden layer is needed.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use `init([2, 2, 2], rng)` with different seeds and the momentum loop above.
+The hidden representation is `forward(params, X)[1]`, a point in $(-1, 1)^2$
+per example.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+Xx = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], float); yx = np.array([0, 1, 1, 0]); Yx = np.eye(2)[yx]
+def train(sizes, seed, X, Y, iters=5000, lr=0.5):
+    ps = init(sizes, np.random.default_rng(seed)); v = [(np.zeros_like(W), np.zeros_like(b)) for W, b in ps]
+    for _ in range(iters):
+        _, gs = loss_and_grads(ps, X, Y)
+        v = [(0.9 * vW - lr * gW, 0.9 * vb - lr * gb) for (vW, vb), (gW, gb) in zip(v, gs)]
+        ps = [(W + vW, b + vb) for (W, b), (vW, vb) in zip(ps, v)]
+    return ps
+ok = []
+for seed in range(20):
+    ps = train([2, 2, 2], seed, Xx, Yx)
+    ok.append(np.array_equal(forward(ps, Xx)[-1].argmax(1), yx))
+print(f"solved XOR in {sum(ok)} of 20 runs")
+good = train([2, 2, 2], int(np.argmax(ok)), Xx, Yx)
+print("hidden representation (rows: (0,0), (0,1), (1,0), (1,1)):\n", forward(good, Xx)[1].round(2))
+```
+In most runs the network solves XOR; some initialisations end in a poor local
+optimum or a plateau — the loss of a network is not convex. In the hidden
+representation of a successful run the two classes have become **linearly
+separable**: the hidden layer has moved the four corners so that one line
+(the output neuron) can split them. A single neuron cannot do that
+(@prp-nn-xor); two hidden neurons suffice. Typical mistake: concluding from
+one failed run that the architecture is too small.
+:::
+
+::: {#exr-mla5-mlp-hard}
+## Hard — an MLP on handwritten digits
+On the digits data, tune `MLPClassifier` (in a pipeline with
+`StandardScaler`) over the hidden-layer size $\{(32,), (64,), (128,),
+(64, 64)\}$ and the L2 penalty `alpha` $\in \{10^{-4}, 10^{-2}, 1\}$ by 5-fold
+`GridSearchCV` on a training split; plot the `loss_curve_` of the chosen
+model; report the test accuracy and the three most frequent confusions;
+compare with logistic regression on the same split.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Set `max_iter=500, early_stopping=True` to keep the search fast; the
+pipeline's last step is reached with `best_estimator_[-1]`. Zero the diagonal
+of the confusion matrix to find the largest off-diagonal entries.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-nn-digits-loss
+#| fig-cap: "Training loss of the selected MLP on the digits data, per epoch (Adam, early stopping on a 10 % validation split)."
+from sklearn.datasets import load_digits
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import confusion_matrix
+
+Xd, yd = load_digits(return_X_y=True)
+Xd_tr, Xd_te, yd_tr, yd_te = train_test_split(Xd, yd, test_size=0.25, stratify=yd, random_state=0)
+mlp_search = GridSearchCV(make_pipeline(StandardScaler(), MLPClassifier(max_iter=500, early_stopping=True, random_state=0)),
+                          {"mlpclassifier__hidden_layer_sizes": [(32,), (64,), (128,), (64, 64)],
+                           "mlpclassifier__alpha": [1e-4, 1e-2, 1.0]},
+                          cv=StratifiedKFold(5, shuffle=True, random_state=0)).fit(Xd_tr, yd_tr)
+best_mlp = mlp_search.best_estimator_
+fig, ax = plt.subplots(figsize=(6, 2.8))
+ax.plot(best_mlp[-1].loss_curve_); ax.set_xlabel("epoch"); ax.set_ylabel("training loss"); ax.set_yscale("log"); plt.show()
+cm = confusion_matrix(yd_te, best_mlp.predict(Xd_te)); np.fill_diagonal(cm, 0)
+top = sorted(((cm[i, j], i, j) for i in range(10) for j in range(10) if cm[i, j] > 0), reverse=True)[:3]
+lr_d = make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000)).fit(Xd_tr, yd_tr)
+print(f"chosen: {mlp_search.best_params_}; CV accuracy {mlp_search.best_score_:.3f}")
+print(f"test accuracy: MLP {best_mlp.score(Xd_te, yd_te):.3f}, logistic regression {lr_d.score(Xd_te, yd_te):.3f}")
+print("most frequent confusions (count, true, predicted):", [(int(c), int(i), int(j)) for c, i, j in top])
+```
+On this split the selected MLP and logistic regression are equally accurate,
+within a couple of images, and the MLP's errors concentrate on a few digit
+pairs: on $8 \times 8$ images with these 64 features a linear model is already
+strong. The loss curve falls quickly
+and flattens; early stopping ends training when the validation score stalls.
+With 450 test images, a difference of one or two points is a handful of
+images: confirm it with repeated cross-validation before claiming that the
+network is better. Mistakes to avoid: no scaling (Adam copes better than SGD,
+but convergence still suffers), judging the search by its best inner score,
+and comparing models trained on different splits.
+:::
+
+## Training a network in practice {#sec-nn-training}
+
+The loss of a network with hidden layers is **not convex**: permuting the
+hidden units gives the same function, so minima come in symmetric copies, and
+there can be poor local optima and long plateaus. What makes training work is
+a set of practices, each with a reason.
+
+**Do not start from zero.** If all weights of a layer start equal, every
+hidden unit computes the same function and receives the same gradient — they
+stay identical forever (@exr-mla5-training-medium). Random initialisation
+breaks the symmetry. Its **scale** matters too.
+
+::: {#prp-nn-init}
+## Preserving the variance through a layer
+Let $z_k = \sum_{j=1}^{m}W_{kj}a_j$ with weights $W_{kj}$ independent of each
+other and of the inputs, $\mathbb{E}W_{kj} = 0$, $\operatorname{Var}W_{kj} =
+s^2$. Then $\operatorname{Var}z_k = m\,s^2\,\mathbb{E}[a_j^2]$ (inputs
+identically distributed). If $a_j = \max(0, z'_j)$ where the $z'_j$ are
+symmetric about zero, $\mathbb{E}[a_j^2] = \frac12\operatorname{Var}z'_j$.
+Hence the variance of the pre-activations is preserved from layer to layer
+when $s^2 = 1/m$ for (approximately) linear units such as $\tanh$ near zero —
+**Glorot** (Xavier) initialisation — and when $s^2 = 2/m$ for ReLU — **He**
+initialisation.
+:::
+
+*In one line:* each pre-activation sums $m$ random terms, so the weights'
+variance must shrink like $1/m$ to keep signals from exploding or vanishing;
+ReLU discards half the signal, hence the factor 2.
+
+::: {.deep kind="proof"}
+## Proof of @prp-nn-init
+By independence and zero mean of the weights, the terms $W_{kj}a_j$ have mean
+zero and are uncorrelated, so $\operatorname{Var}z_k = \sum_j\mathbb{E}
+[W_{kj}^2a_j^2] = \sum_j\mathbb{E}W_{kj}^2\,\mathbb{E}a_j^2 = ms^2\mathbb{E}
+a_j^2$. For $a = \max(0, z')$ with $z'$ symmetric, $\mathbb{E}a^2 =
+\mathbb{E}[z'^2\mathbb{1}\{z' > 0\}] = \frac12\mathbb{E}z'^2 = \frac12
+\operatorname{Var}z'$ (symmetry splits $\mathbb{E}z'^2$ equally between the two
+signs; $\mathbb{E}z' = 0$). So $\operatorname{Var}z_k = \frac{ms^2}{2}
+\operatorname{Var}z'$, equal to $\operatorname{Var}z'$ iff $s^2 = 2/m$. For an
+activation that is close to the identity around zero ($\tanh$), $\mathbb{E}a^2
+\approx \operatorname{Var}z'$, giving $s^2 = 1/m$. Glorot and Bengio balance the
+forward and backward passes with $s^2 = 2/(m_{\text{in}} + m_{\text{out}})$
+[@glorot2010]; He, Zhang, Ren and Sun derived the ReLU factor [@he2015].
+$\blacksquare$
+:::
+
+**Scale the inputs.** The first layer's pre-activations are weighted sums of
+the inputs: with features in grams next to features in the range 1–10, the
+initial scale is wrong for some units and the optimisation ill-conditioned
+(@thm-opt-step). Standardise, inside a pipeline.
+
+**Use a robust optimiser.** scikit-learn's `MLPClassifier` offers `"adam"`
+(default, @eq-opt-adam), `"sgd"` with momentum and schedules, and `"lbfgs"`,
+a quasi-Newton method that is often the best choice for small data sets
+because it uses the full batch and needs no learning rate.
+
+**Regularise.** `alpha` adds an L2 penalty $\frac{\alpha}{2n}\lVert
+W\rVert^2$ to the loss (weight decay); early stopping
+(@thm-opt-early-ridge) is the other standard tool. The size of the network is
+a third: fewer units, less capacity.
+
+**Expect variability.** Different random seeds give different networks; for
+small data, average a few or check that conclusions do not depend on the seed.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla5-training-easy}
+## Easy — choosing an initial scale
+A hidden layer of ReLU units receives 64 inputs, and the next layer has 128
+units. What standard deviation should the weights have under He
+initialisation? Under Glorot's $2/(m_{\text{in}} + m_{\text{out}})$? What
+happens to the variance of the pre-activations after 10 layers if instead
+$s^2 = 1/m$ is used with ReLU?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+With ReLU and $s^2 = 1/m$, each layer multiplies the variance by
+$ms^2/2 = \frac12$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+He: $s = \sqrt{2/64} \approx 0.177$. Glorot: $s = \sqrt{2/(64 + 128)} \approx
+0.102$. With $s^2 = 1/m$ and ReLU, the variance halves at every layer: after
+10 layers it is $2^{-10} \approx 0.001$ of the original — the signal fades.
+```{python}
+print(round(np.sqrt(2 / 64), 4), round(np.sqrt(2 / 192), 4), 0.5 ** 10)
+```
+The mismatch is invisible in a shallow network and decisive in a deep one.
+:::
+
+::: {#exr-mla5-training-medium}
+## Medium — symmetry at zero
+Train our NumPy MLP (8 hidden units) on the moons data starting from all
+weights equal to $0.1$ (and zero biases). After 2 000 iterations, how many
+*distinct* hidden units are there? Compare with a random start.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Build the parameter list by hand with `np.full`. Two units are identical if
+their rows of $W^{(1)}$, their biases and their columns of $W^{(2)}$ coincide;
+`np.unique(np.round(W1, 8), axis=0)` counts distinct rows.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+const = [(np.full((8, 2), 0.1), np.zeros(8)), (np.full((2, 8), 0.1), np.zeros(2))]
+v = [(np.zeros_like(W), np.zeros_like(b)) for W, b in const]; ps = const
+for _ in range(2000):
+    _, gs = loss_and_grads(ps, Xm, Ym)
+    v = [(0.9 * vW - 0.5 * gW, 0.9 * vb - 0.5 * gb) for (vW, vb), (gW, gb) in zip(v, gs)]
+    ps = [(W + vW, b + vb) for (W, b), (vW, vb) in zip(ps, v)]
+rand = train([2, 8, 2], 0, Xm, Ym, iters=2000)
+for name, p_ in (("constant start", ps), ("random start", rand)):
+    print(f"{name}: distinct hidden units {len(np.unique(np.round(p_[0][0], 8), axis=0))}, "
+          f"training accuracy {np.mean(forward(p_, Xm)[-1].argmax(1) == ym):.3f}")
+```
+From a symmetric start every hidden unit receives exactly the same gradient,
+so the eight units remain one unit repeated eight times: the network is no
+more expressive than a single hidden unit. Random initialisation breaks the
+tie. (The output units differ from each other because the softmax gradient
+treats the two classes differently.) This is why `MLPClassifier` has a
+`random_state` and why its results depend on it.
+:::
+
+::: {#exr-mla5-training-hard}
+## Hard — is a network worth it on a small table?
+On the wine data, compare by nested cross-validation (outer repeated
+stratified 5-fold, inner 3-fold) an MLP — tuning the hidden size in $\{(8,),
+(32,)\}$, `alpha` in $\{10^{-3}, 10^{-1}, 1\}$ and the solver in
+$\{$"adam", "lbfgs"$\}$ — with logistic regression and an RBF SVM, all with
+scaling in the pipeline. Report means, standard errors and the fitting time.
+Would you choose the network?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`cross_validate` returns `fit_time` alongside the scores. Suppress the
+convergence warnings of `lbfgs` with a warnings filter only after checking
+that they do not hide a real problem (e.g. by raising `max_iter`).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import warnings
+from sklearn.datasets import load_wine
+from sklearn.model_selection import cross_validate
+from sklearn.svm import SVC
+from sklearn.exceptions import ConvergenceWarning
+
+Xw, yw = load_wine(return_X_y=True)
+inner3 = StratifiedKFold(3, shuffle=True, random_state=0)
+outer_r = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=1)
+candidates = {
+    "MLP (tuned)": GridSearchCV(make_pipeline(StandardScaler(), MLPClassifier(max_iter=2000, random_state=0)),
+                                {"mlpclassifier__hidden_layer_sizes": [(8,), (32,)], "mlpclassifier__alpha": [1e-3, 1e-1, 1.0],
+                                 "mlpclassifier__solver": ["adam", "lbfgs"]}, cv=inner3),
+    "logistic (tuned C)": GridSearchCV(make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000)),
+                                       {"logisticregression__C": np.logspace(-2, 2, 5)}, cv=inner3),
+    "RBF SVM (tuned)": GridSearchCV(make_pipeline(StandardScaler(), SVC()),
+                                    {"svc__C": np.logspace(-1, 2, 4), "svc__gamma": np.logspace(-3, 0, 4)}, cv=inner3),
+}
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", ConvergenceWarning)
+    for name, m in candidates.items():
+        res = cross_validate(m, Xw, yw, cv=outer_r)
+        s = res["test_score"]
+        print(f"{name:20s} accuracy {s.mean():.3f} ± {s.std(ddof=1) / np.sqrt(len(s)):.3f}, mean fit time {res['fit_time'].mean():.2f} s")
+```
+All three reach about the same accuracy, within their standard errors, but
+the network costs one to two orders of magnitude more time to tune and has
+the most knobs. On a small, nearly linearly separable table there is nothing
+for hidden layers to discover; the simplest model that matches the others is
+the one to prefer. The same reasoning applies to the fruit project: five
+measurements and 500 examples are a setting where an MLP is a legitimate
+comparison, not an obvious winner. Mistake to avoid: tuning the network more
+generously than the baselines and then crediting the architecture with the
+difference.
+:::
+
+## The universal approximation theorem {#sec-nn-uat}
+
+How expressive is a network with a single hidden layer? Remarkably, enough
+for any continuous function, if it is wide enough.
+
+::: {#thm-nn-uat-1d}
+## Universal approximation in one dimension, with ReLU
+Let $f$ be continuous on $[a, c]$ and $\varepsilon > 0$. There is a network
+with one hidden layer of ReLU units and a linear output,
+$$
+\hat f(x) = \beta_0 + \sum_{k=1}^{N}\beta_k\max(0, x - t_k),
+$$
+such that $|f(x) - \hat f(x)| < \varepsilon$ for every $x \in [a, c]$.
+:::
+
+*In one line:* a sum of shifted ReLUs is exactly a piecewise-linear function,
+and piecewise-linear functions with enough pieces approximate any continuous
+function uniformly.
+
+::: {.deep kind="proof"}
+## Proof of @thm-nn-uat-1d
+Being continuous on a closed interval, $f$ is **uniformly continuous**: there
+is $h > 0$ with $|f(x) - f(x')| < \varepsilon$ whenever $|x - x'| \le h$. Take
+knots $a = t_1 < t_2 < \dots < t_{N+1} = c$ with spacing at most $h$, and let
+$\hat f$ be the piecewise-linear interpolant of $f$ at the knots. On each
+interval $[t_k, t_{k+1}]$, $\hat f(x)$ is a convex combination of $f(t_k)$ and
+$f(t_{k+1})$, both within $\varepsilon$ of $f(x)$ (their distance from $x$ is at
+most $h$), so $|f(x) - \hat f(x)| < \varepsilon$. It remains to write $\hat f$
+as a ReLU network. Let $m_k$ be the slope of $\hat f$ on $[t_k, t_{k+1}]$
+and set $\beta_0 = f(a)$, $\beta_1 = m_1$, $\beta_k = m_k - m_{k-1}$ for $k =
+2, \dots, N$. On $[t_k, t_{k+1}]$ the units with $t_j \le x$ are active, and
+the slope of $\beta_0 + \sum_j\beta_j\max(0, x - t_j)$ there is $\sum_{j\le
+k}\beta_j = m_k$; the two piecewise-linear functions have the same value at
+$a$ and the same slope on every piece, so they coincide. $\blacksquare$
+:::
+
+The general theorem holds in any dimension and for almost any activation:
+Cybenko proved it for sigmoids [@cybenko1989], Hornik for bounded
+non-constant activations [@hornik1991], and Leshno, Lin, Pinkus and Schocken
+showed that a one-hidden-layer network with a continuous activation is a
+universal approximator on compact sets **if and only if** the activation is
+not a polynomial [@leshno1993] — a sharper form of @prp-nn-linear-collapse.
+We state it without proof; the one-dimensional construction above contains
+its idea.
+
+The theorem is often over-read. It guarantees that a good approximation
+**exists**; it does not say how many units are needed (in $d$ dimensions the
+construction above needs exponentially many — the curse of dimensionality of
+@thm-npar-curse reappears), nor that gradient descent will **find** it, nor
+that a network fitted to $n$ noisy examples will **generalise**. Those are the
+real questions of deep learning, where depth turns out to make some functions
+exponentially cheaper to represent than width does [@telgarsky2016].
+
+The widget builds the network of @thm-nn-uat-1d for a fixed function with $N$
+equally spaced knots: each ReLU unit adds a bend.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof uatN = Inputs.range([1, 40], {step: 1, value: 6, label: "hidden ReLU units N"})
+```
+
+```{ojs}
+//| echo: false
+uatData = {
+  const f = x => Math.sin(3 * x) + 0.5 * Math.cos(7 * x) + 0.3 * x, a = 0, c = 3;
+  const knots = Array.from({length: uatN + 1}, (_, k) => a + (c - a) * k / uatN);
+  const vals = knots.map(f), slopes = [];
+  for (let k = 0; k < uatN; k++) slopes.push((vals[k + 1] - vals[k]) / (knots[k + 1] - knots[k]));
+  const beta = slopes.map((m, k) => k === 0 ? m : m - slopes[k - 1]);
+  const net = x => vals[0] + beta.reduce((s, bk, k) => s + bk * Math.max(0, x - knots[k]), 0);
+  const out = []; let maxErr = 0;
+  for (let x = a; x <= c + 1e-9; x += 0.005) {
+    out.push({x, y: f(x), kind: "target f"}); out.push({x, y: net(x), kind: "ReLU network"});
+    maxErr = Math.max(maxErr, Math.abs(f(x) - net(x)));
+  }
+  return {out, knots: knots.map((x, k) => ({x, y: vals[k]})), maxErr};
+}
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">${uatN} hidden units — largest error on [0, 3]: ${uatData.maxErr.toFixed(4)}</p>`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-nn-uat-widget
+//| fig-cap: "The constructive network of @thm-nn-uat-1d approximating f(x) = sin 3x + 0.5 cos 7x + 0.3x on [0, 3] with N ReLU units placed at equally spaced knots. The largest error (printed above) falls roughly like 1/N² once the knots resolve the oscillations."
+Plot.plot({
+  height: 280, x: {label: "x"}, y: {label: "value"},
+  color: {legend: true, domain: ["target f", "ReLU network"], range: ["#b9b8b2", "#2a78d6"]},
+  marks: [
+    Plot.line(uatData.out, {x: "x", y: "y", z: "kind", stroke: "kind", strokeWidth: d => d.kind === "target f" ? 3 : 1.6}),
+    Plot.dot(uatData.knots, {x: "x", y: "y", r: 2.5, fill: "#2a78d6"})
+  ]
+})
+```
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-mla5-uat-easy}
+## Easy — exact functions from ReLUs
+Write $|x|$, $\max(x, 0) - \max(x - 1, 0)$ (what is it?), and the "hat"
+function that is $0$ outside $[0, 2]$, rises linearly to $1$ at $x = 1$ and
+falls back, as one-hidden-layer ReLU networks. How many units does each need?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$|x| = \max(0, x) + \max(0, -x)$: units may have weight $-1$ on the input. For
+the hat, list the knots and the changes of slope.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$|x| = \operatorname{relu}(x) + \operatorname{relu}(-x)$: 2 units.
+$\operatorname{relu}(x) - \operatorname{relu}(x - 1)$ is $0$ for $x \le 0$,
+$x$ on $[0, 1]$ and $1$ after: a ramp ("clipped identity"), 2 units. Hat:
+slopes $0, 1, -1, 0$ with knots $0, 1, 2$, so $\operatorname{relu}(x) -
+2\operatorname{relu}(x - 1) + \operatorname{relu}(x - 2)$: 3 units.
+```{python}
+relu = lambda t: np.maximum(0, t)
+xs_ = np.linspace(-1, 3, 9)
+print(np.c_[xs_, relu(xs_) + relu(-xs_), relu(xs_) - relu(xs_ - 1), relu(xs_) - 2 * relu(xs_ - 1) + relu(xs_ - 2)])
+```
+Hats are the building blocks of piecewise-linear interpolation: a sum of hats
+centred at the knots, weighted by $f$'s values, is the interpolant used in the
+proof of @thm-nn-uat-1d.
+:::
+
+::: {#exr-mla5-uat-medium}
+## Medium — how fast does the error fall?
+For $f = \sin$ on $[0, 2\pi]$, build the constructive ReLU network with $N =
+4, 8, 16, 32, 64$ equally spaced knots in NumPy, measure the maximum error,
+and check that it behaves like $h^2\max|f''|/8$ with $h = 2\pi/N$. Prove this
+bound for the linear interpolant.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+On an interval of length $h$, the error $e = f - \hat f$ vanishes at both
+ends; at an interior maximum $e' = 0$. Expand around that point with Taylor's
+theorem.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+**Bound.** On $[t, t + h]$, $e = f - \hat f$ has $e(t) = e(t + h) = 0$ and
+$e'' = f''$ (the interpolant is linear). If $|e|$ is largest at an interior
+$x^*$, then $e'(x^*) = 0$, and for the nearer endpoint $t_0$ (distance $\le
+h/2$), $0 = e(t_0) = e(x^*) + \frac12e''(\xi)(t_0 - x^*)^2$, so $|e(x^*)| \le
+\frac12\max|f''|\frac{h^2}{4} = \frac{h^2}{8}\max|f''|$.
+```{python}
+def relu_interpolant(f, a, c, N):
+    t = np.linspace(a, c, N + 1); v = f(t); m = np.diff(v) / np.diff(t)
+    beta = np.concatenate([[m[0]], np.diff(m)])
+    return lambda x: v[0] + relu(x[:, None] - t[None, :-1]) @ beta
+xx = np.linspace(0, 2 * np.pi, 20001)
+for N in (4, 8, 16, 32, 64):
+    err = np.abs(np.sin(xx) - relu_interpolant(np.sin, 0, 2 * np.pi, N)(xx)).max()
+    print(f"N = {N:3d}: max error {err:.2e}, bound h^2/8 = {(2 * np.pi / N) ** 2 / 8:.2e}")
+```
+Each doubling of $N$ divides the error by about 4: the error is $O(1/N^2)$ for
+twice-differentiable functions, and the bound (with $\max|\sin''| = 1$) is
+nearly attained. In $d$ dimensions the same accuracy needs $N^d$ pieces — the
+approximation-theoretic face of the curse of dimensionality.
+:::
+
+::: {#exr-mla5-uat-hard}
+## Hard — approximation is not learning
+Draw 40 noisy points from the function of the widget ($\sigma = 0.3$). Fit
+`MLPRegressor` with one hidden $\tanh$ layer of width $2, 5, 10, 50, 200$
+(input standardised, `solver="lbfgs"`, a tiny `alpha`, run to convergence),
+and measure training MSE and test MSE on 2 000 fresh points, taking the
+median over 5 random seeds. Then repeat the widest one
+with a larger `alpha` chosen by cross-validation. What does the universal
+approximation theorem explain, and what does it not?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Training error should keep decreasing with width (more capacity); test error
+need not. Use the median: a single run that oscillates wildly between the
+training points can dominate a mean. Use `GridSearchCV` over `alpha` for the
+last part.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.neural_network import MLPRegressor
+f_w = lambda x: np.sin(3 * x) + 0.5 * np.cos(7 * x) + 0.3 * x
+r = np.random.default_rng(8)
+x40 = r.uniform(0, 3, 40); y40 = f_w(x40) + r.normal(0, 0.3, 40)
+xt = r.uniform(0, 3, 2000); yt = f_w(xt) + r.normal(0, 0.3, 2000)
+def net(width, alpha, seed):
+    return make_pipeline(StandardScaler(), MLPRegressor(hidden_layer_sizes=(width,), activation="tanh", solver="lbfgs", alpha=alpha,
+                                                        max_iter=20_000, tol=1e-10, max_fun=50_000, random_state=seed))
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", ConvergenceWarning)
+    for width in (2, 5, 10, 50, 200):
+        tr_, te_ = [], []
+        for seed in range(5):
+            mr = net(width, 1e-6, seed).fit(x40[:, None], y40)
+            tr_.append(np.mean((mr.predict(x40[:, None]) - y40) ** 2)); te_.append(np.mean((mr.predict(xt[:, None]) - yt) ** 2))
+        print(f"width {width:3d}: median training MSE {np.median(tr_):.3f}, median test MSE {np.median(te_):.3f} (worst seed {np.max(te_):.2f})")
+    gsr = GridSearchCV(net(200, 1e-6, 0), {"mlpregressor__alpha": np.logspace(-4, 1, 6)}, cv=5,
+                       scoring="neg_mean_squared_error").fit(x40[:, None], y40)
+print(f"width 200 with alpha = {gsr.best_params_['mlpregressor__alpha']:g} (CV): test MSE {np.mean((gsr.predict(xt[:, None]) - yt) ** 2):.3f} "
+      f"(noise variance 0.09)")
+```
+Training error falls as the width grows, far below the noise variance — the
+theorem at work: wide networks can fit anything, including the noise. Test
+error does not follow: with 40 points, the wide unregularised networks
+interpolate the noise and oscillate between the training points, and some
+seeds produce wild curves (the "worst seed" column). Regularisation chosen
+by cross-validation brings the wide network back close to the noise level. The
+theorem explains the **capacity**; the bias–variance trade-off of
+@thm-bias-variance decides the **generalisation**.
+:::
+
+::: {.project-link}
+**In the project.** A small MLP (`MLPClassifier` with one hidden layer, in a
+pipeline with `StandardScaler`) is a fair additional comparison for the fruit
+classifier: five standardised measurements in, five softmax probabilities
+out. The lessons of this chapter set the protocol: scale inside the pipeline,
+try `lbfgs` on a data set this small, tune width and `alpha` by
+cross-validation with the same folds as the other models, and check that the
+conclusion does not depend on the random seed. Do not expect a network to win
+by default on 500 rows (@exr-mla5-training-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Unscaled inputs.** Gradients and initial scales assume features of
+  comparable size.
+- **Identity activations in hidden layers** (or none): the network is linear.
+- **Zero or constant initialisation**: all hidden units stay identical.
+- **Sigmoids in deep hidden layers**: vanishing gradients; prefer ReLU or
+  tanh in shallow networks.
+- **Reading the universal approximation theorem as a promise of accuracy.**
+  It concerns representation, not learning from finite noisy data.
+- **One run, one seed.** Network results vary with the initialisation; repeat.
+- **Ignoring `ConvergenceWarning`.** Raise `max_iter`, change the solver or
+  scale the data before silencing it.
+:::
+
+## Summary
+
+- A neuron is a linear score passed through an activation; the perceptron
+  rule converges on separable data after at most $(R/\gamma)^2$ updates, but
+  one neuron cannot compute XOR.
+- An MLP composes layers $a^{(\ell)} = g(W^{(\ell)}a^{(\ell-1)} + b^{(\ell)})$;
+  without non-linear $g$ it is linear. Sigmoid derivatives are at most
+  $\frac14$, which makes deep sigmoid networks hard to train.
+- Backpropagation: $\delta^{(L)} = p - y$, $\delta^{(\ell)} =
+  (W^{(\ell+1)\top}\delta^{(\ell+1)}) \odot g'(z^{(\ell)})$, gradients
+  $\delta^{(\ell)}a^{(\ell-1)\top}$ — at the cost of about one forward pass.
+- Train with random initialisation of variance $1/m$ (tanh) or $2/m$ (ReLU),
+  scaled inputs, Adam or L-BFGS, an L2 penalty and early stopping; expect
+  variability across seeds.
+- One hidden layer can approximate any continuous function (if the activation
+  is not a polynomial); how many units, how to find them and whether they
+  generalise are separate questions.
+
+## Exercises
+
+::: {#exr-mla5-softmax-lr}
+**A network that is a logistic regression.** Show that `MLPClassifier` with
+`activation="identity"` and one hidden layer represents the same family of
+decision boundaries as multinomial logistic regression, and check it on the
+wine data by comparing the two models' cross-validated accuracies and their
+predictions.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+By @prp-nn-linear-collapse the hidden layer composes with the output layer
+into a single affine map $Wx + b$ followed by the softmax: the multinomial
+logistic model (if the hidden layer is at least as wide as the number of
+classes minus one, otherwise a rank-restricted version of it).
+```{python}
+cv5 = StratifiedKFold(5, shuffle=True, random_state=0)
+id_mlp = make_pipeline(StandardScaler(), MLPClassifier(hidden_layer_sizes=(10,), activation="identity", solver="lbfgs", alpha=1e-2, max_iter=5000, random_state=0))
+lr_w = make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000))
+from sklearn.model_selection import cross_val_predict
+p1, p2 = cross_val_predict(id_mlp, Xw, yw, cv=cv5), cross_val_predict(lr_w, Xw, yw, cv=cv5)
+print(f"identity MLP accuracy {np.mean(p1 == yw):.3f}, logistic {np.mean(p2 == yw):.3f}, same predictions on {np.mean(p1 == p2):.3f} of the wines")
+```
+The two are nearly identical in accuracy and predictions; small differences
+come from the different penalties (L2 on two weight matrices versus on one)
+and optimisers. This is the experiment behind the question "what is the
+activation function for?": without it, the hidden layer is decoration.
+:::
+
+::: {#exr-mla5-depth-gradients}
+**Gradients through depth.** Build chains of 2 to 30 layers of 50 units with
+weights initialised at variance $1/m$, using sigmoid, tanh or ReLU (He
+variance $2/m$ for ReLU). Propagate a batch of random inputs forward, then a
+random output gradient backward, and plot the norm of the gradient reaching
+the first layer against depth.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-nn-depth
+#| fig-cap: "Norm of the backpropagated gradient at the first layer of random fully connected networks (50 units per layer), against depth. With sigmoids it vanishes exponentially (@prp-nn-vanishing); with tanh (Glorot-like scale) and ReLU (He scale) it stays of the same order."
+acts_ = {"sigmoid": (sig, lambda a: a * (1 - a), 1.0), "tanh": (np.tanh, lambda a: 1 - a ** 2, 1.0),
+         "ReLU": (relu, lambda a: (a > 0).astype(float), 2.0)}
+depths = [2, 5, 10, 15, 20, 30]
+fig, ax = plt.subplots(figsize=(6, 3.2))
+for (name, (g, dg, gain)), c in zip(acts_.items(), mlalgbook.COLORS):
+    norms = []
+    for L_ in depths:
+        rg = np.random.default_rng(0)
+        Ws = [rg.normal(0, np.sqrt(gain / 50), (50, 50)) for _ in range(L_)]
+        a_ = [rg.normal(size=(200, 50))]
+        for W in Ws:
+            a_.append(g(a_[-1] @ W.T))
+        delta = rg.normal(size=(200, 50)) * dg(a_[-1])
+        for l in range(L_ - 1, 0, -1):
+            delta = (delta @ Ws[l]) * dg(a_[l])
+        norms.append(np.linalg.norm(delta) / np.sqrt(delta.size))
+    ax.semilogy(depths, norms, marker="o", ms=4, color=c, label=name)
+ax.set_xlabel("number of layers"); ax.set_ylabel("gradient size at layer 1"); ax.legend(); plt.show()
+```
+With sigmoid units the gradient shrinks by a roughly constant factor per layer
+— the bound of @prp-nn-vanishing in action, as $\sigma' \le \frac14$ and the
+weights have unit-scale rows — while tanh and ReLU, with matched
+initialisations, keep it roughly stable over these depths. This is why deep
+networks use ReLU-like activations and careful initialisation.
+:::
+
+## Further reading {.unnumbered}
+
+- @goodfellow2016, ch. 6–8 — feed-forward networks, backpropagation,
+  regularisation and optimisation for deep learning (free online).
+- @bishop2006, ch. 5 — neural networks from the statistical point of view,
+  including backpropagation and early stopping (§5.3, §5.5.2).
+- @rumelhart1986 — the backpropagation paper; @rosenblatt1958 and
+  @novikoff1962 — the perceptron and its convergence; @minsky1969 — its
+  limits.
+- @cybenko1989, @hornik1991 and @leshno1993 — universal approximation;
+  @telgarsky2016 — why depth helps.
+- @glorot2010 and @he2015 — initialisation; @glorot2011 — ReLU.
+- @nielsen2015 — a gentle, free online book that builds and trains a network
+  from scratch.
+- scikit-learn user guide, "Neural network models (supervised)" — the exact
+  loss, penalty and solvers of `MLPClassifier` [@pedregosa2011].

@@ -1,0 +1,5 @@
+jupyter: python3
+# Part IV: ordinary Python cells (scikit-learn, NumPy, pandas, Matplotlib),
+# shown with their outputs. Every chapter starts with a hidden setup cell that
+# imports mlalgbook.py, which reuses the figure style of Part III (ml/mlbook.py)
+# and adds the plotting helpers for decision regions.

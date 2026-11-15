@@ -64,6 +64,15 @@ book:
         - ml/06-classification.qmd
         - ml/07-clustering.qmd
         - ml/08-project-real-estate.qmd
+    - part: mlalg/index.qmd
+      chapters:
+        - mlalg/01-optimization.qmd
+        - mlalg/02-parametric.qmd
+        - mlalg/03-naive-bayes.qmd
+        - mlalg/04-svm.qmd
+        - mlalg/05-neural-networks.qmd
+        - mlalg/06-knn.qmd
+        - mlalg/07-trees-forests.qmd
   appendices:
     - appendices/finding-sources.qmd
     - references.qmd

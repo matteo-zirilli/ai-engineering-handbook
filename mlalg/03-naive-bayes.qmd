@@ -1,0 +1,1234 @@
+# Naive Bayes {#sec-ch-mla-nb}
+
+> *"Probability theory is nothing but common sense reduced to calculation."*
+> — Pierre-Simon Laplace, 1814 [@laplace1814]
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- compute **conditional probabilities**, **prove** the law of total
+  probability and **Bayes' theorem**, and use them to update beliefs with
+  evidence, avoiding the base-rate fallacy;
+- turn Bayes' theorem into a **classifier**, state the **naive** assumption of
+  conditional independence and **prove** how much it saves;
+- estimate the ingredients by maximum likelihood, **prove** that Laplace
+  (additive) smoothing is the posterior mean under a Dirichlet prior, and
+  compute everything in log space safely;
+- choose among the **Gaussian, Bernoulli, multinomial, complement and
+  categorical** variants according to the type of the features, implementing
+  each from scratch and matching scikit-learn;
+- **prove** that Gaussian naive Bayes draws quadratic (or, with shared
+  variances, linear) boundaries, and explain why its probabilities are often
+  over-confident while its decisions can still be good.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Conditional probability; Bayes' theorem and a worked example; naive Bayes
+algorithms; in practice, the Gaussian, Bernoulli, multinomial, complement and
+categorical variants.
+:::
+
+## Intuition: reasoning backwards from evidence {#sec-nb-intuition}
+
+A warehouse receives crates from two suppliers. One supplier sends 90 % of
+the crates, and 2 % of its crates arrive damaged; the other sends 10 %, and
+20 % of its crates arrive damaged. A damaged crate arrives: who sent it?
+
+The tempting answer is "the second supplier — its crates are ten times more
+often damaged". But the first supplier sends nine times as many crates. Out of
+1 000 crates, 900 come from the first and 18 of them are damaged; 100 come from
+the second and 20 of them are damaged. Of the 38 damaged crates, 20 — just over
+half — come from the second supplier. Reasoning from an **effect** (damage)
+back to its possible **causes** (suppliers) requires weighing how likely the
+effect is under each cause *and* how common each cause is. That weighing is
+Bayes' theorem.
+
+A **naive Bayes** classifier applies it with many pieces of evidence at once —
+the words of an e-mail, the measurements of an object — under a bold
+simplification: each piece of evidence is treated as independent of the
+others once the class is known. The simplification is almost never true, yet
+the classifier is fast, needs little data and is often surprisingly accurate.
+This chapter explains both the method and the reasons for its success.
+
+## Conditional probability and Bayes' theorem {#sec-nb-bayes}
+
+For events $A$ and $B$ with $P(B) > 0$, the **conditional probability** of
+$A$ given $B$ is
+$$
+P(A \mid B) = \frac{P(A \cap B)}{P(B)} ,
+$$ {#eq-nb-conditional}
+the fraction of the cases in which $B$ happens where $A$ happens too. Rearranged,
+it gives the **product rule** $P(A \cap B) = P(A \mid B)P(B) = P(B \mid A)P(A)$.
+
+::: {#thm-nb-bayes}
+## Law of total probability and Bayes' theorem
+Let $C_1, \dots, C_K$ be events that partition the sample space (exactly one
+of them happens) with $P(C_k) > 0$, and let $E$ be an event with $P(E) > 0$.
+Then
+$$
+P(E) = \sum_{k=1}^KP(E \mid C_k)P(C_k)
+\qquad\text{and}\qquad
+P(C_k \mid E) = \frac{P(E \mid C_k)P(C_k)}{\sum_{j=1}^KP(E \mid C_j)P(C_j)} .
+$$ {#eq-nb-bayes}
+:::
+
+*In one line:* the probability of a cause given the evidence is proportional
+to how well that cause explains the evidence (the **likelihood**) times how
+common the cause was beforehand (the **prior**); dividing by the total makes
+the **posterior** probabilities sum to one.
+
+::: {.deep kind="proof"}
+## Proof of @thm-nb-bayes
+The events $E \cap C_k$ are disjoint and their union is $E$, so by additivity
+$P(E) = \sum_kP(E \cap C_k) = \sum_kP(E \mid C_k)P(C_k)$ (product rule). By
+@eq-nb-conditional and the product rule again, $P(C_k \mid E) = P(C_k \cap
+E)/P(E) = P(E \mid C_k)P(C_k)/P(E)$; substitute the first formula for $P(E)$.
+$\blacksquare$
+
+The theorem is in Bayes' posthumous essay, communicated by Richard Price in
+1763 [@bayes1763], for a special case; Laplace stated and used it in general
+from 1774 on, and his 1814 essay made it the basis of a theory of reasoning
+under uncertainty [@laplace1814; @stigler1986, ch. 3].
+:::
+
+::: {#exm-nb-test}
+## A screening test
+A condition affects 1 % of a population. A test detects it in 95 % of the
+people who have it (**sensitivity**) and correctly reports "negative" for 90 %
+of those who do not (**specificity**). Someone tests positive: what is the
+probability that they have the condition? With $D$ = "has the condition",
+$$
+P(D \mid +) = \frac{0.95 \times 0.01}{0.95 \times 0.01 + 0.10 \times 0.99}
+= \frac{0.0095}{0.1085} \approx 0.088 .
+$$
+Fewer than one in eleven positives is a true case. In **natural frequencies**,
+which people find much easier [@gigerenzer1995]: of 10 000 people, 100 have
+the condition and 95 of them test positive; of the 9 900 who do not, 990 test
+positive; so 95 of the 1 085 positives are true cases. Ignoring the prior —
+answering "95 %" — is the **base-rate fallacy** [@kahneman1973].
+:::
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+N = 1_000_000
+D = rng.random(N) < 0.01                                        # who has the condition
+positive = np.where(D, rng.random(N) < 0.95, rng.random(N) < 0.10)
+print(f"simulated P(D | +) = {D[positive].mean():.4f};  Bayes' theorem: {0.95 * 0.01 / (0.95 * 0.01 + 0.10 * 0.99):.4f}")
+```
+
+### Practice {.unnumbered}
+
+::: {#exr-mla3-bayes-easy}
+## Easy — the damaged crate
+Using the numbers of @sec-nb-intuition, compute with @eq-nb-bayes the
+probability that a damaged crate comes from the second supplier, and the
+probability that an **undamaged** crate does.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Priors $0.9$ and $0.1$; likelihoods of damage $0.02$ and $0.20$. For an
+undamaged crate the likelihoods are $0.98$ and $0.80$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Damaged: $\frac{0.20\cdot0.1}{0.20\cdot0.1 + 0.02\cdot0.9} = \frac{0.020}{0.038}
+\approx 0.526$. Undamaged: $\frac{0.80\cdot0.1}{0.80\cdot0.1 + 0.98\cdot0.9} =
+\frac{0.080}{0.962} \approx 0.083$.
+```{python}
+prior, p_dmg = np.array([0.9, 0.1]), np.array([0.02, 0.20])
+for name, lik in (("damaged", p_dmg), ("undamaged", 1 - p_dmg)):
+    post = lik * prior / np.sum(lik * prior)
+    print(f"{name:9s}: P(second supplier | crate) = {post[1]:.3f}")
+```
+Observing damage moves the probability of the second supplier from 10 % to
+53 %; observing no damage moves it down only slightly, to 8 %, because most
+crates of both suppliers arrive intact. Evidence that is common under every
+hypothesis carries little information. The classic error is to report the
+likelihood $P(\text{damage} \mid \text{second}) = 0.20$ as the answer.
+:::
+
+::: {#exr-mla3-bayes-medium}
+## Medium — posterior against prevalence
+For the test of @exm-nb-test, plot $P(D \mid +)$ and $P(D \mid -)$ against the
+prevalence $P(D)$ from $10^{-4}$ to $0.5$ (log scale). At which prevalence is
+a positive result as likely to be a true case as not?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Vectorise @eq-nb-bayes over a grid of prevalences. The 50 % point solves
+$0.95p = 0.10(1-p)$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-nb-prevalence
+#| fig-cap: "Probability of having the condition after a positive and after a negative test (sensitivity 95 %, specificity 90 %), against its prevalence."
+prev = np.logspace(-4, np.log10(0.5), 200)
+post_pos = 0.95 * prev / (0.95 * prev + 0.10 * (1 - prev))
+post_neg = 0.05 * prev / (0.05 * prev + 0.90 * (1 - prev))
+fig, ax = plt.subplots(figsize=(6, 3.2))
+ax.plot(prev, post_pos, label="after a positive test"); ax.plot(prev, post_neg, label="after a negative test")
+ax.plot(prev, prev, color=mlalgbook.MUTED, ls="--", lw=1, label="prior (no test)")
+ax.set_xscale("log"); ax.set_xlabel("prevalence P(D)"); ax.set_ylabel("posterior P(D | result)"); ax.legend(); plt.show()
+print(f"P(D | +) = 0.5 at prevalence {0.10 / (0.95 + 0.10):.4f}")
+```
+A positive result becomes more-likely-than-not only when the prevalence
+exceeds $0.10/1.05 \approx 9.5\,\%$. The same test is nearly useless for
+screening a rare condition and very informative in a clinic where the
+condition is common: the posterior depends on the prior. A frequent mistake
+is to believe that a test's "accuracy" is a property of the test alone.
+:::
+
+::: {#exr-mla3-bayes-hard}
+## Hard — two tests, independent or not
+After a positive result, a second, different test with the same sensitivity
+and specificity is done and is also positive. (a) Assuming the two results
+are independent **given** the person's condition, compute $P(D \mid +, +)$ by
+applying Bayes' theorem twice, and check it equals one application with the
+product of the likelihoods. (b) Simulate instead two tests whose errors are
+**correlated** — say, both tend to err on the same people, because 70 % of
+the false positives of the first test are also false positives of the second
+— and compare the true $P(D \mid +, +)$ with the "independent" formula. What
+does this tell you about naive Bayes?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For (a), the posterior after the first test becomes the prior of the second.
+For (b), generate the second test's result for the healthy people so that,
+among the first test's false positives, 70 % are positive again, and choose
+the rate among the others so that the overall specificity stays 90 %.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def posterior(prior, sens=0.95, spec=0.90):
+    return sens * prior / (sens * prior + (1 - spec) * (1 - prior))
+seq = posterior(posterior(0.01))
+once = 0.95**2 * 0.01 / (0.95**2 * 0.01 + 0.10**2 * 0.99)
+print(f"(a) sequential {seq:.4f}, product of likelihoods {once:.4f}")
+
+t1 = positive                                                   # first test, from the simulation above
+t2 = np.empty(N, bool)
+t2[D] = rng.random(D.sum()) < 0.95                              # sick: independent detection, 95 %
+fp = ~D & t1; tn = ~D & ~t1
+t2[fp] = rng.random(fp.sum()) < 0.70                            # 70 % of false positives repeat
+q = (0.10 - 0.70 * 0.10) / 0.90                                 # rate among the others keeps specificity at 90 %
+t2[tn] = rng.random(tn.sum()) < q
+print(f"(b) second test specificity {1 - t2[~D].mean():.3f}; true P(D | +,+) = {D[t1 & t2].mean():.4f} "
+      f"vs 'independent' formula {once:.4f}")
+```
+(a) Both routes give about $0.48$: with conditionally independent evidence,
+updating twice equals multiplying the likelihoods — the rule naive Bayes uses
+for every feature. (b) With correlated errors the second positive adds much
+less information than the formula assumes (the same people are fooled twice),
+and the true posterior is far lower — around $0.12$ — than the "independent"
+$0.48$. A naive Bayes model that treats redundant features as independent
+**double-counts** their evidence and becomes over-confident
+(@sec-nb-assumption). The mistake in (b) is easy to make in practice: two
+measurements of the same property (two scales weighing the same fruit) are
+not independent pieces of evidence.
+:::
+
+## From Bayes' theorem to a classifier {#sec-nb-classifier}
+
+By @thm-bayes-classifier, the classifier with the smallest error predicts the
+class with the largest posterior probability $P(y = c \mid x)$. Bayes'
+theorem rewrites it with quantities that are easier to estimate:
+$$
+P(y = c \mid x) = \frac{\pi_c\,p(x \mid c)}{\sum_{c'}\pi_{c'}\,p(x \mid c')},
+\qquad
+\hat y(x) = \arg\max_c\;\pi_c\,p(x \mid c),
+$$ {#eq-nb-posterior}
+with **class priors** $\pi_c = P(y = c)$ and **class-conditional**
+distributions $p(x \mid c)$. A model of $p(x \mid c)$ and $\pi_c$ describes
+how the data are *generated* — first a class, then features — hence the name
+**generative classifier**; logistic regression, which models $P(y \mid x)$
+directly, is **discriminative** [@ng2002].
+
+The difficulty is $p(x \mid c)$, a distribution over all $d$ features jointly.
+Even with $d$ binary features, a general distribution has $2^d - 1$ free
+probabilities per class — over a million for $d = 20$ — far more than any
+training set can estimate. The **naive** assumption cuts this down.
+
+::: {#def-nb-naive}
+## Naive Bayes
+The features are **conditionally independent given the class**:
+$$
+p(x \mid c) = \prod_{j=1}^d p_j(x_j \mid c)\quad\text{for every class } c,
+\qquad\text{so}\qquad
+\hat y(x) = \arg\max_c\Big[\ln\pi_c + \sum_{j=1}^d\ln p_j(x_j \mid c)\Big].
+$$ {#eq-nb-rule}
+:::
+
+::: {#prp-nb-count}
+## What the naive assumption saves
+With $d$ features taking $m$ values each and $K$ classes, a general
+class-conditional model has $K(m^d - 1)$ free probabilities; the naive model
+has $Kd(m - 1)$.
+:::
+
+*In one line:* the naive assumption turns a number of parameters exponential
+in the number of features into a linear one — from about a million to twenty
+per class for 20 binary features.
+
+::: {.deep kind="proof"}
+## Proof of @prp-nb-count
+A distribution over a finite set of $s$ outcomes is a vector of $s$
+non-negative numbers summing to one: $s - 1$ free numbers. The joint vector
+$x$ has $m^d$ outcomes, hence $m^d - 1$ per class. Under @eq-nb-rule each
+factor $p_j(\cdot \mid c)$ is a distribution over $m$ values, $m - 1$ free
+numbers, and there are $d$ factors per class. $\blacksquare$
+:::
+
+Two practical points before the first example.
+
+**Logarithms.** A product of hundreds of probabilities underflows to zero in
+floating point; sums of logarithms do not. To turn the log scores $a_c =
+\ln\pi_c + \sum_j\ln p_j(x_j \mid c)$ back into posterior probabilities,
+$P(y = c \mid x) = e^{a_c}/\sum_{c'}e^{a_{c'}}$ — a softmax — computed stably
+with the identity $\ln\sum_ce^{a_c} = m + \ln\sum_ce^{a_c - m}$ for $m =
+\max_ca_c$ (multiply and divide by $e^m$), which keeps every exponent $\le 0$.
+
+**Estimation.** The ingredients are estimated by maximum likelihood: the
+prior by the class frequency $\hat\pi_c = n_c/n$, and each $p_j(\cdot \mid c)$
+from the examples of class $c$ only. For a categorical feature the MLE of
+$p_j(v \mid c)$ is the fraction $N_{cjv}/n_c$ of class-$c$ examples with
+$x_j = v$ (the same argument as for $\hat\pi_c$; proof in @thm-nb-smoothing).
+
+::: {#exm-nb-spam}
+## Naive Bayes by hand
+Eight e-mails, three yes/no features — does the text contain "free",
+"meeting", "winner"? — and a label.
+
+| e-mail | free | meeting | winner | label |
+|---|---|---|---|---|
+| 1 | yes | no | yes | spam |
+| 2 | yes | no | no | spam |
+| 3 | yes | no | yes | spam |
+| 4 | no | no | yes | spam |
+| 5 | no | yes | no | ham |
+| 6 | yes | yes | no | ham |
+| 7 | no | yes | no | ham |
+| 8 | no | no | no | ham |
+
+Priors: $\hat\pi_{\text{spam}} = \hat\pi_{\text{ham}} = 4/8$. Conditional
+frequencies of "yes": for spam, free $3/4$, meeting $0/4$, winner $3/4$; for
+ham, free $1/4$, meeting $3/4$, winner $0/4$. A new e-mail contains "free" and
+"meeting" but not "winner":
+$$
+\text{spam: } \tfrac12\cdot\tfrac34\cdot\tfrac04\cdot\tfrac14 = 0, \qquad
+\text{ham: } \tfrac12\cdot\tfrac14\cdot\tfrac34\cdot\tfrac44 = \tfrac{3}{32}.
+$$
+Because no spam in the sample contains "meeting", the estimate
+$\hat p(\text{meeting} \mid \text{spam}) = 0$ **vetoes** the class spam
+whatever the other words say. An e-mail with "free", "winner" *and* "meeting"
+would get probability zero under both classes. One unseen combination in a
+small sample should not be able to do that.
+:::
+
+### Additive smoothing
+
+The cure, due to Laplace, is to add a pseudo-count $\alpha > 0$ to every cell:
+$$
+\hat p_j(v \mid c) = \frac{N_{cjv} + \alpha}{n_c + \alpha m_j},
+$$ {#eq-nb-smoothing}
+where $m_j$ is the number of values of feature $j$; $\alpha = 1$ is
+**Laplace smoothing**, $0 < \alpha < 1$ **Lidstone** smoothing. The estimate
+is never zero and tends to the MLE as the counts grow. It is not an arbitrary
+fix.
+
+::: {#thm-nb-smoothing}
+## Additive smoothing is a posterior mean
+Let a categorical variable take values $1, \dots, m$ with probabilities
+$\theta = (\theta_1, \dots, \theta_m)$, and let $N_v$ be the counts in $n$
+independent draws. (i) The maximum-likelihood estimate is $\hat\theta_v =
+N_v/n$. (ii) If $\theta$ has the symmetric **Dirichlet** prior with density
+$\propto\prod_v\theta_v^{\alpha - 1}$, its posterior mean is
+$$
+\mathbb{E}[\theta_v \mid N] = \frac{N_v + \alpha}{n + \alpha m}.
+$$
+:::
+
+*In one line:* the smoothed estimate is what a Bayesian who believed, before
+seeing data, that every value had been seen $\alpha$ times would estimate;
+$\alpha = 1$ is the uniform prior over all probability vectors.
+
+::: {.deep kind="proof"}
+## Proof of @thm-nb-smoothing
+(i) The log-likelihood is $\sum_vN_v\ln\theta_v$, to be maximised subject to
+$\sum_v\theta_v = 1$. With a Lagrange multiplier $\lambda$, the stationarity
+conditions $N_v/\theta_v = \lambda$ give $\theta_v = N_v/\lambda$, and the
+constraint gives $\lambda = n$. (The objective is concave, so this is the
+maximum; values with $N_v = 0$ get $\theta_v = 0$.) (ii) By Bayes' theorem
+the posterior density is proportional to likelihood × prior,
+$\prod_v\theta_v^{N_v}\cdot\prod_v\theta_v^{\alpha - 1} = \prod_v\theta_v^{N_v +
+\alpha - 1}$: a Dirichlet with parameters $a_v = N_v + \alpha$. The mean of a
+Dirichlet$(a_1, \dots, a_m)$ is $a_v/\sum_ua_u$: using the normalising
+constant $\int\prod_u\theta_u^{a_u - 1}d\theta = \prod_u\Gamma(a_u)/
+\Gamma(\sum_ua_u)$, $\mathbb{E}\theta_v = \frac{\Gamma(a_v + 1)\Gamma(A)}
+{\Gamma(a_v)\Gamma(A + 1)} = \frac{a_v}{A}$ with $A = \sum_ua_u$, by
+$\Gamma(z+1) = z\Gamma(z)$. Here $A = n + \alpha m$. $\blacksquare$
+
+Laplace derived the case $m = 2$, $\alpha = 1$ — his "rule of succession",
+the probability that the sun rises tomorrow given that it has risen every day
+so far [@laplace1814]; the general form is due to Lidstone and Johnson
+[@manning2008, §13.2].
+:::
+
+With $\alpha = 1$ in @exm-nb-spam, $\hat p(\text{meeting} \mid \text{spam}) =
+(0 + 1)/(4 + 2) = 1/6$ instead of $0$, and the e-mail with "free" and
+"meeting" now gets non-zero scores for both classes.
+
+```{python}
+from sklearn.naive_bayes import BernoulliNB, CategoricalNB
+
+E = np.array([[1, 0, 1], [1, 0, 0], [1, 0, 1], [0, 0, 1], [0, 1, 0], [1, 1, 0], [0, 1, 0], [0, 0, 0]])
+lab = np.array(["spam"] * 4 + ["ham"] * 4)
+new = np.array([[1, 1, 0]])
+
+def bernoulli_nb_scores(X, y, x, alpha):
+    """Log scores ln pi_c + sum_j ln p(x_j | c) with additive smoothing (two values per feature)."""
+    out = {}
+    for c in np.unique(y):
+        Xc = X[y == c]
+        p_yes = (Xc.sum(0) + alpha) / (len(Xc) + 2 * alpha)                 # @eq-nb-smoothing, m_j = 2
+        with np.errstate(divide="ignore"):
+            out[c] = np.log(len(Xc) / len(X)) + np.sum(np.log(np.where(x == 1, p_yes, 1 - p_yes)))
+    return out
+
+for alpha in (0.0, 1.0):
+    s = bernoulli_nb_scores(E, lab, new[0], alpha)
+    print(f"alpha = {alpha}: log scores {', '.join(f'{c} {v:.3f}' for c, v in s.items())}")
+sk = BernoulliNB(alpha=1.0).fit(E, lab)
+jl, pp = sk.predict_joint_log_proba(new)[0], sk.predict_proba(new)[0]
+print("scikit-learn BernoulliNB(alpha=1): joint log-likelihoods",
+      ", ".join(f"{c} {v:.3f}" for c, v in zip(sk.classes_, jl)), "| P(y | x):", ", ".join(f"{c} {v:.3f}" for c, v in zip(sk.classes_, pp)))
+```
+
+Without smoothing the spam score is $-\infty$; with $\alpha = 1$ our scores
+coincide with scikit-learn's joint log-likelihoods, and the e-mail is
+classified as ham with a posterior probability that, as it should for such a
+small sample, is far from certain.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla3-classifier-easy}
+## Easy — scoring by hand
+With the smoothed model ($\alpha = 1$) of @exm-nb-spam, compute by hand the
+posterior probability of spam for an e-mail containing "free" and "winner"
+but not "meeting".
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Smoothed "yes" probabilities: spam — free $4/6$, meeting $1/6$, winner $4/6$;
+ham — free $2/6$, meeting $4/6$, winner $1/6$. Multiply prior and the three
+factors for each class, then normalise.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Spam: $\frac12\cdot\frac46\cdot\frac56\cdot\frac46 = \frac12\cdot\frac{80}{216}
+\approx 0.1852$. Ham: $\frac12\cdot\frac26\cdot\frac26\cdot\frac16 =
+\frac12\cdot\frac{4}{216} \approx 0.0093$. Posterior of spam $\approx
+0.1852/(0.1852 + 0.0093) = 80/84 \approx 0.952$.
+```{python}
+print(BernoulliNB(alpha=1.0).fit(E, lab).predict_proba([[1, 0, 1]]).round(4), "classes:", sk.classes_)
+```
+The absent word "meeting" counts as evidence too ($5/6$ against $2/6$): the
+Bernoulli model uses absences, which is easy to forget when computing by hand.
+:::
+
+::: {#exr-mla3-classifier-medium}
+## Medium — a categorical naive Bayes from scratch
+Write a class with `fit`, `predict_log_proba` and `predict` for features that
+take integer category codes $0, \dots, m_j - 1$, with additive smoothing
+@eq-nb-smoothing and the stable log-sum-exp normalisation. Check it against
+`CategoricalNB` on random categorical data with 4 features (3, 2, 5 and 4
+categories) and 3 classes.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Store, for each feature, a $K \times m_j$ table of smoothed log
+probabilities. `scipy.special.logsumexp` implements the identity of the text;
+writing it yourself is three lines.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+class MyCategoricalNB:
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)
+        self.m_ = X.max(axis=0) + 1                                      # number of categories per feature
+        self.log_prior_ = np.log([np.mean(y == c) for c in self.classes_])
+        self.tables_ = []
+        for j, m in enumerate(self.m_):
+            counts = np.array([np.bincount(X[y == c, j], minlength=m) for c in self.classes_])   # K x m_j
+            self.tables_.append(np.log((counts + self.alpha) / (counts.sum(1, keepdims=True) + self.alpha * m)))
+        return self
+    def joint_log(self, X):
+        return self.log_prior_ + sum(T[:, X[:, j]].T for j, T in enumerate(self.tables_))
+    def predict_log_proba(self, X):
+        a = self.joint_log(X)
+        mx = a.max(axis=1, keepdims=True)
+        return a - (mx + np.log(np.exp(a - mx).sum(axis=1, keepdims=True)))     # log-sum-exp
+    def predict(self, X):
+        return self.classes_[np.argmax(self.joint_log(X), axis=1)]
+
+r = np.random.default_rng(1)
+Xc = np.column_stack([r.integers(0, m, 300) for m in (3, 2, 5, 4)]); yc = r.integers(0, 3, 300)
+mine, ref = MyCategoricalNB(0.5).fit(Xc, yc), CategoricalNB(alpha=0.5).fit(Xc, yc)
+print("max |log-probability difference|:", np.abs(mine.predict_log_proba(Xc) - ref.predict_log_proba(Xc)).max(),
+      "| same predictions:", np.array_equal(mine.predict(Xc), ref.predict(Xc)))
+```
+The two agree to rounding error. Pitfalls: computing the number of
+categories from the *training* data (a category absent from training but
+present at prediction time is out of the table — scikit-learn's
+`min_categories` handles it), and normalising with `np.exp(a).sum()` directly,
+which underflows when the scores are very negative.
+:::
+
+::: {#exr-mla3-classifier-hard}
+## Hard — how much smoothing?
+Generate a categorical classification problem in which smoothing matters: 3
+classes, 15 features with 6 categories each, class-conditional probabilities
+that differ only moderately between classes (each class's distribution is
+drawn from a Dirichlet centred on a common distribution in which some
+categories are rare), and only 60 training examples. Choose $\alpha$ for
+`CategoricalNB` by cross-validated **log loss** and by cross-validated
+accuracy, over a logarithmic grid from $10^{-3}$ to $10$; evaluate both choices
+on 3 000 test examples. Why can the two criteria disagree?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Draw a common distribution per feature with `rng.dirichlet(0.5 *
+np.ones(6))`, then for each class a perturbation of it with
+`rng.dirichlet(8 * common + 0.01)`, and sample categories from it. Use
+`GridSearchCV(..., scoring="neg_log_loss")` and `scoring="accuracy"`; set
+`min_categories=6` so that categories absent from a fold are handled.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.metrics import log_loss, accuracy_score
+
+r = np.random.default_rng(5)
+K, d, m = 3, 15, 6
+common = r.dirichlet(0.5 * np.ones(m), size=d)                       # feature x category, some categories rare
+P = np.array([[r.dirichlet(8 * common[j] + 0.01) for j in range(d)] for c in range(K)])   # class x feature x category
+def draw(n):
+    y = r.integers(0, K, n)
+    X = np.array([[r.choice(m, p=P[c, j]) for j in range(d)] for c in y])
+    return X, y
+Xtr, ytr = draw(60); Xte, yte = draw(3000)
+grid = {"alpha": np.logspace(-3, 1, 17)}
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+for scoring in ("neg_log_loss", "accuracy"):
+    gs = GridSearchCV(CategoricalNB(min_categories=m), grid, scoring=scoring, cv=cv).fit(Xtr, ytr)
+    best = gs.best_estimator_
+    print(f"chosen by {scoring:12s}: alpha = {gs.best_params_['alpha']:.3g} -> test accuracy "
+          f"{accuracy_score(yte, best.predict(Xte)):.3f}, test log loss {log_loss(yte, best.predict_proba(Xte)):.3f}")
+for a in (1e-3, 1.0, 10.0):
+    mdl = CategoricalNB(alpha=a, min_categories=m).fit(Xtr, ytr)
+    print(f"alpha = {a:g}: test accuracy {accuracy_score(yte, mdl.predict(Xte)):.3f}, log loss {log_loss(yte, mdl.predict_proba(Xte)):.3f}")
+```
+Very small $\alpha$ makes rare categories near-vetoes and the probabilities
+extreme: the log loss, which punishes confident mistakes heavily, is more
+than twice as large as with moderate smoothing, while the accuracy is only a
+few points worse; very large $\alpha$ washes out the differences between the
+classes and ruins both. Log loss tends to ask for more smoothing than
+accuracy does, and when the probabilities matter (costs, thresholds,
+@thm-cost-threshold) it is the right criterion. Accuracy on 60 examples is
+also a coarse, step-like score — many values of $\alpha$ tie — so its choice
+is noisy. Typical mistakes: tuning on the test set, and forgetting
+`min_categories`, which makes the model fail on a fold where some category
+never appears in training.
+:::
+
+## The variants {#sec-nb-variants}
+
+The naive assumption fixes the structure; the **variant** fixes the form of
+each factor $p_j(x_j \mid c)$, and must match the type of the features.
+
+| Variant (scikit-learn) | Features | Factor $p_j(x_j \mid c)$ | Typical use |
+|---|---|---|---|
+| `GaussianNB` | continuous | $\mathcal{N}(x_j;\,\mu_{cj}, \sigma^2_{cj})$ | measurements |
+| `BernoulliNB` | binary (presence/absence) | $\theta_{cj}^{x_j}(1 - \theta_{cj})^{1 - x_j}$ | short texts, binary indicators |
+| `MultinomialNB` | counts | $\theta_{cj}^{x_j}$ (up to a factor independent of $c$) | word counts in documents |
+| `ComplementNB` | counts | weights estimated from the *other* classes | text with unbalanced classes |
+| `CategoricalNB` | categorical codes | a probability table per feature and class | categorical attributes |
+
+: The naive Bayes variants of scikit-learn {#tbl-nb-variants}
+
+### Gaussian naive Bayes
+
+For continuous features each factor is a Gaussian with a mean and a variance
+per class and feature, estimated by maximum likelihood from the class's
+examples (@thm-npar-gauss-mle). scikit-learn adds to every variance a small
+$\epsilon = $ `var_smoothing` $\times$ the largest variance of any feature
+(default $10^{-9}$), to avoid dividing by zero for a constant feature. The
+shape of its decision boundary follows directly from the model.
+
+::: {#prp-nb-gaussian-boundary}
+## The boundaries of Gaussian naive Bayes
+For two classes, the log-posterior ratio of Gaussian naive Bayes is
+$$
+\ln\frac{P(1 \mid x)}{P(0 \mid x)} = \ln\frac{\pi_1}{\pi_0}
++ \sum_{j=1}^d\Big[\frac{(x_j - \mu_{0j})^2}{2\sigma_{0j}^2} - \frac{(x_j - \mu_{1j})^2}{2\sigma_{1j}^2} + \ln\frac{\sigma_{0j}}{\sigma_{1j}}\Big],
+$$
+a quadratic function of $x$ without cross terms $x_jx_k$: the boundary is a
+conic with axes parallel to the coordinates. If $\sigma_{0j} = \sigma_{1j} =
+\sigma_j$ for every $j$, it is linear, $P(1 \mid x) = \sigma(w^\top x + b)$
+with $w_j = (\mu_{1j} - \mu_{0j})/\sigma_j^2$ and $b = \ln\frac{\pi_1}{\pi_0} +
+\sum_j\frac{\mu_{0j}^2 - \mu_{1j}^2}{2\sigma_j^2}$ — the form of logistic
+regression.
+:::
+
+*In one line:* Gaussian naive Bayes and logistic regression can draw the same
+straight boundaries; they differ in how they choose them — one by fitting
+each class's distribution, the other by fitting the boundary directly.
+
+::: {.deep kind="proof"}
+## Proof of @prp-nb-gaussian-boundary
+By @eq-nb-posterior the denominators cancel in the ratio, leaving
+$\ln\pi_1 - \ln\pi_0 + \sum_j[\ln\varphi(x_j; \mu_{1j}, \sigma_{1j}^2) -
+\ln\varphi(x_j; \mu_{0j}, \sigma_{0j}^2)]$ with $\ln\varphi(x; \mu, \sigma^2)
+= -\ln\sigma - \frac12\ln2\pi - \frac{(x - \mu)^2}{2\sigma^2}$; the
+$\frac12\ln2\pi$ cancel. Each summand depends on one coordinate only, so no
+cross products appear. With equal variances the $x_j^2$ terms cancel:
+$\frac{(x_j - \mu_{0j})^2 - (x_j - \mu_{1j})^2}{2\sigma_j^2} =
+\frac{2x_j(\mu_{1j} - \mu_{0j}) + \mu_{0j}^2 - \mu_{1j}^2}{2\sigma_j^2}$, and
+the log-ratio $t = w^\top x + b$ gives $P(1 \mid x) = e^t/(1 + e^t) =
+\sigma(t)$ (@prp-sigmoid). $\blacksquare$
+:::
+
+From scratch, on the wine data, checked against scikit-learn:
+
+```{python}
+from sklearn.datasets import load_wine
+from sklearn.naive_bayes import GaussianNB, MultinomialNB, ComplementNB
+from sklearn.model_selection import train_test_split, cross_val_score
+
+Xw, yw = load_wine(return_X_y=True)
+Xtr, Xte, ytr, yte = train_test_split(Xw, yw, test_size=0.3, stratify=yw, random_state=0)
+
+def gaussian_nb_fit(X, y, var_smoothing=1e-9):
+    classes = np.unique(y)
+    eps = var_smoothing * X.var(axis=0).max()
+    mu = np.array([X[y == c].mean(0) for c in classes])
+    var = np.array([X[y == c].var(0) for c in classes]) + eps           # MLE variance (1/n_c) + epsilon
+    log_prior = np.log([np.mean(y == c) for c in classes])
+    return classes, mu, var, log_prior
+
+def gaussian_nb_joint(params, X):
+    classes, mu, var, log_prior = params
+    return log_prior + np.stack([-0.5 * np.sum(np.log(2 * np.pi * v) + (X - m) ** 2 / v, axis=1)
+                                 for m, v in zip(mu, var)], axis=1)
+
+params = gaussian_nb_fit(Xtr, ytr)
+gnb = GaussianNB().fit(Xtr, ytr)
+print("max |joint log-likelihood difference| vs scikit-learn:",
+      f"{np.abs(gaussian_nb_joint(params, Xte) - gnb.predict_joint_log_proba(Xte)).max():.1e}")
+print(f"test accuracy: {gnb.score(Xte, yte):.3f}")
+```
+
+Gaussian naive Bayes needs no scaling — each feature is modelled in its own
+units — and is fitted in one pass over the data, which also makes it a natural
+online learner (`partial_fit`, @sec-opt-sgd).
+
+### Bernoulli, multinomial and complement naive Bayes
+
+For **binary** features, each factor is a coin with probability
+$\theta_{cj}$, estimated with smoothing as $(N_{cj} + \alpha)/(n_c + 2\alpha)$
+where $N_{cj}$ counts the class-$c$ examples with $x_j = 1$. Absent features
+contribute $\ln(1 - \theta_{cj})$: the absence of a word is evidence too.
+`BernoulliNB` binarises its input at `binarize=0.0` by default.
+
+For **counts** — how many times each word of a vocabulary of $d$ words appears
+in a document — the **multinomial** model sees a document of length
+$\ell = \sum_jx_j$ as $\ell$ independent draws of words from a class-specific
+distribution $\theta_c = (\theta_{c1}, \dots, \theta_{cd})$:
+$$
+p(x \mid c) = \frac{\ell!}{\prod_jx_j!}\prod_j\theta_{cj}^{x_j},
+\qquad
+\hat\theta_{cj} = \frac{N_{cj} + \alpha}{\sum_kN_{ck} + \alpha d},
+$$ {#eq-nb-multinomial}
+where now $N_{cj}$ is the **total count** of word $j$ in the class-$c$
+documents; the multinomial coefficient does not depend on $c$ and drops out
+of @eq-nb-rule. The estimate is @thm-nb-smoothing applied to the pooled words
+of the class. McCallum and Nigam showed that the multinomial model usually
+beats the Bernoulli one on text, except with very small vocabularies
+[@mccallum1998].
+
+**Complement** naive Bayes, proposed by Rennie, Shih, Teevan and Karger
+[@rennie2003], estimates the word distribution of the *complement* of each
+class — all other classes pooled — and predicts the class whose complement
+fits the document **worst**:
+$$
+\hat\theta_{\bar cj} = \frac{\alpha + \sum_{c' \neq c}N_{c'j}}{\alpha d + \sum_{c' \neq c}\sum_kN_{c'k}},
+\qquad
+\hat y(x) = \arg\min_c\sum_jx_j\ln\hat\theta_{\bar cj} .
+$$ {#eq-nb-complement}
+With unbalanced classes, a small class has few words from which to estimate
+its own $\theta_c$, but its complement has many: the estimates are more
+stable, and the bias of the multinomial model towards large classes is
+reduced. (scikit-learn implements exactly @eq-nb-complement, with an optional
+extra normalisation of the weights, `norm=True`.)
+
+The demonstration uses synthetic documents generated **exactly** by the
+multinomial model: three topics that share most of their vocabulary of 40
+words (each topic's distribution is a perturbation of a common one), documents
+of about 20 words; one topic is rare.
+
+```{python}
+r = np.random.default_rng(2)
+V, topics = 40, 3
+common_words = r.dirichlet(0.5 * np.ones(V))
+theta = np.array([r.dirichlet(60 * common_words + 0.05) for _ in range(topics)])   # similar topics
+def documents(n, weights):
+    y = r.choice(topics, size=n, p=weights)
+    X = np.array([r.multinomial(r.poisson(20) + 1, theta[c]) for c in y])
+    return X, y
+weights = [0.6, 0.35, 0.05]                                            # topic 2 is rare
+Xd, yd = documents(400, weights); Xd_te, yd_te = documents(5000, weights)
+
+def multinomial_nb(X, y, alpha=1.0):
+    classes = np.unique(y)
+    N = np.array([X[y == c].sum(0) for c in classes])                  # word totals per class
+    log_theta = np.log((N + alpha) / (N.sum(1, keepdims=True) + alpha * X.shape[1]))
+    log_prior = np.log([np.mean(y == c) for c in classes])
+    return lambda Z: classes[np.argmax(Z @ log_theta.T + log_prior, axis=1)]
+
+def complement_nb(X, y, alpha=1.0):
+    classes = np.unique(y)
+    N = np.array([X[y == c].sum(0) for c in classes])
+    comp = N.sum(0) + alpha - N                                        # counts of all other classes, smoothed
+    log_comp = np.log(comp / comp.sum(1, keepdims=True))
+    return lambda Z: classes[np.argmin(Z @ log_comp.T, axis=1)]        # @eq-nb-complement
+
+from sklearn.metrics import recall_score
+for name, mine, sk in (("multinomial", multinomial_nb(Xd, yd), MultinomialNB().fit(Xd, yd)),
+                       ("complement", complement_nb(Xd, yd), ComplementNB().fit(Xd, yd))):
+    p = mine(Xd_te)
+    print(f"{name:11s}: same predictions as scikit-learn: {np.array_equal(p, sk.predict(Xd_te))}; "
+          f"test accuracy {np.mean(p == yd_te):.3f}; recall per topic {recall_score(yd_te, p, average=None).round(3)}")
+```
+
+Our implementations reproduce scikit-learn's predictions exactly. Here the
+complement model does **not** help the rare topic — it hurts it. That is what
+theory predicts for these data: they were generated by the multinomial model
+itself, so the multinomial classifier with good estimates is close to the Bayes
+classifier, and any modification can only lose. Rennie and colleagues'
+gains are on real text, whose counts violate the multinomial model (words come
+in bursts, documents differ in length and style) and where many unbalanced
+classes make the per-class estimates unstable [@rennie2003]. The lesson
+is general: a fix for a model's systematic errors helps only when those errors
+are present — compare on your data.
+
+### Categorical naive Bayes
+
+For features with a few unordered values (colour, region, material), each
+factor is a probability table, estimated with @eq-nb-smoothing — the model of
+@exm-nb-spam generalised to more than two values, and the class you wrote in
+@exr-mla3-classifier-medium. `CategoricalNB` expects integer codes, which
+`OrdinalEncoder` produces (@sec-encoding); unlike one-hot encoding followed by
+`BernoulliNB`, it keeps the values of a feature mutually exclusive.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla3-variants-easy}
+## Easy — a multinomial estimate by hand
+Two classes; in the training documents of class A the words "fruit",
+"ripe", "invoice" appear 6, 3, 1 times in total; in class B 1, 1, 8 times.
+With $\alpha = 1$, compute $\hat\theta$ for both classes and classify the
+document "fruit fruit invoice" assuming equal priors.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Class A has 10 words in total: the denominator is $10 + 3\alpha = 13$. The
+document's score is $2\ln\hat\theta_{\text{fruit}} + \ln\hat\theta_{\text{invoice}}$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+A: $(7, 4, 2)/13$; B: $(2, 2, 9)/13$. Scores: A $= 2\ln\frac{7}{13} +
+\ln\frac{2}{13} \approx -3.11$; B $= 2\ln\frac{2}{13} + \ln\frac{9}{13}
+\approx -4.11$. Class A, with posterior $e^{-3.11}/(e^{-3.11} + e^{-4.11})
+\approx 0.73$.
+```{python}
+tA, tB = np.array([7, 4, 2]) / 13, np.array([2, 2, 9]) / 13
+doc = np.array([2, 0, 1])
+sA, sB = doc @ np.log(tA), doc @ np.log(tB)
+print(round(sA, 3), round(sB, 3), "P(A | doc) =", round(1 / (1 + np.exp(sB - sA)), 3))
+print(MultinomialNB(alpha=1.0).fit(np.array([[6, 3, 1], [1, 1, 8]]), ["A", "B"]).predict_proba([doc]).round(3))
+```
+(Feeding scikit-learn one "document" per class with the totals as counts
+reproduces the estimates, since only the totals matter.) Note how the
+repeated word counts twice: the multinomial model uses frequencies, the
+Bernoulli model only presence.
+:::
+
+::: {#exr-mla3-variants-medium}
+## Medium — `var_smoothing` and a constant feature
+Add to the wine training data a feature that is constant within one class
+(0 for every training wine of class 0, random otherwise — think of a reading
+that happened to be zero for all the class-0 wines in the sample). What does
+`GaussianNB` with `var_smoothing=1e-9` predict for a test wine of class 0
+whose new feature is $0.3$? And with `var_smoothing=1e-2`? Explain with the
+formula of the Gaussian density.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+With variance $\epsilon$ tiny, the density of class 0 is enormous at the
+constant value ($1/\sqrt{2\pi\epsilon}$) and essentially zero anywhere else:
+compute $(0.3)^2/(2\epsilon)$. Look at `predict_proba`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+rr = np.random.default_rng(3)
+extra = np.where(ytr == 0, 0.0, rr.normal(0, 1, len(ytr)))
+Xtr_x = np.column_stack([Xtr, extra])
+x_test = np.append(Xte[yte == 0][0], 0.3)[None, :]            # a class-0 wine whose new feature is 0.3
+for vs in (1e-9, 1e-2):
+    m = GaussianNB(var_smoothing=vs).fit(Xtr_x, ytr)
+    print(f"var_smoothing = {vs:g}: epsilon = {m.epsilon_:.2e}, P(class | x) = {m.predict_proba(x_test).round(4)[0]}")
+```
+With a tiny $\epsilon$ (here $10^{-9}$ times the largest variance, that of
+proline, about $10^{5}$) the class-0 variance of the new feature is about
+$10^{-4}$: the value $0.3$ is some thirty standard deviations away, its
+log-density is about $-0.09/(2\cdot10^{-4}) \approx -450$, and this single
+feature **vetoes** class 0 against the thirteen real measurements, which all
+point to it. A larger `var_smoothing` widens the spike (here so much that the
+new feature becomes irrelevant) and the real measurements regain their say. The general lesson: a feature
+that is (nearly) constant within a class in the training sample — a
+measurement that happens to be rounded, or a code — gives Gaussian naive
+Bayes extreme, brittle evidence. Check per-class variances before trusting it.
+:::
+
+::: {#exr-mla3-variants-hard}
+## Hard — which variant fits the data?
+On the handwritten digits (64 pixel intensities from 0 to 16 per image,
+@exr-mla1-schedules-hard), compare by stratified 5-fold cross-validation:
+`GaussianNB` on the raw intensities, `BernoulliNB` on pixels binarised at a
+threshold you choose by an inner cross-validation, `MultinomialNB` on the
+intensities treated as counts, and `CategoricalNB` on intensities binned into
+a few levels. Report mean accuracy ± standard error and the most frequent
+confusion of the best model. Which modelling assumption explains the ranking?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`BernoulliNB(binarize=t)` binarises internally: tune `binarize` with
+`GridSearchCV` inside the outer loop. For `CategoricalNB`, a
+`KBinsDiscretizer(encode="ordinal", strategy="uniform")` in a pipeline
+produces codes; pass `min_categories` equal to the number of bins.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_digits
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import KBinsDiscretizer
+from sklearn.model_selection import cross_val_predict
+from sklearn.metrics import confusion_matrix
+
+Xg, yg = load_digits(return_X_y=True)
+cv5 = StratifiedKFold(5, shuffle=True, random_state=0)
+candidates = {
+    "Gaussian": GaussianNB(),
+    "Bernoulli (threshold by CV)": GridSearchCV(BernoulliNB(), {"binarize": [1, 3, 5, 7, 9, 11]}, cv=3),
+    "multinomial": MultinomialNB(),
+    "categorical (4 bins)": make_pipeline(KBinsDiscretizer(n_bins=4, encode="ordinal", strategy="uniform"),
+                                          CategoricalNB(min_categories=4)),
+}
+import warnings
+warnings.filterwarnings("ignore", message="Feature .* is constant")      # blank border pixels
+scores = {}
+for name, model in candidates.items():
+    s = cross_val_score(model, Xg, yg, cv=cv5)
+    scores[name] = s.mean()
+    print(f"{name:28s} accuracy {s.mean():.3f} ± {s.std(ddof=1) / np.sqrt(5):.3f}")
+best = max(scores, key=scores.get)
+cm = confusion_matrix(yg, cross_val_predict(candidates[best], Xg, yg, cv=cv5))
+np.fill_diagonal(cm, 0); i, j = np.unravel_index(cm.argmax(), cm.shape)
+print(f"best: {best}; most frequent confusion: true {i} predicted as {j} ({cm[i, j]} times)")
+```
+The Gaussian variant is clearly the worst: pixel intensities are bounded,
+piled up at 0 and 16, and far from Gaussian within a class — and many border
+pixels are constant within a class, the brittle situation of
+@exr-mla3-variants-medium. The count-based and binned models describe these
+bounded, discrete values much better. The ranking reflects how well each
+variant's factor matches the distribution of the features, not the
+"sophistication" of the model. For the fruit measurements of the project,
+continuous and with class-specific ranges, `GaussianNB` is the natural
+variant — and checking the per-class distributions first
+(@exr-mla2-parametric-hard) tells you whether its assumption is plausible.
+Mistake to avoid: tuning the binarisation threshold on all the data before
+cross-validating. (The warnings that `KBinsDiscretizer` would print for the
+always-blank border pixels are silenced in the code.)
+:::
+
+## When the naive assumption fails {#sec-nb-assumption}
+
+Conditional independence is rarely true: the length and the weight of a fruit
+are correlated within every species. Two consequences follow, one bad and one
+surprisingly good.
+
+**Probabilities become over-confident.** If two features carry the same
+information, naive Bayes multiplies their evidence as if it were independent.
+
+::: {#prp-nb-duplicate}
+## Duplicated evidence
+If a feature $x_j$ is included $r$ times, the naive Bayes log-posterior ratio
+between two classes changes by $(r - 1)$ times that feature's contribution
+$\ln\frac{p_j(x_j \mid 1)}{p_j(x_j \mid 0)}$; in particular a duplicated
+feature (with the other features absent) doubles the log-odds and pushes the
+posterior towards 0 or 1.
+:::
+
+*In one line:* redundant features are counted as many times as they appear,
+so naive Bayes is confident in proportion to the redundancy of its inputs, not
+to the strength of the evidence.
+
+::: {.deep kind="proof"}
+## Proof of @prp-nb-duplicate
+By @eq-nb-rule the log-ratio is $\ln\frac{\pi_1}{\pi_0} + \sum_k\ln\frac{p_k(x_k
+\mid 1)}{p_k(x_k \mid 0)}$, a sum with one term per feature; $r$ copies of
+feature $j$ contribute $r$ identical terms instead of one. With only that
+feature and equal priors, the ratio $\ln\frac{p_j(x_j \mid 1)}{p_j(x_j \mid
+0)} = t$ becomes $rt$, and $\sigma(rt)$ is farther from $\frac12$ than
+$\sigma(t)$ for $r > 1$, $t \neq 0$. $\blacksquare$
+:::
+
+**Decisions can still be right.** The classifier only needs the *largest*
+posterior to belong to the right class; the probabilities can be badly wrong
+while their ranking is correct. Domingos and Pazzani showed that naive Bayes
+can be optimal under 0–1 loss even when the independence assumption is
+violated, and characterised when [@domingos1997]. Ng and Jordan compared
+naive Bayes with logistic regression, which fits the same linear family
+(@prp-nb-gaussian-boundary) discriminatively: naive Bayes typically has the
+higher error when data are plentiful, but approaches its own best error with
+far fewer examples — a number growing only logarithmically with the number of
+features, against linearly for logistic regression (a result we state without
+proof, [@ng2002]). The experiment shows both effects on the breast-cancer
+data, where many features are strongly correlated (radius, perimeter and area
+of the same nuclei).
+
+```{python}
+#| label: fig-nb-calibration
+#| fig-cap: "Left: reliability diagram on the breast-cancer data (5-fold cross-validated probabilities): for each bin of predicted probability, the observed fraction of malignant cases. Gaussian naive Bayes is over-confident — its points sit far from the diagonal at intermediate probabilities and most of its predictions are at 0 or 1. Right: test accuracy against training size (average over 50 splits): naive Bayes learns faster, logistic regression ends higher."
+from sklearn.datasets import load_breast_cancer
+from sklearn.calibration import calibration_curve
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+
+Xb, yb = load_breast_cancer(return_X_y=True)
+models = {"Gaussian naive Bayes": GaussianNB(),
+          "logistic regression": make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000))}
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6))
+for (name, mdl), c in zip(models.items(), mlalgbook.COLORS):
+    proba = cross_val_predict(mdl, Xb, yb, cv=StratifiedKFold(5, shuffle=True, random_state=0), method="predict_proba")[:, 1]
+    frac, mean_pred = calibration_curve(yb, proba, n_bins=10, strategy="quantile")
+    axes[0].plot(mean_pred, frac, marker="o", ms=4, color=c, label=name)
+    extreme = np.mean((proba < 0.01) | (proba > 0.99))
+    print(f"{name:21s}: log loss {log_loss(yb, proba):.3f}; share of predictions below 0.01 or above 0.99: {extreme:.2f}")
+axes[0].plot([0, 1], [0, 1], color=mlalgbook.MUTED, ls="--", lw=1)
+axes[0].set_xlabel("mean predicted probability"); axes[0].set_ylabel("observed fraction malignant"); axes[0].legend()
+sizes = [10, 20, 40, 80, 160, 320]
+r = np.random.default_rng(4)
+for (name, mdl), c in zip(models.items(), mlalgbook.COLORS):
+    acc = []
+    for n_tr in sizes:
+        a = []
+        for _ in range(50):
+            idx_tr, idx_te = train_test_split(np.arange(len(yb)), train_size=n_tr, stratify=yb, random_state=int(r.integers(1e9)))
+            a.append(mdl.fit(Xb[idx_tr], yb[idx_tr]).score(Xb[idx_te], yb[idx_te]))
+        acc.append(np.mean(a))
+    axes[1].plot(sizes, acc, marker="o", ms=4, color=c, label=name)
+    print(f"{name:21s}: accuracy " + ", ".join(f"n={s}: {v:.3f}" for s, v in zip(sizes, acc)))
+axes[1].set_xscale("log"); axes[1].set_xlabel("training examples"); axes[1].set_ylabel("test accuracy")
+fig.tight_layout(); plt.show()
+```
+
+Both effects are visible. Naive Bayes pushes most of its probabilities to the
+extremes and its log loss is several times worse, although its accuracy is
+respectable; with very little data it is as good as or better than logistic
+regression, and with more data the discriminative model pulls ahead. If the
+probabilities matter — for a cost-based threshold, or to tell an operator how
+sure the model is — naive Bayes outputs should be **recalibrated** (e.g. with
+`CalibratedClassifierCV`, which fits a monotone map from scores to
+probabilities on held-out data [@zadrozny2002]) or not used as probabilities
+at all.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla3-assumption-easy}
+## Easy — counting evidence twice
+A feature gives likelihoods $p(x \mid 1) = 0.6$ and $p(x \mid 0) = 0.3$ for
+the observed value; priors are equal. Compute the posterior of class 1 using
+the feature once, twice and five times.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The odds are the likelihood ratio $2$ raised to the number of copies.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Odds $2, 4, 32$; posteriors $2/3 \approx 0.667$, $4/5 = 0.8$, $32/33 \approx
+0.970$.
+```{python}
+print([round(2**r / (1 + 2**r), 3) for r in (1, 2, 5)])
+```
+Nothing about the world changed between the three computations — only the
+number of times the same evidence was counted. The mistake is to read a
+naive Bayes probability of 0.97 as "97 % sure".
+:::
+
+::: {#exr-mla3-assumption-medium}
+## Medium — recalibrating naive Bayes
+On the breast-cancer data, wrap `GaussianNB` in `CalibratedClassifierCV` with
+`method="isotonic"` and with `method="sigmoid"`, and compare their
+cross-validated log loss and accuracy with the plain model. Does calibration
+change the decisions?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Compute cross-validated probabilities with `cross_val_predict(...,
+method="predict_proba")` for each of the three models, with the same outer
+folds; `CalibratedClassifierCV` does its own inner split.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.calibration import CalibratedClassifierCV
+outer5 = StratifiedKFold(5, shuffle=True, random_state=1)
+for name, mdl in (("plain", GaussianNB()), ("sigmoid", CalibratedClassifierCV(GaussianNB(), method="sigmoid", cv=5)),
+                  ("isotonic", CalibratedClassifierCV(GaussianNB(), method="isotonic", cv=5))):
+    pr = cross_val_predict(mdl, Xb, yb, cv=outer5, method="predict_proba")[:, 1]
+    print(f"{name:8s}: log loss {log_loss(yb, pr):.3f}, accuracy {np.mean((pr > 0.5) == yb):.3f}")
+```
+Calibration divides the log loss by a large factor while leaving the accuracy
+almost unchanged: it mostly re-maps the scores monotonically, so the ranking —
+and therefore most decisions at threshold 0.5 — stays the same (the inner
+cross-validation of `CalibratedClassifierCV` averages several models, so a few
+borderline decisions may move). The mistake to avoid is calibrating on the
+same data used to fit the model, which teaches the map the model's own
+over-fitting.
+:::
+
+::: {#exr-mla3-assumption-hard}
+## Hard — removing redundancy before naive Bayes
+On the breast-cancer data, many features are near-duplicates. Build a
+pipeline that drops one feature of every pair with absolute correlation above
+a threshold (computed on the training folds only), followed by `GaussianNB`,
+and choose the threshold by cross-validated log loss. Compare log loss and
+accuracy with plain `GaussianNB` and with logistic regression, all with the
+same outer folds. What does removing redundancy buy?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Write a small transformer (`fit` computes the correlation matrix and the list
+of columns to keep; `transform` selects them). A greedy rule suffices: go
+through the columns in order and keep a column if its absolute correlation
+with every column already kept is below the threshold. Tune the threshold
+with `GridSearchCV(..., scoring="neg_log_loss")` inside the outer loop.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.base import BaseEstimator, TransformerMixin
+
+class DropCorrelated(TransformerMixin, BaseEstimator):
+    def __init__(self, threshold=0.9):
+        self.threshold = threshold
+    def fit(self, X, y=None):
+        C = np.abs(np.corrcoef(X, rowvar=False))
+        keep = []
+        for j in range(X.shape[1]):
+            if all(C[j, k] < self.threshold for k in keep):
+                keep.append(j)
+        self.keep_ = np.array(keep)
+        return self
+    def transform(self, X):
+        return X[:, self.keep_]
+
+tuned = GridSearchCV(make_pipeline(DropCorrelated(), GaussianNB()),
+                     {"dropcorrelated__threshold": [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.01]},
+                     scoring="neg_log_loss", cv=StratifiedKFold(5, shuffle=True, random_state=2))
+for name, mdl in (("GaussianNB", GaussianNB()), ("drop correlated + GaussianNB", tuned),
+                  ("logistic regression", models["logistic regression"])):
+    pr = cross_val_predict(mdl, Xb, yb, cv=outer5, method="predict_proba")[:, 1]
+    print(f"{name:29s}: log loss {log_loss(yb, pr):.3f}, accuracy {np.mean((pr > 0.5) == yb):.3f}")
+kept = tuned.fit(Xb, yb).best_estimator_[0].keep_
+print(f"threshold chosen on all data: {tuned.best_params_['dropcorrelated__threshold']}, features kept: {len(kept)} of {Xb.shape[1]}")
+```
+Removing near-duplicates makes the naive assumption less wrong, and the log
+loss improves markedly; the accuracy changes less. Logistic regression,
+which does not assume independence, still has the best probabilities: a
+discriminative model handles correlated inputs by itself. For the project,
+the same diagnosis applies on a smaller scale — five measurements, some of
+them related through the size of the fruit — and is worth checking with a
+correlation matrix per class before using naive Bayes. Mistake to avoid:
+choosing the features to drop on all the data before cross-validating (a form
+of leakage, @sec-leakage).
+:::
+
+::: {.project-link}
+**In the project.** Naive Bayes is not the model the project asks for, but it
+is the ideal **baseline** for it: Gaussian naive Bayes fits five continuous
+measurements per fruit in one pass, needs no scaling and no tuning, and its
+per-class means and variances are a compact description of each fruit type
+that a non-programmer can read. If $k$-NN does not clearly beat it on the same
+folds, the extra complexity is not earning its keep. Two cautions from this
+chapter: measurements related to size (weight, diameter, length) are
+correlated within each class, so naive Bayes probabilities will be
+over-confident (@prp-nb-duplicate); and a feature with a suspiciously small
+spread in one class gives brittle evidence (@exr-mla3-variants-medium).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **The base-rate fallacy**: reporting $P(\text{evidence} \mid
+  \text{class})$ instead of $P(\text{class} \mid \text{evidence})$.
+- **Zero counts**: without smoothing, one unseen value vetoes a class.
+- **Multiplying probabilities** instead of adding logarithms: underflow turns
+  every score into zero.
+- **The wrong variant** for the data type: Gaussian on counts or bounded
+  intensities, multinomial on negative values (it refuses them), Bernoulli on
+  counts without thinking about the threshold.
+- **Reading naive Bayes probabilities literally.** They are over-confident
+  when features are redundant; recalibrate if probabilities matter.
+- **Near-constant features within a class** make Gaussian naive Bayes
+  brittle; inspect `var_` (per-class variances) after fitting.
+:::
+
+## Summary
+
+- $P(C \mid E) \propto P(E \mid C)P(C)$: posterior ∝ likelihood × prior.
+  Natural frequencies make it intuitive.
+- Naive Bayes predicts $\arg\max_c[\ln\pi_c + \sum_j\ln p_j(x_j \mid c)]$,
+  assuming features independent given the class; this reduces the parameters
+  from exponential to linear in $d$.
+- Estimates are class frequencies (MLE); additive smoothing $(N + \alpha)/(n +
+  \alpha m)$ is the posterior mean under a Dirichlet prior.
+- Variants: Gaussian (continuous), Bernoulli (binary), multinomial and
+  complement (counts), categorical (codes). Gaussian NB draws axis-aligned
+  quadratic boundaries, linear with shared variances.
+- Redundant features make the probabilities over-confident; decisions can
+  still be good, and naive Bayes learns fast from little data.
+
+## Exercises
+
+::: {#exr-mla3-online}
+**Naive Bayes online.** Show that Gaussian naive Bayes can be updated with a
+new batch of data without revisiting the old one, by keeping per class the
+count, the sum and the sum of squares of each feature. Check your update
+against `GaussianNB.partial_fit` on the wine data split into three batches.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Mean and MLE variance are functions of $(n_c, \sum x, \sum x^2)$: $\hat\mu =
+S_1/n_c$, $\hat\sigma^2 = S_2/n_c - \hat\mu^2$, and the three statistics are
+additive over batches. (scikit-learn uses a numerically safer pairwise update
+of means and variances [@chan1983], equivalent in exact arithmetic.)
+```{python}
+stats_ = {c: np.zeros((3, Xw.shape[1])) for c in np.unique(yw)}
+pf = GaussianNB()
+for batch in np.array_split(np.random.default_rng(0).permutation(len(yw)), 3):
+    for c in stats_:
+        Xb_c = Xw[batch][yw[batch] == c]
+        stats_[c] += [np.full(Xw.shape[1], len(Xb_c)), Xb_c.sum(0), (Xb_c ** 2).sum(0)]
+    pf.partial_fit(Xw[batch], yw[batch], classes=np.unique(yw))
+mu = np.array([s[1] / s[0] for s in stats_.values()]); var = np.array([s[2] / s[0] - (s[1] / s[0]) ** 2 for s in stats_.values()])
+print(f"max |mean difference| {np.abs(mu - pf.theta_).max():.1e}, max |variance difference| {np.abs(var + pf.epsilon_ - pf.var_).max():.1e}")
+```
+The tiny differences are rounding: the sum-of-squares formula loses digits
+when the variance is small relative to the mean, which is why scikit-learn
+uses the safer update.
+:::
+
+::: {#exr-mla3-lda}
+**From shared variances to logistic regression.** Fit Gaussian naive Bayes
+with a **pooled** variance per feature (the same for both classes) on two
+classes of the wine data, compute the $w$ and $b$ of
+@prp-nb-gaussian-boundary, and compare them with logistic regression fitted
+on the same data. Why are they different although the model family is the
+same?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+mask = yw < 2
+X2c, y2c = StandardScaler().fit_transform(Xw[mask]), yw[mask]
+mu0, mu1 = X2c[y2c == 0].mean(0), X2c[y2c == 1].mean(0)
+pooled = (np.sum((X2c[y2c == 0] - mu0) ** 2, 0) + np.sum((X2c[y2c == 1] - mu1) ** 2, 0)) / len(y2c)
+pi1 = y2c.mean()
+w = (mu1 - mu0) / pooled
+b = np.log(pi1 / (1 - pi1)) + np.sum((mu0 ** 2 - mu1 ** 2) / (2 * pooled))
+lr = LogisticRegression(C=1.0, max_iter=5000).fit(X2c, y2c)
+print("naive Bayes w (first 5):", w[:5].round(2), " b =", round(b, 2))
+print("logistic    w (first 5):", lr.coef_[0, :5].round(2), " b =", round(lr.intercept_[0], 2))
+print(f"agreement of predictions: {np.mean((X2c @ w + b > 0) == lr.predict(X2c)):.3f}")
+```
+Same family, different estimators: naive Bayes sets each weight from that
+feature alone (difference of class means over variance), ignoring
+correlations; logistic regression chooses all weights jointly to fit the
+labels, so correlated features share the weight and the penalty shrinks it.
+The predictions mostly agree; the probabilities do not.
+:::
+
+## Further reading {.unnumbered}
+
+- @murphy2022, §9.3–9.4 — generative classifiers and naive Bayes, with the
+  Dirichlet–multinomial model; @bishop2006, §4.2 — the generative view and the
+  logistic link (@prp-nb-gaussian-boundary).
+- @manning2008, ch. 13 — naive Bayes for text: Bernoulli and multinomial
+  models, smoothing, feature selection (free online).
+- @mccallum1998 and @rennie2003 — the multinomial model for text, and the
+  complement and other fixes for its systematic errors.
+- @domingos1997 — why naive Bayes works under 0–1 loss despite dependence;
+  @ng2002 — generative versus discriminative learning curves.
+- @gigerenzer1995 — natural frequencies and Bayesian reasoning; @stigler1986,
+  ch. 3 — Laplace and inverse probability.
+- scikit-learn user guide, "Naive Bayes" — the exact estimators of every
+  variant [@pedregosa2011].

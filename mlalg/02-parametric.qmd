@@ -1,0 +1,1164 @@
+# Parametric and non-parametric models {#sec-ch-mla-parametric}
+
+> *"There are two cultures in the use of statistical modeling to reach
+> conclusions from data."* — Leo Breiman [@breiman2001]
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- define **parametric** and **non-parametric** models precisely, and place
+  every model of this part on that spectrum;
+- **prove** the maximum-likelihood estimates of a Gaussian, the $\sigma^2/n$
+  rate at which they converge when the model is right, and what they converge
+  to when it is wrong;
+- build **histogram** and **kernel density** estimators, **prove** their
+  bias–variance trade-off and the resulting rates $n^{-2/3}$ and $n^{-4/5}$,
+  and derive the normal-reference bandwidth;
+- **prove** that the rate of a non-parametric estimator degrades with the
+  dimension (the curse of dimensionality);
+- choose between the two families from the amount of data, the dimension,
+  what is known about the problem, and the cost of predictions.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What a parametric model is, what a non-parametric model is, and how to choose
+between them.
+:::
+
+## Intuition: a recipe or a photo album {#sec-npar-intuition}
+
+There are two ways to tell a friend what the bread in your town tastes like.
+You can give a **recipe**: a few quantities — flour, water, salt, time — that
+reproduce the bread. Or you can hand over a **photo album** of every loaf you
+have eaten, and let them compare a new loaf with the most similar pictures.
+
+A recipe is compact, generalises immediately, and needs few examples to write
+down — but only if bread really is "flour, water, salt and time". If the
+local bread depends on something the recipe has no line for, no amount of
+tasting will fix the recipe. The album assumes almost nothing and becomes more
+faithful with every page — but it is bulky, slow to consult, and needs many
+pages before it is useful.
+
+**Parametric** models are recipes: a fixed set of numbers, learned from data,
+describes the whole model. **Non-parametric** models are albums: they keep
+(much of) the data, and their complexity grows with it. This chapter makes the
+distinction precise and proves the trade-off between the two: parametric
+models converge fast to the wrong answer when their assumptions fail;
+non-parametric ones converge slowly, but to the right answer — slower and
+slower as the number of features grows.
+
+## Definitions {#sec-npar-definitions}
+
+A **statistical model** is a family of probability distributions
+$\mathcal{P}$ that we believe contains (or approximates) the distribution
+that generated the data; a predictive model is a family of functions
+$\mathcal{F}$ from inputs to outputs. Learning picks a member of the family
+from the data.
+
+::: {#def-npar-parametric}
+## Parametric and non-parametric models
+A model is **parametric** if its members are indexed by a parameter vector of
+fixed dimension, $\mathcal{F} = \{f_\theta : \theta \in \Theta \subseteq
+\mathbb{R}^p\}$, with $p$ not depending on the number $n$ of training
+examples. A model is **non-parametric** if it cannot be described in this way:
+the number of quantities needed to describe the fitted model grows with $n$
+(typically, it stores part or all of the training data).
+:::
+
+"Non-parametric" does not mean "without parameters": a $k$-nearest-neighbour
+classifier has a **hyper-parameter** $k$, and a decision tree stores split
+thresholds; what grows with the data is the description of the fitted
+function. Some models are in between (**semi-parametric**): a linear part
+plus a non-parametric part, as in the house-price study of
+@sec-ch-project-housing [@anglin1996].
+
+| Model (chapter) | Family | What the fitted model stores |
+|---|---|---|
+| linear and logistic regression (@sec-ch-ml-regression, @sec-ch-ml-classification) | parametric | $p + 1$ coefficients (per class) |
+| Gaussian naive Bayes (@sec-ch-mla-nb) | parametric | a mean and a variance per feature and class, plus class priors |
+| linear SVM (@sec-ch-mla-svm) | parametric | $p + 1$ coefficients |
+| neural network of fixed architecture (@sec-ch-mla-nn) | parametric (but very flexible) | the weights: fixed number |
+| kernel SVM (@sec-ch-mla-svm) | non-parametric | the support vectors, whose number grows with $n$ |
+| $k$-nearest neighbours (@sec-ch-mla-knn) | non-parametric | the whole training set |
+| decision tree, random forest (@sec-ch-mla-trees) | non-parametric | splits whose number grows with $n$ unless capped |
+| histogram, kernel density estimate (this chapter) | non-parametric | counts per bin / the whole sample |
+
+: Where the models of this part stand {#tbl-npar-models}
+
+The table already suggests the trade-offs. Parametric models are cheap to
+store and to evaluate, and their few numbers can often be interpreted.
+Non-parametric models adapt to whatever shape the data have, at the price of
+memory, prediction time and — as we will prove — data.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla2-definitions-easy}
+## Easy — which family?
+Classify as parametric or non-parametric, and say what grows with $n$ in the
+non-parametric cases: (a) a polynomial regression of degree 3; (b) a
+polynomial regression whose degree is chosen as $\lfloor\sqrt n\rfloor$;
+(c) a classifier that predicts the class of the nearest training example;
+(d) k-means with $k = 5$ (@sec-ch-ml-clustering); (e) a decision tree
+limited to depth 3.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Ask: if I double the training set, does the number of stored numbers change?
+A cap on complexity that does not depend on $n$ makes a model parametric.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Parametric: 4 coefficients. (b) Non-parametric: the number of coefficients
+grows like $\sqrt n$ — a "sieve", a parametric family enlarged with $n$.
+(c) Non-parametric: it stores all $n$ examples. (d) Parametric: $5$ centroids
+of $p$ coordinates. (e) Parametric: at most $2^3 = 8$ leaves and 7 splits,
+whatever $n$ — an unconstrained tree, instead, is non-parametric. The typical
+mistake is to judge by the algorithm's name rather than by its capacity:
+the same tree learner is parametric or not depending on how it is
+constrained.
+:::
+
+::: {#exr-mla2-definitions-medium}
+## Medium — what does the fitted model store?
+On synthetic two-class data with overlapping classes, fit
+`LogisticRegression`, `KNeighborsClassifier` and an unconstrained
+`DecisionTreeClassifier` for $n = 100, 1\,000, 10\,000$, and count the numbers
+each fitted model stores (coefficients; training points × features; tree
+nodes × the numbers stored per node).
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`coef_` and `intercept_` for logistic regression; `n_samples_fit_` for
+k-NN; `tree_.node_count` for the tree. Counting about four numbers per node
+(feature, threshold, two children) is enough for the comparison.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+
+rng = np.random.default_rng(0)
+for n in (100, 1_000, 10_000):
+    X = rng.normal(size=(n, 2)); y = (X[:, 0] + X[:, 1] + rng.normal(scale=1.0, size=n) > 0).astype(int)
+    lr = LogisticRegression().fit(X, y)
+    knn = KNeighborsClassifier().fit(X, y)
+    tree = DecisionTreeClassifier(random_state=0).fit(X, y)
+    print(f"n = {n:6d}: logistic {lr.coef_.size + lr.intercept_.size:3d} numbers | "
+          f"k-NN {knn.n_samples_fit_ * 2:6d} (+ {n} labels) | tree {tree.tree_.node_count:5d} nodes (≈ {4 * tree.tree_.node_count} numbers)")
+```
+Logistic regression always stores 3 numbers. k-NN stores the whole training
+set. The unconstrained tree grows until its leaves are pure; with overlapping
+classes the number of leaves grows roughly in proportion to $n$, because
+every noisy point needs its own region. The common mistake is to think of the
+tree as a compact model: grown fully, it is close to a lookup table.
+:::
+
+::: {#exr-mla2-definitions-hard}
+## Hard — prediction cost
+Measure the time to predict 10 000 new points for the three models of the
+previous exercise trained on $n = 1\,000$ and on $n = 100\,000$ examples.
+Explain the growth (or not) of each with the size of what the model stores,
+and say what this implies for a model that must answer in real time at a
+warehouse door.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use `time.perf_counter` around `predict` and take the best of a few
+repetitions. For k-NN in low dimension scikit-learn builds a tree structure
+over the training points (@sec-ch-mla-knn), so the growth is milder than
+$O(n)$ per query.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import time
+X_new = rng.normal(size=(10_000, 2))
+def best_time(f, reps=3):
+    t = []
+    for _ in range(reps):
+        s = time.perf_counter(); f(); t.append(time.perf_counter() - s)
+    return min(t)
+for n in (1_000, 100_000):
+    X = rng.normal(size=(n, 2)); y = (X[:, 0] + X[:, 1] + rng.normal(size=n) > 0).astype(int)
+    models = {"logistic": LogisticRegression().fit(X, y), "k-NN (k=5)": KNeighborsClassifier().fit(X, y),
+              "full tree": DecisionTreeClassifier(random_state=0).fit(X, y)}
+    print(f"n = {n}: " + ", ".join(f"{k} {1000 * best_time(lambda m=m: m.predict(X_new)):.1f} ms" for k, m in models.items()))
+```
+Logistic regression costs one dot product per point, independent of $n$. The
+tree costs one root-to-leaf walk, proportional to its depth, which grows
+roughly like $\log n$. k-NN must search the stored points: its cost grows with
+$n$ even with a search tree. Exact times depend on the machine; the trend is
+what matters. For a real-time classifier with a large training history, this
+favours compact models — or limits on what a non-parametric model may keep.
+The usual mistake is to time `fit`, which for k-NN is almost free: its cost is
+paid at prediction time ("lazy" learning).
+:::
+
+## Parametric estimation: fast when right, biased when wrong {#sec-npar-parametric}
+
+The simplest parametric model is the Gaussian $\mathcal{N}(\mu, \sigma^2)$,
+with $\theta = (\mu, \sigma^2)$. Given observations $x_1, \dots, x_n$, the
+**maximum-likelihood estimate** (MLE) chooses the parameters under which the
+observed data are most probable.
+
+::: {#thm-npar-gauss-mle}
+## Maximum likelihood for a Gaussian
+For $x_1, \dots, x_n$ (not all equal), the log-likelihood $\ell(\mu,
+\sigma^2) = \sum_i\ln\varphi(x_i; \mu, \sigma^2)$ is maximised by
+$$
+\hat\mu = \bar x = \frac1n\sum_ix_i, \qquad \hat\sigma^2 = \frac1n\sum_i(x_i - \bar x)^2 .
+$$
+If the $x_i$ are independent draws from $\mathcal{N}(\mu, \sigma^2)$, then
+$\mathbb{E}\hat\mu = \mu$, $\mathbb{E}(\hat\mu - \mu)^2 = \sigma^2/n$, and
+$\mathbb{E}\hat\sigma^2 = \frac{n-1}{n}\sigma^2$.
+:::
+
+*In one line:* the best-fitting Gaussian has the sample mean and the sample
+variance (with $1/n$); its mean is exact on average and its squared error
+falls like $1/n$.
+
+::: {.deep kind="proof"}
+## Proof of @thm-npar-gauss-mle
+$\ell = -\frac n2\ln(2\pi\sigma^2) - \frac{1}{2\sigma^2}\sum_i(x_i - \mu)^2$.
+For fixed $\sigma^2$, $\ell$ is a concave quadratic in $\mu$ maximised where
+$\sum_i(x_i - \mu) = 0$, i.e. $\mu = \bar x$. Substituting and writing $S =
+\sum_i(x_i - \bar x)^2 > 0$, $g(s) = -\frac n2\ln s - \frac{S}{2s}$ (with $s =
+\sigma^2$) has $g'(s) = -\frac{n}{2s} + \frac{S}{2s^2}$, positive for $s <
+S/n$ and negative after: the maximum is at $s = S/n$. For the moments:
+$\mathbb{E}\bar x = \mu$ and, by independence, $\operatorname{Var}\bar x =
+\frac{1}{n^2}\cdot n\sigma^2$. Finally $\sum_i(x_i - \bar x)^2 = \sum_i(x_i -
+\mu)^2 - n(\bar x - \mu)^2$ (expand $x_i - \mu = (x_i - \bar x) + (\bar x -
+\mu)$; the cross term sums to zero), whose expectation is $n\sigma^2 -
+\sigma^2$. $\blacksquare$
+:::
+
+The $1/n$ rate is typical: under regularity conditions the MLE of any
+parametric model has an error of order $1/\sqrt n$ in each parameter, i.e. a
+squared error of order $1/n$ [@wasserman2004, ch. 9]. That is as fast as
+statistics allows. But it presumes that the true distribution belongs to the
+family. If it does not, what does the MLE estimate?
+
+::: {#prp-npar-misspecified}
+## A Gaussian fitted to non-Gaussian data
+Let $X$ have any distribution with mean $m$ and finite variance $v$, and
+density $p$. Among all Gaussians $q = \mathcal{N}(\mu, \sigma^2)$, the
+**Kullback–Leibler divergence** $\mathrm{KL}(p\,\Vert\,q) = \mathbb{E}_p[\ln
+p(X) - \ln q(X)]$ is minimised by $\mu = m$, $\sigma^2 = v$. The Gaussian MLE
+on independent draws from $p$ converges to these values as $n \to \infty$.
+:::
+
+*In one line:* with a wrong model, maximum likelihood still converges — but to
+the member of the family closest to the truth, not to the truth; more data
+cannot remove the gap.
+
+::: {.deep kind="proof"}
+## Proof of @prp-npar-misspecified
+$\mathrm{KL}(p\Vert q) = \mathbb{E}_p\ln p(X) + \frac12\ln(2\pi\sigma^2) +
+\frac{\mathbb{E}_p(X - \mu)^2}{2\sigma^2}$, and $\mathbb{E}_p(X - \mu)^2 = v +
+(m - \mu)^2$. The first term does not depend on $(\mu, \sigma^2)$; the last is
+minimised over $\mu$ at $\mu = m$, leaving $\frac12\ln(2\pi\sigma^2) +
+\frac{v}{2\sigma^2}$, minimised at $\sigma^2 = v$ (same derivative as in the
+proof of @thm-npar-gauss-mle). The MLE is $(\bar x, \frac1n\sum(x_i - \bar
+x)^2)$, which converges to $(m, v)$ by the law of large numbers. In general,
+maximising the average log-likelihood $\frac1n\sum\ln q_\theta(x_i) \to
+\mathbb{E}_p\ln q_\theta(X)$ is the same as minimising $\mathrm{KL}(p\Vert
+q_\theta)$, which is why misspecified MLEs converge to the KL-closest member
+[@white1982]. $\blacksquare$
+:::
+
+The experiment below makes both statements visible. We estimate a density
+from $n$ draws, either with a Gaussian (parametric) or with the kernel
+estimator of the next section (non-parametric), and measure the **integrated
+squared error** $\int(\hat f - f)^2$ against $n$, in two worlds: one in which
+the truth is Gaussian and one in which it is a mixture of two Gaussians.
+
+```{python}
+#| label: fig-npar-rates
+#| fig-cap: "Integrated squared error of a Gaussian fit (parametric) and of a kernel density estimate with the normal-reference bandwidth (non-parametric), averaged over 40 samples of each size. Left: the truth is Gaussian; both errors fall, the parametric one faster (fitted slopes printed below the figure; theory −1 and −4/5). Right: the truth is a two-component mixture; the Gaussian fit stalls at the squared distance between the truth and its best Gaussian approximation, while the kernel estimate keeps improving."
+from scipy import stats
+
+grid = np.linspace(-6, 6, 2001); dx = grid[1] - grid[0]
+worlds = {
+    "truth: Gaussian": (lambda r, n: r.normal(0, 1, n), stats.norm(0, 1).pdf(grid)),
+    "truth: mixture of two Gaussians": (lambda r, n: np.where(r.random(n) < 0.5, r.normal(-1.5, 0.6, n), r.normal(1.5, 0.6, n)),
+                                        0.5 * stats.norm(-1.5, 0.6).pdf(grid) + 0.5 * stats.norm(1.5, 0.6).pdf(grid)),
+}
+def kde(sample, x, h):
+    """Gaussian kernel density estimate at the points x (vectorised)."""
+    return stats.norm.pdf((x[:, None] - sample[None, :]) / h).sum(axis=1) / (len(sample) * h)
+def normal_reference_h(sample):
+    return (4 / (3 * len(sample))) ** 0.2 * sample.std()          # @eq-npar-silverman
+sizes = [25, 50, 100, 200, 400, 800, 1600, 3200]
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.4), sharey=True)
+rate_rows = []
+for ax, (title, (draw, truth)) in zip(axes, worlds.items()):
+    r = np.random.default_rng(1)
+    ise = {"Gaussian fit": [], "kernel estimate": []}
+    for n in sizes:
+        e_par, e_np = [], []
+        for _ in range(40):
+            s = draw(r, n)
+            e_par.append(np.sum((stats.norm(s.mean(), s.std()).pdf(grid) - truth) ** 2) * dx)
+            e_np.append(np.sum((kde(s, grid[::4], normal_reference_h(s)) - truth[::4]) ** 2) * dx * 4)
+        ise["Gaussian fit"].append(np.mean(e_par)); ise["kernel estimate"].append(np.mean(e_np))
+    for (name, e), c in zip(ise.items(), mlalgbook.COLORS):
+        ax.loglog(sizes, e, marker="o", ms=4, color=c, label=name)
+        slope = np.polyfit(np.log(sizes), np.log(e), 1)[0]
+        rate_rows.append((title, name, slope, e[-1]))
+    ax.set_title(title); ax.set_xlabel("sample size n")
+axes[0].set_ylabel("integrated squared error"); axes[0].legend()
+fig.tight_layout(); plt.show()
+for title, name, slope, last in rate_rows:
+    print(f"{title:32s} {name:15s}: fitted log-log slope {slope:6.2f}, error at n = 3200: {last:.2e}")
+```
+
+When the model is right, the parametric estimate wins at every sample size,
+with the steeper slope. When it is wrong, it reaches its floor almost
+immediately; the kernel estimate, which assumed nothing about the shape, is
+better at every size shown and keeps going — more slowly than the ideal
+$n^{-4/5}$, because the normal-reference bandwidth used here oversmooths a
+bimodal density (@prp-npar-silverman). Both
+behaviours are proved — the first in @thm-npar-gauss-mle and
+@prp-npar-misspecified, the second in the next section.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla2-parametric-easy}
+## Easy — a Gaussian by hand
+For the five measurements $2, 4, 4, 5, 10$, compute the maximum-likelihood
+Gaussian and the unbiased variance estimate. What would a single extra
+observation at $40$ do to each estimate?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Mean, then squared deviations; divide by $n$ for the MLE and by $n - 1$ for
+the unbiased version.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$\bar x = 25/5 = 5$; squared deviations $9, 1, 1, 0, 25$, sum $36$; MLE
+$\hat\sigma^2 = 36/5 = 7.2$, unbiased $36/4 = 9$. With an extra $40$: $\bar x
+= 65/6 \approx 10.83$, and the variance explodes.
+```{python}
+x5 = np.array([2, 4, 4, 5, 10.0]); x6 = np.append(x5, 40)
+print(x5.mean(), x5.var(), x5.var(ddof=1), "|", round(x6.mean(), 2), round(x6.var(), 2))
+```
+One extreme value moves both estimates a lot: maximum likelihood under a
+Gaussian model trusts every observation equally. That sensitivity is the
+price of the model's assumption of light tails — the reason for robust
+losses in @sec-loss-functions. A frequent slip is NumPy's default `ddof=0`
+(the MLE) when the unbiased version is wanted, or the reverse with pandas'
+`.var()`, whose default is `ddof=1`.
+:::
+
+::: {#exr-mla2-parametric-medium}
+## Medium — the $1/n$ rate by simulation
+Simulate 2 000 samples of each size $n = 5, 10, 20, 50, 100, 1000$ from
+$\mathcal{N}(3, 4)$ and estimate $\mathbb{E}(\hat\mu - \mu)^2$ and
+$\mathbb{E}\hat\sigma^2$. Compare with $\sigma^2/n$ and $\frac{n-1}{n}\sigma^2$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Draw a $2000 \times n$ matrix at once and use `mean(axis=1)` and
+`var(axis=1)`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+r = np.random.default_rng(2)
+for n in (5, 10, 20, 50, 100, 1000):
+    S = r.normal(3, 2, size=(2000, n))
+    print(f"n = {n:4d}: E(mu_hat - mu)^2 = {np.mean((S.mean(1) - 3) ** 2):.4f} (theory {4 / n:.4f}); "
+          f"E sigma2_hat = {S.var(1).mean():.3f} (theory {4 * (n - 1) / n:.3f})")
+```
+The simulated values match the theory within simulation noise. Note that
+$\mathcal{N}(3, 4)$ means variance 4, so the standard deviation passed to
+NumPy is 2 — a classic source of off-by-a-square errors.
+:::
+
+::: {#exr-mla2-parametric-hard}
+## Hard — are the classes Gaussian?
+Many classifiers of this part (Gaussian naive Bayes, @sec-ch-mla-nb) assume
+that each feature is Gaussian within each class. For the wine data
+(@sec-multiclass), measure for every class and feature how far the data are
+from the fitted Gaussian with the Kolmogorov–Smirnov statistic (the largest
+gap between the empirical and the fitted cumulative distributions). Which
+class–feature pairs are the least Gaussian? Plot the worst one against its
+fitted density.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`scipy.stats.kstest(x, stats.norm(x.mean(), x.std()).cdf)` returns the
+statistic. Collect the results in a DataFrame and sort it. With parameters
+estimated from the same data the usual p-values are not valid, so use the
+statistic as a descriptive measure.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-npar-ks-worst
+#| fig-cap: "The least Gaussian class–feature pair of the wine data: histogram of the class's values and the fitted Gaussian."
+import pandas as pd
+from sklearn.datasets import load_wine
+
+wine = load_wine(as_frame=True)
+Xw, yw = wine.data, wine.target
+rows = []
+for c in np.unique(yw):
+    for col in Xw.columns:
+        v = Xw.loc[yw == c, col].to_numpy()
+        rows.append((c, col, stats.kstest(v, stats.norm(v.mean(), v.std()).cdf).statistic))
+ks = pd.DataFrame(rows, columns=["class", "feature", "KS"]).sort_values("KS", ascending=False)
+print(ks.head(5).to_string(index=False))
+c, col = ks.iloc[0][["class", "feature"]]
+v = Xw.loc[yw == c, col].to_numpy()
+fig, ax = plt.subplots(figsize=(5.5, 3))
+ax.hist(v, bins=15, density=True, color=mlalgbook.tint(mlalgbook.COLORS[0], 0.3), edgecolor="#fcfcfb")
+xs = np.linspace(v.min() - v.std(), v.max() + v.std(), 300)
+ax.plot(xs, stats.norm(v.mean(), v.std()).pdf(xs), color=mlalgbook.COLORS[1])
+ax.set_xlabel(f"{col} (class {c})"); ax.set_ylabel("density"); plt.show()
+```
+The worst pairs are skewed or have a few extreme values — a long right tail
+is common for concentrations, which cannot be negative. Whether this matters
+depends on the classifier: for Gaussian naive Bayes it distorts the class
+likelihoods, especially in the tails where decisions between similar classes
+are made; a log or power transform can help (@sec-ch-mla-nb). The mistake to
+avoid is a single test over all classes pooled: a feature can look non-normal
+overall simply because it mixes classes with different means — exactly the
+signal a classifier wants.
+:::
+
+## Non-parametric density estimation {#sec-npar-kde}
+
+To see the price of making no assumptions, consider the simplest
+non-parametric problem: estimating a density $f$ on the real line from $n$
+independent draws.
+
+### Histograms
+
+Cut the line into bins of width $h$ and estimate the density in each bin by
+the fraction of points falling into it, divided by $h$:
+$$
+\hat f_h(x) = \frac{\#\{i : x_i \in B(x)\}}{nh},
+$$ {#eq-npar-histogram}
+where $B(x)$ is the bin containing $x$. The bin width plays the role that the
+degree played for polynomials: narrow bins follow every accident of the
+sample (high variance), wide bins blur the shape (high bias).
+
+::: {#thm-npar-histogram}
+## Bias and variance of the histogram
+Suppose $f$ is bounded by $f_{\max}$ and $L$-Lipschitz ($|f(x) - f(y)| \le
+L|x - y|$). Then for every $x$
+$$
+\big|\mathbb{E}\hat f_h(x) - f(x)\big| \le Lh, \qquad
+\operatorname{Var}\hat f_h(x) \le \frac{f_{\max}}{nh},
+\qquad\text{so}\qquad
+\mathbb{E}\big(\hat f_h(x) - f(x)\big)^2 \le L^2h^2 + \frac{f_{\max}}{nh}.
+$$
+Choosing $h \propto n^{-1/3}$ makes the mean squared error $O(n^{-2/3})$.
+:::
+
+*In one line:* bias grows with the bin width, variance with the inverse of
+the expected count per bin; balancing them gives bins that shrink like
+$n^{-1/3}$ and an error that falls like $n^{-2/3}$ — slower than the $1/n$ of
+a correct parametric model.
+
+::: {.deep kind="proof"}
+## Proof of @thm-npar-histogram
+Let $B = B(x)$ and $p = \int_Bf$, the probability of the bin. The count is
+binomial $(n, p)$, so $\mathbb{E}\hat f_h(x) = p/h$ and
+$\operatorname{Var}\hat f_h(x) = \frac{p(1-p)}{nh^2} \le \frac{p}{nh^2}$.
+Since $p \le hf_{\max}$, the variance is at most $f_{\max}/(nh)$. For the
+bias, $p/h = \frac1h\int_Bf(y)\,dy$ is the average of $f$ over the bin, and
+every $y \in B$ is within $h$ of $x$, so $|p/h - f(x)| \le \frac1h\int_B|f(y)
+- f(x)|\,dy \le Lh$. The mean squared error is bias$^2$ plus variance. The
+function $L^2h^2 + f_{\max}/(nh)$ is minimised where its derivative $2L^2h -
+f_{\max}/(nh^2)$ vanishes, $h^* = (f_{\max}/(2L^2n))^{1/3}$, and its value
+there is a constant times $n^{-2/3}$. $\blacksquare$
+
+With two derivatives instead of one, a finer analysis gives the integrated
+error $\frac{h^2}{12}\int f'^2 + \frac1{nh}$ and the optimal width
+$(6/(n\int f'^2))^{1/3}$ [@scott1979; @wasserman2006, §6.2].
+:::
+
+### Kernel density estimation
+
+The histogram has two defects: its estimate jumps at arbitrary bin edges, and
+a point near the edge of a bin is estimated from points on one side only. The
+**kernel density estimator** of Rosenblatt [@rosenblatt1956] and Parzen
+[@parzen1962] centres a small bump on every observation instead:
+$$
+\hat f_h(x) = \frac{1}{nh}\sum_{i=1}^nK\Big(\frac{x - x_i}{h}\Big),
+$$ {#eq-npar-kde}
+where the **kernel** $K$ is a symmetric probability density (Gaussian,
+Epanechnikov $\frac34(1 - u^2)$ on $[-1, 1]$, uniform…) and the
+**bandwidth** $h > 0$ sets the width of the bumps. Write $\mu_2 = \int
+u^2K(u)\,du$ and $R(g) = \int g^2$.
+
+::: {#thm-npar-kde}
+## Bias and variance of the kernel estimator
+If $f$ has a bounded, continuous second derivative and $h \to 0$, $nh \to
+\infty$, then
+$$
+\mathbb{E}\hat f_h(x) - f(x) = \frac{h^2}{2}\mu_2f''(x) + o(h^2), \qquad
+\operatorname{Var}\hat f_h(x) = \frac{f(x)R(K)}{nh} + o\Big(\frac{1}{nh}\Big).
+$$
+Integrating over $x$, the mean integrated squared error is approximately
+$$
+\mathrm{AMISE}(h) = \frac{h^4}{4}\mu_2^2R(f'') + \frac{R(K)}{nh},
+\qquad\text{minimised by}\qquad
+h^* = \Big(\frac{R(K)}{\mu_2^2R(f'')\,n}\Big)^{1/5},
+$$ {#eq-npar-amise}
+with minimum of order $n^{-4/5}$.
+:::
+
+*In one line:* smoothing with symmetric bumps cancels the first-order bias, so
+the bias is of order $h^2$ instead of $h$; balancing it against the variance
+gives bandwidths shrinking like $n^{-1/5}$ and an error falling like
+$n^{-4/5}$ — better than the histogram, still worse than a correct parametric
+model.
+
+::: {.deep kind="proof"}
+## Proof of @thm-npar-kde
+Expectation: $\mathbb{E}\hat f_h(x) = \frac1h\int K(\frac{x - y}{h})f(y)\,dy
+= \int K(u)f(x - hu)\,du$ (substituting $y = x - hu$). By Taylor's theorem,
+$f(x - hu) = f(x) - huf'(x) + \frac{h^2u^2}{2}f''(\xi_u)$ with $\xi_u$ between
+$x$ and $x - hu$. Since $\int K = 1$ and $\int uK = 0$ (symmetry), the bias is
+$\frac{h^2}{2}\int u^2K(u)f''(\xi_u)\,du$; as $h \to 0$, $f''(\xi_u) \to
+f''(x)$ and, $f''$ being bounded, dominated convergence gives
+$\frac{h^2}{2}\mu_2f''(x) + o(h^2)$. Variance: the summands are independent,
+so $\operatorname{Var}\hat f_h(x) = \frac1n\operatorname{Var}\big(\frac1h
+K(\frac{x - X}{h})\big) = \frac1n\Big[\frac1h\int K(u)^2f(x - hu)\,du -
+\big(\mathbb{E}\hat f_h(x)\big)^2\Big]$. The integral tends to $f(x)R(K)$ and
+the squared mean is bounded, so the variance is $\frac{f(x)R(K)}{nh} +
+O(\frac1n)$, and $O(1/n) = o(1/(nh))$ because $h \to 0$. Integrating bias$^2$
+plus variance over $x$ (with $\int f = 1$) gives the AMISE; its derivative
+$h^3\mu_2^2R(f'') - R(K)/(nh^2)$ vanishes at $h^*$, where both terms are of
+order $n^{-4/5}$ [@wand1995, ch. 2; @wasserman2006, §6.3]. $\blacksquare$
+:::
+
+The optimal bandwidth depends on the unknown $R(f'')$, the total curvature of
+the truth. A classical rule replaces $f$ by a Gaussian with the sample's
+standard deviation $\hat\sigma$.
+
+::: {#prp-npar-silverman}
+## The normal-reference bandwidth
+For the Gaussian kernel and $f = \mathcal{N}(\mu, \sigma^2)$, @eq-npar-amise
+gives
+$$
+h^* = \Big(\frac{4}{3n}\Big)^{1/5}\sigma \approx 1.06\,\sigma\,n^{-1/5}.
+$$ {#eq-npar-silverman}
+:::
+
+*In one line:* if the data were Gaussian, the best bumps would be about one
+standard deviation wide divided by the fifth root of $n$.
+
+::: {.deep kind="proof"}
+## Proof of @prp-npar-silverman
+For the standard Gaussian kernel, $\mu_2 = 1$ and $R(K) = \int\frac{1}{2\pi}
+e^{-u^2}du = \frac{1}{2\sqrt\pi}$. For $f = \mathcal N(0, \sigma^2)$ (the mean
+does not matter), $f''(x) = f(x)\big(\frac{x^2}{\sigma^4} -
+\frac{1}{\sigma^2}\big)$ and $f(x)^2 = \frac{1}{2\sigma\sqrt\pi}\,g(x)$ where
+$g$ is the density of $Y \sim \mathcal N(0, \sigma^2/2)$. Hence $R(f'') =
+\frac{1}{2\sigma\sqrt\pi}\mathbb{E}\big(\frac{Y^2}{\sigma^4} -
+\frac{1}{\sigma^2}\big)^2$, and with $\mathbb{E}Y^2 = \sigma^2/2$,
+$\mathbb{E}Y^4 = 3\sigma^4/4$ the expectation is $\frac{3}{4\sigma^4} -
+\frac{1}{\sigma^4} + \frac{1}{\sigma^4} = \frac{3}{4\sigma^4}$, so $R(f'') =
+\frac{3}{8\sqrt\pi\sigma^5}$. Then $h^{*5} = \frac{1/(2\sqrt\pi)}{3n/(8\sqrt\pi
+\sigma^5)} = \frac{4\sigma^5}{3n}$. $\blacksquare$
+
+Silverman recommends the more robust $0.9\min(\hat\sigma,
+\mathrm{IQR}/1.34)\,n^{-1/5}$, which oversmooths less when the data are
+bimodal or heavy-tailed [@silverman1986, §3.4.2]. Data-driven alternatives
+choose $h$ by cross-validation (@exr-mla2-kde-medium).
+:::
+
+The normal-reference rule is good when the truth is roughly Gaussian and
+**oversmooths** otherwise: for a bimodal truth the sample standard deviation
+is large (it includes the distance between the modes), and the rule may merge
+the two modes. Try it in the widget: the sample of 150 points comes from the
+two-component mixture of @fig-npar-rates.
+
+```{python}
+#| echo: false
+_r = np.random.default_rng(7)
+_s = np.where(_r.random(150) < 0.5, _r.normal(-1.5, 0.6, 150), _r.normal(1.5, 0.6, 150))
+_g = np.linspace(-4.5, 4.5, 181)
+_truth = 0.5 * stats.norm(-1.5, 0.6).pdf(_g) + 0.5 * stats.norm(1.5, 0.6).pdf(_g)
+ojs_define(kdeSample=_s.round(4).tolist(),
+           kdeTruth=[{"x": float(a), "y": float(b)} for a, b in zip(_g, _truth)],
+           kdeRef=float(normal_reference_h(_s)))
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof kdeLogH = Inputs.range([-2.3, 0.7], {step: 0.02, value: Math.log10(0.3), label: "log₁₀ bandwidth h"})
+```
+
+```{ojs}
+//| echo: false
+viewof kdeKernel = Inputs.radio(["Gaussian", "Epanechnikov", "uniform"], {value: "Gaussian", label: "kernel"})
+```
+
+```{ojs}
+//| echo: false
+kdeCurve = {
+  const h = Math.pow(10, kdeLogH), n = kdeSample.length;
+  const K = {Gaussian: u => Math.exp(-u * u / 2) / Math.sqrt(2 * Math.PI),
+             Epanechnikov: u => Math.abs(u) <= 1 ? 0.75 * (1 - u * u) : 0,
+             uniform: u => Math.abs(u) <= 1 ? 0.5 : 0}[kdeKernel];
+  const out = [];
+  for (let x = -4.5; x <= 4.5001; x += 0.03) {
+    let s = 0; for (const xi of kdeSample) s += K((x - xi) / h);
+    out.push({x, y: s / (n * h)});
+  }
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">bandwidth h = ${Math.pow(10, kdeLogH).toFixed(3)} — normal-reference rule: ${kdeRef.toFixed(3)}</p>`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-npar-kde-widget
+//| fig-cap: "Kernel density estimate of 150 draws (ticks) from a two-component mixture (grey: the true density). Small bandwidths produce a spiky estimate (variance), large ones merge the two modes (bias). The normal-reference bandwidth of @eq-npar-silverman (printed above the plot) oversmooths this bimodal density."
+Plot.plot({
+  height: 280, x: {domain: [-4.5, 4.5], label: "x"}, y: {domain: [0, 0.9], label: "density"},
+  marks: [
+    Plot.line(kdeTruth, {x: "x", y: "y", stroke: "#b9b8b2", strokeWidth: 3}),
+    Plot.line(kdeCurve, {x: "x", y: "y", stroke: "#2a78d6", strokeWidth: 2, clip: true}),
+    Plot.tickX(kdeSample, {x: d => d, y1: 0, y2: 0.04, stroke: "#52514e", strokeOpacity: 0.5})
+  ]
+})
+```
+:::
+
+### The curse of dimensionality
+
+In $d$ dimensions a histogram uses cubes of side $h$. The proof of
+@thm-npar-histogram goes through with two changes: a point of a cube is within
+$\sqrt d\,h$ of any other, and the probability of a cube is at most
+$h^df_{\max}$.
+
+::: {#thm-npar-curse}
+## The histogram rate in $d$ dimensions
+If $f$ on $\mathbb{R}^d$ is bounded by $f_{\max}$ and $L$-Lipschitz, the
+histogram with cubic bins of side $h$ satisfies
+$$
+\mathbb{E}\big(\hat f_h(x) - f(x)\big)^2 \le dL^2h^2 + \frac{f_{\max}}{nh^d},
+$$
+which is minimised by $h \propto n^{-1/(d+2)}$, giving an error of order
+$n^{-2/(d+2)}$.
+:::
+
+*In one line:* to keep the same accuracy, the sample must grow exponentially
+with the dimension: with $d = 10$ the error falls like $n^{-1/6}$, so halving
+it needs 64 times more data.
+
+::: {.deep kind="proof"}
+## Proof of @thm-npar-curse
+As in the proof of @thm-npar-histogram with volume $h^d$ in place of $h$:
+$\mathbb{E}\hat f_h(x) = p/h^d$, the average of $f$ over the cube, so the
+bias is at most $L\cdot\mathrm{diam} = L\sqrt dh$; the variance is
+$\frac{p(1-p)}{nh^{2d}} \le \frac{f_{\max}}{nh^d}$. Setting the derivative of
+$dL^2h^2 + f_{\max}n^{-1}h^{-d}$ to zero gives $h^{d+2} \propto 1/n$, and both
+terms are then of order $h^2 \propto n^{-2/(d+2)}$. For twice-differentiable
+densities kernel estimators achieve $n^{-4/(d+4)}$, and Stone proved that no
+estimator can do better uniformly over such classes of functions [@stone1982;
+@wasserman2006, §6.5]. $\blacksquare$
+:::
+
+To match, in ten dimensions, the accuracy that a kernel estimator reaches
+with 100 points in one dimension needs, by the rates $n^{-4/5}$ and
+$n^{-4/14}$, about $100^{(4/5)/(4/14)} = 100^{2.8} \approx 4 \times 10^5$
+points. This is the **curse of dimensionality** of Bellman [@bellman1961]:
+local methods need neighbourhoods that contain enough points, and in high
+dimension a neighbourhood containing a fixed fraction of the data is no longer
+local (@sec-ch-mla-knn makes this precise for nearest neighbours). Parametric
+models escape the curse by assumption: a correct linear model has $d + 1$
+parameters and an average variance $\sigma^2(d+1)/n$ at the training inputs
+(@sec-bias-variance) — linear, not exponential, in $d$.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla2-kde-easy}
+## Easy — two estimates by hand
+Data: $1.0, 1.5, 2.2, 3.0, 3.1$. Compute the histogram estimate at $x = 2.5$
+with bins $[0, 1), [1, 2), [2, 3), [3, 4)$, and the kernel estimate at $x =
+2.5$ with the uniform kernel on $[-1, 1]$ and $h = 1$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The uniform kernel $\frac12\mathbb{1}\{|u| \le 1\}$ with $h = 1$ counts the
+points within distance 1 of $x$ and divides by $2nh$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Histogram: $2.5$ is in $[2, 3)$, which contains one point ($2.2$):
+$\hat f = 1/(5\cdot1) = 0.2$. Kernel: the points within 1 of $2.5$ are $1.5,
+2.2, 3.0, 3.1$ (four), so $\hat f = 4\cdot\frac12/(5\cdot1) = 0.4$.
+```{python}
+d5 = np.array([1.0, 1.5, 2.2, 3.0, 3.1])
+print(np.sum((d5 >= 2) & (d5 < 3)) / (5 * 1), np.sum(np.abs(2.5 - d5) <= 1) * 0.5 / (5 * 1))
+```
+The two estimates differ by a factor 2 because the histogram's bin is not
+centred on $x$: the points at $3.0$ and $3.1$, very close to $2.5$, fall in
+the next bin. Centring the window on the point of interest is precisely the
+improvement of the kernel estimator. A common slip is to forget the factor
+$\frac12$ of the uniform kernel (its window has width 2).
+:::
+
+::: {#exr-mla2-kde-medium}
+## Medium — choosing the bandwidth by cross-validation
+Choose $h$ for the 150-point sample of the widget by maximising the
+**leave-one-out log-likelihood** $\sum_i\ln\hat f_{h,-i}(x_i)$, where $\hat
+f_{h,-i}$ is the estimate without point $i$. Compare with the normal-reference
+bandwidth and with scikit-learn's `KernelDensity` tuned by `GridSearchCV`.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Compute the $n \times n$ matrix of kernel values once; the leave-one-out
+estimate at $x_i$ is the row sum without the diagonal, divided by
+$(n-1)h$. `KernelDensity.score` returns the total log-likelihood, so
+`GridSearchCV` can maximise it directly.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.neighbors import KernelDensity
+from sklearn.model_selection import GridSearchCV
+
+r7 = np.random.default_rng(7)                          # the widget's sample, regenerated
+s150 = np.where(r7.random(150) < 0.5, r7.normal(-1.5, 0.6, 150), r7.normal(1.5, 0.6, 150))
+hs = np.logspace(-1.5, 0.3, 80)
+D = s150[:, None] - s150[None, :]
+def loo_loglik(h):
+    Kmat = stats.norm.pdf(D / h); np.fill_diagonal(Kmat, 0)
+    return np.sum(np.log(Kmat.sum(1) / ((len(s150) - 1) * h)))
+ll = np.array([loo_loglik(h) for h in hs])
+gs = GridSearchCV(KernelDensity(kernel="gaussian"), {"bandwidth": hs}, cv=5).fit(s150[:, None])
+print(f"leave-one-out choice h = {hs[ll.argmax()]:.3f}; 5-fold GridSearchCV h = {gs.best_params_['bandwidth']:.3f}; "
+      f"normal reference h = {normal_reference_h(s150):.3f}")
+```
+Both cross-validated choices are close to each other and clearly smaller than
+the normal-reference bandwidth, which oversmooths the two modes. Why
+leave-one-out: with the point itself included, the likelihood grows without
+bound as $h \to 0$ (each point sits on its own spike), so the in-sample
+likelihood would always choose the smallest bandwidth — the density analogue
+of the optimism of the training error (@thm-train-optimistic).
+:::
+
+::: {#exr-mla2-kde-hard}
+## Hard — a classifier made of densities
+Build a classifier on two features of the wine data (`alcohol` and
+`flavanoids`) by estimating, for each class $c$, the density $\hat
+f_c(x)$ with a two-dimensional Gaussian kernel estimator, and predicting the
+class with the largest $\hat\pi_c\hat f_c(x)$ (the Bayes classifier of
+@thm-bayes-classifier with estimated ingredients). Compare its 5-fold
+cross-validated accuracy with the same construction using one Gaussian per
+class, and draw the decision regions of both.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Standardise the two features first (inside the cross-validation). Write a
+small scikit-learn-style class with `fit` and `predict` that stores one
+`KernelDensity` per class; `score_samples` returns $\ln\hat f_c$, so compare
+$\ln\hat\pi_c + \ln\hat f_c(x)$. For the parametric version,
+`scipy.stats.multivariate_normal` with the class mean and covariance works.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-npar-density-classifier
+#| fig-cap: "Decision regions of two generative classifiers on two standardised features of the wine data: one Gaussian per class (left) and one kernel density per class (right)."
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+
+class DensityClassifier(ClassifierMixin, BaseEstimator):
+    """Bayes rule with one estimated density per class: 'gauss' or 'kde' (bandwidth h)."""
+    def __init__(self, kind="kde", h=0.3):
+        self.kind, self.h = kind, h
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)
+        self.log_prior_ = np.log([np.mean(y == c) for c in self.classes_])
+        if self.kind == "kde":
+            self.dens_ = [KernelDensity(bandwidth=self.h).fit(X[y == c]) for c in self.classes_]
+        else:
+            self.dens_ = [stats.multivariate_normal(X[y == c].mean(0), np.cov(X[y == c].T)) for c in self.classes_]
+        return self
+    def predict(self, X):
+        logf = [d.score_samples(X) if self.kind == "kde" else d.logpdf(X) for d in self.dens_]
+        return self.classes_[np.argmax(np.column_stack(logf) + self.log_prior_, axis=1)]
+
+X2 = Xw[["alcohol", "flavanoids"]].to_numpy(); y2 = yw.to_numpy()
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+for kind in ("gauss", "kde"):
+    acc = cross_val_score(make_pipeline(StandardScaler(), DensityClassifier(kind)), X2, y2, cv=cv)
+    print(f"{kind:5s}: 5-fold CV accuracy {acc.mean():.3f} ± {acc.std(ddof=1) / np.sqrt(5):.3f}")
+Z2 = StandardScaler().fit_transform(X2)
+fig, axes = plt.subplots(1, 2, figsize=(9, 3.6), sharey=True)
+for ax, kind, title in zip(axes, ("gauss", "kde"), ("one Gaussian per class", "kernel density per class (h = 0.3)")):
+    mlalgbook.regions(ax, DensityClassifier(kind).fit(Z2, y2), Z2, y2, s=14)
+    ax.set_title(title); ax.set_xlabel("alcohol (standardised)")
+axes[0].set_ylabel("flavanoids (standardised)"); axes[0].legend(title="cultivar", loc="upper left")
+fig.tight_layout(); plt.show()
+```
+On these two features the classes are roughly elliptical and the two
+classifiers are about equally accurate; the kernel version draws more
+irregular boundaries, especially where data are scarce — variance that buys
+nothing here. The lesson for a project: a non-parametric model is not
+automatically better; compare honestly, with the same folds and the same
+preprocessing. Mistakes to avoid: standardising outside the cross-validation,
+forgetting the priors (they matter when classes are unbalanced), and using a
+bandwidth chosen on all the data. (The kernel bandwidth could itself be tuned
+by an inner cross-validation, as in @exr-mla2-kde-medium.)
+:::
+
+## Choosing between the two {#sec-npar-choosing}
+
+The proofs of this chapter lead to a simple rule of thumb, which the
+experiment below confirms for classification. With **few data**, or **many
+features**, prefer models with strong assumptions: their variance is small
+and their error falls like $1/n$ — if the assumptions are close to the truth.
+With **many data** and a **few features**, non-parametric models catch up and
+then overtake any misspecified parametric model, because their bias vanishes.
+
+| Consideration | Parametric | Non-parametric |
+|---|---|---|
+| data needed | few, if the model is right | many; grows exponentially with the dimension |
+| error when the model is wrong | does not vanish (@prp-npar-misspecified) | vanishes as $n \to \infty$ |
+| rate when the model is right | $1/n$ | $n^{-4/5}$ in 1-D, $n^{-4/(d+4)}$ in $d$-D |
+| interpretability | often (coefficients) | usually poor (but see trees) |
+| memory and prediction time | small, independent of $n$ | grow with $n$ (except capped trees) |
+| hyper-parameters | few | the smoothing level: $k$, $h$, depth… — essential |
+
+: Parametric versus non-parametric models {#tbl-npar-tradeoffs}
+
+The experiment compares logistic regression (parametric, linear boundary) and
+$k$-nearest neighbours with $k = 15$ (non-parametric) on two synthetic
+problems in two dimensions: one whose best boundary is a line, and one whose
+best boundary is a circle. For each training size the test accuracy is
+averaged over 20 training sets.
+
+```{python}
+#| label: fig-npar-learning-curves
+#| fig-cap: "Test accuracy against training size (average of 20 training sets, 5 000 test points), logistic regression vs k-nearest neighbours (k = 15). Left: the Bayes boundary is a line — logistic regression is better at every size, most at small n. Right: the Bayes boundary is a circle — logistic regression is stuck near the accuracy of always predicting the majority class, k-NN improves with data. The dashed line is the Bayes accuracy."
+def make(problem, n, r):
+    X = r.uniform(-2, 2, size=(n, 2))
+    score = X[:, 0] + X[:, 1] if problem == "line" else np.hypot(X[:, 0], X[:, 1]) - 1.4
+    p1 = 1 / (1 + np.exp(-4 * score))                         # P(y = 1 | x): logistic in the score
+    return X, (r.random(n) < p1).astype(int), p1
+sizes = [20, 50, 100, 200, 500, 1000, 3000]
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.4), sharey=True)
+for ax, problem in zip(axes, ("line", "circle")):
+    r = np.random.default_rng(3)
+    X_te, y_te, p_te = make(problem, 5000, r)
+    bayes = np.mean((p_te > 0.5) == y_te)
+    curves = {"logistic regression": [], "k-NN, k = 15": []}
+    for n in sizes:
+        a_lr, a_knn = [], []
+        for _ in range(20):
+            X_tr, y_tr, _ = make(problem, n, r)
+            if len(np.unique(y_tr)) < 2:
+                continue
+            a_lr.append(LogisticRegression().fit(X_tr, y_tr).score(X_te, y_te))
+            a_knn.append(KNeighborsClassifier(min(15, n - 1)).fit(X_tr, y_tr).score(X_te, y_te))
+        curves["logistic regression"].append(np.mean(a_lr)); curves["k-NN, k = 15"].append(np.mean(a_knn))
+    for (name, a), c in zip(curves.items(), mlalgbook.COLORS):
+        ax.plot(sizes, a, marker="o", ms=4, color=c, label=name)
+    ax.axhline(bayes, color=mlalgbook.MUTED, ls="--", lw=1)
+    ax.set_xscale("log"); ax.set_xlabel("training examples"); ax.set_title(f"Bayes boundary: {problem}")
+    print(f"{problem:6s}: Bayes accuracy {bayes:.3f} | " + " | ".join(f"{k} at n = 20: {v[0]:.3f}, at n = 3000: {v[-1]:.3f}" for k, v in curves.items()))
+axes[0].set_ylabel("test accuracy"); axes[0].legend(loc="lower right")
+fig.tight_layout(); plt.show()
+```
+
+The figure is the chapter in one picture. When the parametric assumption is
+right, it is never worse and is clearly better with little data. When it is
+wrong, no amount of data rescues it, while the non-parametric model converges
+towards the Bayes accuracy. In practice one rarely knows which world one is
+in — which is why both kinds of model belong in a fair comparison
+(@sec-selection), and why a flexible model should always be compared with a
+simple baseline.
+
+::: {.deep}
+## The two cultures
+Breiman's essay [@breiman2001] contrasts a "data modelling" culture, which
+posits a stochastic model of how the data were generated and estimates its
+parameters, with an "algorithmic modelling" culture, which treats the
+mechanism as unknown and judges models only by predictive accuracy. The
+distinction overlaps with, but is not the same as, parametric versus
+non-parametric: a neural network is parametric yet firmly algorithmic. The
+essay, and the replies printed with it (notably Cox's and Efron's), remain the
+best short discussion of when interpretability or prediction should come
+first; see also @shmueli2010.
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-mla2-choosing-easy}
+## Easy — reading the rates
+A kernel estimator in one dimension has error $0.01$ with $n = 1\,000$. Using
+the rate $n^{-4/5}$, how many points would halve the error? And for a
+parametric model with error $0.01$ at $n = 1\,000$, rate $1/n$?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+If error $\propto n^{-a}$, halving the error multiplies $n$ by $2^{1/a}$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Kernel: $2^{5/4} \approx 2.38$, so about $2\,380$ points. Parametric: $2^1 =
+2$, so $2\,000$. In ten dimensions, with rate $n^{-4/14}$, the factor would be
+$2^{3.5} \approx 11.3$.
+```{python}
+print([round(1000 * 2 ** (1 / a)) for a in (4 / 5, 1, 4 / 14)])
+```
+The difference looks small in one dimension and becomes dramatic in ten. The
+usual slip is to invert the exponent ($2^{a}$ instead of $2^{1/a}$).
+:::
+
+::: {#exr-mla2-choosing-medium}
+## Medium — where do the curves cross?
+Repeat the right panel of @fig-npar-learning-curves with a third model:
+logistic regression on the **engineered** feature $x_1^2 + x_2^2$ (in a
+pipeline). Where does it stand, and what does that say about "parametric
+versus non-parametric"?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`FunctionTransformer(lambda X: (X ** 2).sum(1, keepdims=True))` builds the
+feature; a pipeline applies it before the classifier.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.preprocessing import FunctionTransformer
+r = np.random.default_rng(3)
+X_te, y_te, p_te = make("circle", 5000, r)
+radius_lr = make_pipeline(FunctionTransformer(lambda X: (X ** 2).sum(1, keepdims=True)), LogisticRegression())
+for n in (20, 100, 1000):
+    accs = [radius_lr.fit(*make("circle", n, r)[:2]).score(X_te, y_te) for _ in range(20)]
+    print(f"n = {n:5d}: logistic regression on r² {np.mean(accs):.3f}")
+print(f"Bayes accuracy {np.mean((p_te > 0.5) == y_te):.3f}")
+```
+With the right feature, a two-parameter model is close to the Bayes accuracy
+already at $n = 20$ — a level that $k$-NN approaches only with thousands of
+examples. Knowledge of
+the problem, put into a feature, is worth more than data: the "wrong"
+parametric model was wrong only in its inputs. The mistake to avoid is to
+treat the choice as a contest between algorithms when it is often a question
+of representation.
+:::
+
+::: {#exr-mla2-choosing-hard}
+## Hard — a fair comparison on real measurements
+On the wine data (13 features, 3 classes), compare by repeated stratified
+5-fold cross-validation, each in a pipeline with `StandardScaler`: logistic
+regression, a Gaussian class-conditional model (scikit-learn's
+`QuadraticDiscriminantAnalysis`), and $k$-NN with $k$ chosen by an inner
+`GridSearchCV`. Then repeat the comparison using only 30 randomly chosen
+training wines per fold (subsample the training folds). Which family benefits
+from more data? Report means and standard errors.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For the small-data version, write the outer loop yourself: for each outer
+split, draw 30 indices from the training part (stratified, e.g. with
+`train_test_split(..., train_size=30, stratify=...)`), fit, and score on the
+full test part. QDA estimates a full covariance per class: with 10 wines per
+class and 13 features its covariances are singular — shrink them
+(`solver="eigen", shrinkage="auto"`, the Ledoit–Wolf estimate).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import warnings
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
+
+Xw_np = Xw.to_numpy()
+def models():
+    return {"logistic": make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000)),
+            "QDA (shrunk)": make_pipeline(StandardScaler(), QuadraticDiscriminantAnalysis(solver="eigen", shrinkage="auto")),
+            "k-NN (k by CV)": make_pipeline(StandardScaler(), GridSearchCV(KNeighborsClassifier(), {"n_neighbors": [1, 3, 5, 7, 9]}, cv=3))}
+outer = RepeatedStratifiedKFold(n_splits=5, n_repeats=4, random_state=0)
+res = {(m, size): [] for m in models() for size in ("full", "30")}
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    for tr, te in outer.split(Xw_np, yw):
+        small, _ = train_test_split(tr, train_size=30, stratify=yw.iloc[tr], random_state=len(res[("logistic", "full")]))
+        for size, idx in (("full", tr), ("30", small)):
+            for name, m in models().items():
+                res[(name, size)].append(m.fit(Xw_np[idx], yw.iloc[idx]).score(Xw_np[te], yw.iloc[te]))
+for (name, size), acc in res.items():
+    print(f"{name:15s} trained on {size:>4s}: accuracy {np.mean(acc):.3f} ± {np.std(acc, ddof=1) / np.sqrt(len(acc)):.3f}")
+```
+With all the training data the shrunk QDA and logistic regression are the
+best, $k$-NN a few points behind. With 30 wines all lose accuracy, and the
+ranking changes: QDA, which must estimate a $13 \times 13$ covariance per
+class from ten wines, loses most, while the linear model, with the fewest
+effective parameters per class, degrades gracefully and comes out on top;
+$k$-NN, already handicapped by 13 dimensions, loses little more. The model
+with more to estimate profits most from more data. The standard errors are only indicative (the folds overlap,
+@sec-cross-validation). Typical mistakes: tuning $k$ on the full data before
+the comparison (selection must be inside the outer loop), and comparing
+models evaluated on different splits.
+:::
+
+::: {.project-link}
+**In the project.** The classifier requested by the project, $k$-nearest
+neighbours, is the archetypal non-parametric model: it stores the whole
+training set and its only knob, $k$, is a smoothing level. This chapter says
+what to expect: it adapts to any shape of the classes, but it needs the
+features to be on comparable scales and suffers if useless features dilute
+the distances (@thm-npar-curse); and a simple parametric model (logistic
+regression, Gaussian naive Bayes) is the baseline it must be compared with,
+on the same folds. With five features and 500 fruits, the data are in the
+regime where both families are plausible — only a fair comparison can tell.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **"Non-parametric" read as "assumption-free".** Non-parametric methods
+  still assume smoothness (Lipschitz or twice-differentiable densities), and
+  their smoothing hyper-parameter matters as much as a model choice.
+- **Choosing a bandwidth or $k$ on the training data.** The in-sample
+  likelihood or accuracy always prefers the least smoothing; use
+  cross-validation.
+- **Ignoring the dimension.** A method that works with 2 features can fail
+  with 20 for lack of data, not because it is a bad method.
+- **Trusting a parametric fit because it is stable.** Low variance is not low
+  error: a misspecified model converges, confidently, to the wrong answer.
+- **Forgetting prediction cost.** A non-parametric model that is cheap to fit
+  may be expensive to query.
+:::
+
+## Summary
+
+- **Parametric** models have a fixed number of parameters; **non-parametric**
+  models grow with the data. Many models are either, depending on how they
+  are constrained.
+- The Gaussian MLE is the sample mean and the variance with $1/n$; when the
+  model is right its squared error falls like $1/n$; when it is wrong, it
+  converges to the KL-closest member of the family.
+- The histogram and the kernel density estimator trade bias ($h$ or $h^2$)
+  against variance ($1/(nh)$); their best rates are $n^{-2/3}$ and $n^{-4/5}$.
+  The normal-reference bandwidth is $1.06\,\sigma n^{-1/5}$ and oversmooths
+  multimodal data.
+- In $d$ dimensions the rates become $n^{-2/(d+2)}$ and $n^{-4/(d+4)}$: the
+  curse of dimensionality.
+- Prefer parametric models with few data or many features, non-parametric
+  ones with many data and few features; good features can beat both.
+
+## Exercises
+
+::: {#exr-mla2-sieve}
+**A parametric family that grows.** Fit polynomial regressions of degree
+$\lfloor n^{1/3}\rfloor$ to $n$ points from $y = \sin(2\pi x) + \varepsilon$
+($x$ uniform on $[0, 1]$, noise standard deviation 0.3) for $n = 20, 100,
+500, 2\,500$, and a fixed cubic. Plot the test MSE against $n$. Which one has
+a vanishing bias, and why?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+r = np.random.default_rng(4)
+x_te = r.uniform(0, 1, 5000); f_te = np.sin(2 * np.pi * x_te)
+for n in (20, 100, 500, 2500):
+    out = []
+    for deg in (3, int(n ** (1 / 3))):
+        e = []
+        for _ in range(20):
+            x = r.uniform(0, 1, n); y = np.sin(2 * np.pi * x) + r.normal(0, 0.3, n)
+            m = make_pipeline(PolynomialFeatures(deg), StandardScaler(), LinearRegression())
+            e.append(np.mean((m.fit(x[:, None], y).predict(x_te[:, None]) - f_te) ** 2))
+        out.append(f"degree {deg}: {np.mean(e):.4f}")
+    print(f"n = {n:5d}: " + ", ".join(out))
+```
+The cubic's error stops falling: its bias — the distance between the sine and
+the best cubic — does not depend on $n$. The growing degree reduces the bias
+as data accumulate, while the slow growth keeps the variance under control: a
+**sieve**, i.e. a non-parametric estimator built from parametric pieces
+[@wasserman2006]. (The error printed is the squared distance to the true
+function, without the noise.)
+:::
+
+::: {#exr-mla2-volume}
+**Where is the volume?** For the uniform distribution on the cube
+$[0, 1]^d$, what fraction of the points lies within $0.05$ of the boundary?
+Compute it for $d = 1, 2, 10, 100$ and explain what it means for a local
+estimator.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The inner cube $[0.05, 0.95]^d$ has volume $0.9^d$, so the boundary fraction is
+$1 - 0.9^d$: $0.10$, $0.19$, $0.65$, and $1 - 2.7\times10^{-5}$.
+```{python}
+print([round(1 - 0.9 ** d, 6) for d in (1, 2, 10, 100)])
+```
+In high dimension almost every point is near the boundary, where a local
+estimator has neighbours on one side only — the edge effects that a kernel
+estimator avoids in the interior become the rule. It is another face of the
+curse of dimensionality [@hastie2009, §2.5].
+:::
+
+## Further reading {.unnumbered}
+
+- @wasserman2006, ch. 1, 6 and 8 — non-parametric estimation (histograms,
+  kernels, rates, the curse of dimensionality) in a compact, rigorous form;
+  @wasserman2004, ch. 9 for maximum likelihood.
+- @silverman1986 — the classic monograph on density estimation; ch. 3 on
+  kernels and bandwidth choice. @scott2015 — multivariate density estimation.
+- @hastie2009, §2.3–2.5 — least squares versus nearest neighbours and the
+  curse of dimensionality, the same comparison as @fig-npar-learning-curves.
+- @breiman2001 — the two cultures, with its discussion.
+- @stone1982 — why non-parametric rates must degrade with the dimension.

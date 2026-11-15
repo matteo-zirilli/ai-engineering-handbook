@@ -65,7 +65,8 @@ each part is always the same:
 | I | [Programming with Python](python/index.qmd) | ✅ available |
 | II | [High-performance programming with C and C++](cpp/index.qmd) | ✅ available |
 | III | [Foundations of machine learning](ml/index.qmd) | ✅ available |
-| IV–XII | the remaining courses of the master | 🛠 in preparation |
+| IV | [Machine learning: models and algorithms](mlalg/index.qmd) | ✅ theory chapters available; project chapter in preparation |
+| V–XII | the remaining courses of the master | 🛠 in preparation |
 
 ## Conventions {.unnumbered}
 
@@ -77,8 +78,8 @@ how code and outputs are shown, how to read a reference) are collected in
 
 All Python code was executed with **Python 3.13**; the C and C++ code of Part II
 was compiled with **GCC 13** (`g++ -std=c++20`, `gcc -std=c17`) and run on
-x86-64 Linux; the machine-learning code of Part III uses **scikit-learn 1.9**
-with NumPy, pandas and Matplotlib (exact versions on the part's overview page). The outputs you see under each code cell were produced by
+x86-64 Linux; the machine-learning code of Parts III and IV uses **scikit-learn 1.9**
+with NumPy, SciPy, pandas and Matplotlib (exact versions on each part's overview page). The outputs you see under each code cell were produced by
 actually running that code when the book was built: they are not typed by
 hand.
 

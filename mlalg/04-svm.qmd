@@ -1,0 +1,1204 @@
+# Support vector machines {#sec-ch-mla-svm}
+
+> *"The support-vector network is a new learning machine for two-group
+> classification problems."* — Corinna Cortes and Vladimir Vapnik, 1995
+> [@cortes1995]
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- **prove** the formula for the distance of a point from a hyperplane and
+  derive the **maximal margin classifier** as a convex quadratic problem with
+  a unique solution;
+- extend it to the **soft margin** with slack variables, **prove** that this
+  is regularised empirical risk minimisation with the **hinge loss**, and
+  explain the role of $C$ and the influence of outliers;
+- derive the **dual problem** and the **KKT conditions**, explain why only the
+  **support vectors** matter, and **prove** the leave-one-out bound
+  "error ≤ fraction of support vectors";
+- use **kernels** — linear, polynomial, RBF, sigmoid — **prove** that a
+  kernel defined by a feature map has positive semidefinite Gram matrices and
+  that the RBF kernel corresponds to an infinite-dimensional feature map;
+- train and tune SVMs in scikit-learn (`SVC`, `LinearSVC`), with scaling, $C$
+  and $\gamma$ chosen by cross-validation, for two or more classes.
+:::
+
+::: {.callout-tip}
+## Topics covered
+The support vector classifier; non-linear relationships; kernels and the
+kernel trick; in practice, the maximal margin classifier, soft margins, linear
+SVMs, the effect of outliers, and SVMs with linear, polynomial, sigmoid and
+Gaussian (RBF) kernels.
+:::
+
+## Intuition: the widest street {#sec-svm-intuition}
+
+Two groups of points on a plane can be separated by many straight lines.
+Logistic regression picks the line that makes the observed labels most
+probable; a support vector machine picks the line that leaves the **widest
+empty street** between the two groups, with the line down the middle of it.
+The idea is that a boundary far from all training points is robust: small
+perturbations of the points, or new points similar to them, stay on the
+correct side.
+
+Two consequences make the method distinctive. First, the street is determined
+only by the points on its edges — the **support vectors**; all the others
+could move (without crossing the edges) or disappear without changing
+anything. Second, the computation depends on the data only through **inner
+products** between points; replacing them by a **kernel** lets the same
+algorithm draw curved boundaries, as if the points had been mapped into a
+space with many more dimensions, without ever computing that map.
+
+## The maximal margin classifier {#sec-svm-max-margin}
+
+A **hyperplane** in $\mathbb{R}^d$ is the set $\{x : w^\top x + b = 0\}$ with
+$w \neq 0$; the **linear classifier** it defines predicts $\operatorname{sign}
+(w^\top x + b)$. In this chapter the labels are $y_i \in \{-1, +1\}$, so that
+"$x_i$ is on the correct side" reads $y_i(w^\top x_i + b) > 0$.
+
+::: {#prp-svm-distance}
+## Distance from a hyperplane
+The (Euclidean) distance of a point $x_0$ from the hyperplane $w^\top x + b = 0$
+is $|w^\top x_0 + b|/\lVert w\rVert$, and $(w^\top x_0 + b)/\lVert w\rVert$ is
+the **signed distance**, positive on the side towards which $w$ points.
+:::
+
+*In one line:* the score $w^\top x + b$ is the distance from the boundary
+measured in units of $1/\lVert w\rVert$.
+
+::: {.deep kind="proof"}
+## Proof of @prp-svm-distance
+$w$ is orthogonal to the hyperplane: for two points $x, x'$ on it, $w^\top(x -
+x') = 0$. The closest point of the hyperplane to $x_0$ is therefore $x_0 - tw$
+for the $t$ that puts it on the hyperplane: $w^\top(x_0 - tw) + b = 0$ gives
+$t = (w^\top x_0 + b)/\lVert w\rVert^2$, and the distance is $\lVert
+tw\rVert = |w^\top x_0 + b|/\lVert w\rVert$. (Any other point $x$ of the
+hyperplane is farther: $\lVert x_0 - x\rVert^2 = \lVert tw\rVert^2 + \lVert
+x_0 - tw - x\rVert^2$ by Pythagoras, as $x_0 - tw - x$ lies in the hyperplane's
+direction, orthogonal to $w$.) $\blacksquare$
+:::
+
+The **margin** of a separating hyperplane is the distance from it to the
+closest training point, $\min_iy_i(w^\top x_i + b)/\lVert w\rVert$. Scaling
+$(w, b)$ by any $c > 0$ changes neither the hyperplane nor the margin, so we
+may fix the scale by requiring that the closest points have $y_i(w^\top x_i +
+b) = 1$: the margin is then $1/\lVert w\rVert$, and maximising it means
+minimising $\lVert w\rVert$.
+
+::: {#thm-svm-hard-margin}
+## The maximal margin classifier
+If the two classes are linearly separable, the hyperplane with the largest
+margin is given by the solution of
+$$
+\min_{w, b}\;\frac12\lVert w\rVert^2
+\quad\text{subject to}\quad y_i(w^\top x_i + b) \ge 1,\quad i = 1, \dots, n,
+$$ {#eq-svm-hard}
+its margin is $1/\lVert w^*\rVert$, and the solution $(w^*, b^*)$ is unique.
+:::
+
+*In one line:* the widest street is the solution of a convex problem — a
+quadratic objective with linear constraints — and there is exactly one.
+
+::: {.deep kind="proof"}
+## Proof of @thm-svm-hard-margin
+Equivalence: any separating $(w, b)$ can be rescaled so that $\min_iy_i(w^\top
+x_i + b) = 1$; it is then feasible for @eq-svm-hard with margin $1/\lVert
+w\rVert$. Conversely, a feasible $(w, b)$ separates with margin at least
+$1/\lVert w\rVert$, and at the optimum some constraint is active (otherwise
+$(w, b)$ could be scaled down, decreasing $\lVert w\rVert$), so the margin is
+exactly $1/\lVert w^*\rVert$. Maximising the margin is minimising $\lVert
+w\rVert$. Existence: the feasible set is closed and non-empty, and the
+objective grows without bound in $w$; for fixed $w \neq 0$ the feasible $b$
+form a closed bounded interval (both classes are present), so a minimum
+exists. Uniqueness of $w$: if $w_1 \neq w_2$ were both optimal with value $m$,
+their midpoint (with the midpoint of the $b$'s) is feasible, the constraints
+being linear, and $\lVert\frac{w_1 + w_2}{2}\rVert^2 < \frac12\lVert
+w_1\rVert^2 + \frac12\lVert w_2\rVert^2 = 2m$ by strict convexity of the
+squared norm — a contradiction. Uniqueness of $b$: with $w^*$ fixed, $b$ must
+satisfy $b \ge 1 - w^{*\top}x_i$ for the positive and $b \le -1 -
+w^{*\top}x_i$ for the negative points; if the interval of feasible $b$ had
+positive length, $w^*$ could be shrunk slightly with some $b$ still feasible,
+contradicting optimality. $\blacksquare$
+:::
+
+::: {#exm-svm-hand}
+## The widest street by hand
+With one point per class, $x_+ = (3, 3)$ and $x_- = (1, 1)$, the widest street
+is the perpendicular bisector of the segment between them. Both constraints
+are active: $w^\top x_+ + b = 1$, $w^\top x_- + b = -1$, and $w$ is parallel to
+$x_+ - x_- = (2, 2)$, say $w = (a, a)$. Subtracting, $w^\top(x_+ - x_-) = 4a =
+2$, so $w = (0.5, 0.5)$, and $b = 1 - 0.5\cdot3 - 0.5\cdot3 = -2$. The
+boundary is $x_1 + x_2 = 4$, through the midpoint $(2, 2)$; the margin is
+$1/\lVert w\rVert = \sqrt2$, half the distance between the points.
+:::
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.svm import SVC, LinearSVC
+
+hand = SVC(kernel="linear", C=1e6).fit([[3, 3], [1, 1]], [1, -1])      # huge C: effectively a hard margin
+print("w =", hand.coef_[0].round(4), " b =", hand.intercept_.round(4), " margin =", round(1 / np.linalg.norm(hand.coef_), 4))
+```
+
+`SVC` solves the soft-margin problem of the next section; with a very large
+$C$ it coincides with the hard margin on separable data.
+
+```{python}
+#| label: fig-svm-hard-margin
+#| fig-cap: "Maximal margin classifier on 40 separable points. The solid line is the boundary, the dashed lines the edges of the street (score ±1); circled points are the support vectors — the only points that determine the solution."
+rng = np.random.default_rng(0)
+Xs = np.vstack([rng.normal([2, 2], 0.6, (20, 2)), rng.normal([-1, -0.5], 0.6, (20, 2))])
+ys = np.repeat([1, -1], 20)
+hard = SVC(kernel="linear", C=1e6).fit(Xs, ys)
+
+def draw_svm(ax, model, X, y, title=""):
+    """Points, boundary, street edges and support vectors of a fitted linear SVC."""
+    w, b = model.coef_[0], model.intercept_[0]
+    xs = np.linspace(X[:, 0].min() - 1, X[:, 0].max() + 1, 2)
+    for level, style in ((0, "-"), (1, "--"), (-1, "--")):
+        ax.plot(xs, (level - b - w[0] * xs) / w[1], color=mlalgbook.INK2, ls=style, lw=1.2)
+    for k, c in zip((-1, 1), mlalgbook.COLORS):
+        ax.scatter(*X[y == k].T, s=22, color=c, edgecolor="#fcfcfb", linewidth=0.5, label=f"y = {k:+d}", zorder=3)
+    sv = model.support_vectors_
+    ax.scatter(*sv.T, s=110, facecolor="none", edgecolor=mlalgbook.INK, linewidth=1, zorder=4)
+    ax.set_ylim(X[:, 1].min() - 1, X[:, 1].max() + 1); ax.set_title(title); ax.set_aspect("equal", adjustable="datalim")
+
+fig, ax = plt.subplots(figsize=(5.2, 4))
+draw_svm(ax, hard, Xs, ys); ax.legend(loc="upper left"); plt.show()
+print(f"{len(hard.support_)} support vectors out of {len(ys)}; margin = {1 / np.linalg.norm(hard.coef_):.3f}")
+```
+
+### Practice {.unnumbered}
+
+::: {#exr-mla4-margin-easy}
+## Easy — distances and margin
+For the hyperplane $2x_1 - x_2 + 1 = 0$, compute the signed distances of
+$(1, 1)$, $(0, 3)$ and $(-1, -1)$. If the labels are $+1, -1, +1$, is the
+hyperplane separating, and what is its margin?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$\lVert w\rVert = \sqrt5$. The point is on the correct side when
+$y_i(w^\top x_i + b) > 0$; the margin is the smallest $y_i(w^\top x_i +
+b)/\lVert w\rVert$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Scores: $2 - 1 + 1 = 2$, $0 - 3 + 1 = -2$, $-2 + 1 + 1 = 0$. Signed distances
+$2/\sqrt5 \approx 0.894$, $-0.894$, $0$. The third point lies **on** the
+hyperplane: $y_3\cdot0 = 0$ is not $> 0$, so the hyperplane does not separate
+the data strictly, and its margin is $0$.
+```{python}
+w0, b0 = np.array([2, -1]), 1
+P3, y3 = np.array([[1, 1], [0, 3], [-1, -1]]), np.array([1, -1, 1])
+print("signed distances:", ((P3 @ w0 + b0) / np.linalg.norm(w0)).round(3), " margin:", (y3 * (P3 @ w0 + b0) / np.linalg.norm(w0)).min())
+```
+A frequent slip is to forget the division by $\lVert w\rVert$: the raw scores
+$\pm2$ are not distances, and they change if the equation is multiplied by a
+constant.
+:::
+
+::: {#exr-mla4-margin-medium}
+## Medium — the hard-margin problem with a generic solver
+Solve @eq-svm-hard for the 40 points of @fig-svm-hard-margin with
+`scipy.optimize.minimize` (method `"SLSQP"`, the constraints as inequality
+constraints), and compare $w$, $b$ and the margin with `SVC(kernel="linear",
+C=1e6)`. Which constraints are active at the solution?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Optimise over $\theta = (w_1, w_2, b)$; the constraint function returns the
+vector $y_i(w^\top x_i + b) - 1$, which must be $\ge 0$. Active constraints
+are those with value (numerically) zero.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from scipy.optimize import minimize
+cons = {"type": "ineq", "fun": lambda t: ys * (Xs @ t[:2] + t[2]) - 1, "jac": lambda t: ys[:, None] * np.column_stack([Xs, np.ones(len(ys))])}
+res = minimize(lambda t: 0.5 * t[:2] @ t[:2], x0=np.array([1.0, 1.0, 0.0]), jac=lambda t: np.array([t[0], t[1], 0.0]),
+               constraints=[cons], method="SLSQP", options={"ftol": 1e-12, "maxiter": 500})
+active = np.where(np.abs(ys * (Xs @ res.x[:2] + res.x[2]) - 1) < 1e-6)[0]
+print("SLSQP:  w =", res.x[:2].round(4), "b =", round(res.x[2], 4), "margin", round(1 / np.linalg.norm(res.x[:2]), 4))
+print("SVC:    w =", hard.coef_[0].round(4), "b =", hard.intercept_.round(4)[0], "| active constraints:", active, "| SVC support:", np.sort(hard.support_))
+```
+The generic solver and `SVC` agree, and the active constraints are exactly
+the support vectors. A general-purpose solver is fine for 40 points; SVM
+libraries use specialised algorithms (SMO, @sec-svm-dual) because the number
+of constraints equals the number of examples. A common mistake is to start
+the solver at an infeasible point and not check `res.success`.
+:::
+
+::: {#exr-mla4-margin-hard}
+## Hard — one point can move the street
+Add to the 40 points of @fig-svm-hard-margin a single new point with label
+$+1$ placed close to the negative group — e.g. at $(0.3, 0.6)$ — so that the
+data remain separable. Fit the hard-margin SVM again, and also soft-margin
+SVMs with $C = 1$ and $C = 0.1$. Plot the four solutions and report the
+margins and the number of support vectors. What does this suggest about
+detecting and handling outliers before training?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Reuse `draw_svm` on a $2 \times 2$ grid of axes. Check separability by
+verifying that the hard-margin solution classifies all training points
+correctly.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-svm-outlier
+#| fig-cap: "A single point (+1, near the other class) and four SVMs. The hard margin (top right) bends the whole boundary to accommodate it; soft margins with smaller C let it violate the street and keep a boundary close to the original."
+X_out, y_out = np.vstack([Xs, [[0.3, 0.6]]]), np.append(ys, 1)
+fits = [("original data, hard margin", SVC(kernel="linear", C=1e6).fit(Xs, ys), Xs, ys),
+        ("with the new point, hard margin", SVC(kernel="linear", C=1e6).fit(X_out, y_out), X_out, y_out),
+        ("with the new point, C = 1", SVC(kernel="linear", C=1).fit(X_out, y_out), X_out, y_out),
+        ("with the new point, C = 0.1", SVC(kernel="linear", C=0.1).fit(X_out, y_out), X_out, y_out)]
+fig, axes = plt.subplots(2, 2, figsize=(9, 7.5))
+for ax, (title, m, X_, y_) in zip(axes.ravel(), fits):
+    draw_svm(ax, m, X_, y_, title)
+    print(f"{title:32s}: margin {1 / np.linalg.norm(m.coef_):.3f}, support vectors {len(m.support_)}, training accuracy {m.score(X_, y_):.3f}")
+fig.tight_layout(); plt.show()
+```
+The hard margin must keep every point outside the street, so one unusual
+point narrows the margin dramatically and tilts the boundary. With a finite
+$C$ the point is allowed inside the street (or on the wrong side) at a cost,
+and the boundary stays close to the original one, with a wider margin and more
+support vectors. Removing a point is a decision about the *data* (is it an
+error of measurement or labelling?), while lowering $C$ is a decision about
+the *model*; the first should be justified by inspecting the point, never by
+the fact that it hurts the fit. The typical mistake is to delete inconvenient
+points to improve the score.
+:::
+
+## Soft margins and the hinge loss {#sec-svm-soft-margin}
+
+Real classes overlap, and @eq-svm-hard then has no solution. The **soft
+margin** of Cortes and Vapnik [@cortes1995] allows each point a **slack**
+$\xi_i \ge 0$ — how far it is on the wrong side of its edge of the street —
+at a price $C$ per unit:
+$$
+\min_{w, b, \xi}\;\frac12\lVert w\rVert^2 + C\sum_{i=1}^n\xi_i
+\quad\text{subject to}\quad y_i(w^\top x_i + b) \ge 1 - \xi_i,\;\; \xi_i \ge 0 .
+$$ {#eq-svm-soft}
+A point with $0 < \xi_i \le 1$ is inside the street but correctly classified;
+with $\xi_i > 1$ it is misclassified. The constrained form hides a familiar
+structure.
+
+::: {#thm-svm-hinge}
+## The soft margin is regularised hinge-loss minimisation
+@eq-svm-soft is equivalent to the unconstrained problem
+$$
+\min_{w, b}\;\sum_{i=1}^n\max\big(0,\,1 - y_i(w^\top x_i + b)\big) + \frac{1}{2C}\lVert w\rVert^2 ,
+$$ {#eq-svm-hinge}
+that is, empirical risk minimisation with the **hinge loss** $\ell(y, f) =
+\max(0, 1 - yf)$ and an L2 penalty of strength $\lambda = 1/C$. The hinge loss
+is convex and is an upper bound on the 0–1 loss: $\max(0, 1 - yf) \ge
+\mathbb{1}\{yf \le 0\}$.
+:::
+
+*In one line:* an SVM is a penalised linear model like ridge or logistic
+regression — only the loss is different, and $C$ is the inverse of the
+penalty: large $C$, weak regularisation.
+
+::: {.deep kind="proof"}
+## Proof of @thm-svm-hinge
+For fixed $(w, b)$, @eq-svm-soft minimises $\sum_i\xi_i$ subject to $\xi_i \ge
+1 - y_i(w^\top x_i + b)$ and $\xi_i \ge 0$; the smallest feasible value is
+$\xi_i = \max(0, 1 - y_i(w^\top x_i + b))$. Substituting it, the problem in
+$(w, b)$ is $\frac12\lVert w\rVert^2 + C\sum_i\max(0, 1 - y_if_i)$; dividing by
+$C > 0$ does not change the minimiser. The hinge is the maximum of two affine
+functions of $f$, hence convex; and if $yf \le 0$ then $1 - yf \ge 1$, while
+it is always $\ge 0$. $\blacksquare$
+:::
+
+```{python}
+#| label: fig-svm-losses
+#| fig-cap: "Losses as functions of the margin yf: the 0–1 loss, the hinge loss of the SVM, and the logistic loss of logistic regression (in base 2, so that it equals 1 at yf = 0). Both convex losses bound the 0–1 loss from above; the hinge is exactly zero beyond yf = 1 — points well inside their side have no influence at all."
+m = np.linspace(-2.5, 3, 500)
+fig, ax = plt.subplots(figsize=(6, 3.2))
+ax.plot(m, (m <= 0).astype(float), label="0–1 loss", color=mlalgbook.MUTED)
+ax.plot(m, np.maximum(0, 1 - m), label="hinge (SVM)")
+ax.plot(m, np.log2(1 + np.exp(-m)), label="logistic, base 2")
+ax.set_xlabel("margin y·f(x)"); ax.set_ylabel("loss"); ax.legend(); plt.show()
+```
+
+The flat part of the hinge is the source of the support vectors: a point with
+$y_if_i > 1$ contributes nothing to the objective, so it does not influence
+the solution; with the logistic loss every point pulls a little. The
+parameter $C$ trades the width of the street against the violations: small
+$C$ means a strong penalty on $\lVert w\rVert$, a wide street, many points
+inside it (many support vectors) and a smoother, more biased boundary; large
+$C$ a narrow street that tries to classify every training point.
+
+```{python}
+#| echo: false
+from sklearn.model_selection import cross_val_score
+_r = np.random.default_rng(11)
+_X = np.vstack([_r.normal([1.2, 1.0], 1.0, (40, 2)), _r.normal([-1.0, -0.8], 1.0, (40, 2))])
+_y = np.repeat([1, -1], 40)
+_Cs = np.logspace(-3, 2, 21)
+_fits = []
+for _C in _Cs:
+    _m = SVC(kernel="linear", C=_C).fit(_X, _y)
+    _fits.append({"C": float(_C), "w": _m.coef_[0].tolist(), "b": float(_m.intercept_[0]),
+                  "sv": _m.support_.tolist(), "train": float(_m.score(_X, _y)),
+                  "cv": float(cross_val_score(SVC(kernel="linear", C=_C), _X, _y, cv=5).mean())})
+ojs_define(svmPts=[{"x": float(a), "y": float(b), "label": int(c)} for (a, b), c in zip(_X, _y)], svmFits=_fits)
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof svmCi = Inputs.range([0, 20], {step: 1, value: 10, label: "log-scale position of C (value below)"})
+```
+
+```{ojs}
+//| echo: false
+svmFit = svmFits[svmCi]
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">C = ${svmFit.C.toPrecision(3)} — margin ${(1 / Math.hypot(...svmFit.w)).toFixed(3)}, support vectors ${svmFit.sv.length} of ${svmPts.length}, training accuracy ${svmFit.train.toFixed(3)}, 5-fold CV accuracy ${svmFit.cv.toFixed(3)}</p>`
+```
+
+```{ojs}
+//| echo: false
+svmLines = {
+  const [w0, w1] = svmFit.w, b = svmFit.b, out = [];
+  for (const [level, kind] of [[0, "boundary"], [1, "edge +1"], [-1, "edge −1"]])
+    for (const x of [-4.5, 4.5]) out.push({x, y: (level - b - w0 * x) / w1, kind});
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-svm-c-widget
+//| fig-cap: "Linear soft-margin SVM on 80 overlapping points for C from 10⁻³ to 10²; circled points are support vectors. Small C: wide street, many support vectors, strong regularisation. Large C: narrow street, few support vectors. The cross-validated accuracy (printed above the plot) is flat over a wide range of C."
+Plot.plot({
+  height: 340, width: 420, x: {domain: [-4.5, 4.5], label: "x₁"}, y: {domain: [-4.5, 4.5], label: "x₂"},
+  color: {type: "ordinal", domain: [-1, 1], range: ["#2a78d6", "#eb6834"], legend: true},
+  marks: [
+    Plot.line(svmLines, {x: "x", y: "y", z: "kind", stroke: "#52514e", strokeDasharray: d => d.kind === "boundary" ? null : "4,3", clip: true}),
+    Plot.dot(svmPts, {x: "x", y: "y", fill: "label", r: 3.5, stroke: "#fcfcfb", strokeWidth: 0.5}),
+    Plot.dot(svmFit.sv.map(i => svmPts[i]), {x: "x", y: "y", r: 7, stroke: "#0b0b0b", strokeWidth: 1})
+  ]
+})
+```
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-mla4-soft-easy}
+## Easy — slacks and hinge losses
+For $w = (1, 0)$, $b = 0$ and the points $(2, 0)$ with $y = +1$, $(0.5, 1)$
+with $y = +1$, $(-0.2, 0)$ with $y = +1$ and $(0.3, 0)$ with $y = -1$,
+compute the margins $y_if_i$, the slacks, the hinge losses, and which points
+are correctly classified, inside the street, or misclassified. Evaluate
+@eq-svm-hinge for $C = 1$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$f(x) = x_1$. Slack $= \max(0, 1 - yf)$; inside the street means $0 < yf <
+1$, misclassified $yf < 0$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$yf = 2, 0.5, -0.2, -0.3$; slacks $0, 0.5, 1.2, 1.3$. Point 1 is outside the
+street (no loss), point 2 inside the street but correct, points 3 and 4
+misclassified. Objective: $3.0 + \frac12\cdot1 = 3.5$.
+```{python}
+Pq, yq, wq = np.array([[2, 0], [0.5, 1], [-0.2, 0], [0.3, 0]]), np.array([1, 1, 1, -1]), np.array([1.0, 0.0])
+marg = yq * (Pq @ wq); hinge = np.maximum(0, 1 - marg)
+print("margins", marg, "hinge", hinge, "objective", hinge.sum() + 0.5 * wq @ wq)
+```
+Point 2 is correctly classified yet pays a loss: the hinge penalises being
+correct *without enough margin*. That is what makes the street, and what a
+common reading ("the SVM only cares about mistakes") misses.
+:::
+
+::: {#exr-mla4-soft-medium}
+## Medium — a linear SVM by stochastic subgradient descent
+Implement the **Pegasos** algorithm [@shalevshwartz2011] for @eq-svm-hinge
+without intercept (append a constant feature instead): at step $t$ pick a
+random example, set $\eta_t = 1/(\lambda t)$, and update $w \leftarrow (1 -
+\eta_t\lambda)w + \eta_ty_ix_i$ if $y_iw^\top x_i < 1$, else $w \leftarrow
+(1 - \eta_t\lambda)w$, where the objective is $\frac\lambda2\lVert w\rVert^2 +
+\frac1n\sum_i\text{hinge}_i$. Run it on the standardised breast-cancer data
+and compare objective value and accuracy with `LinearSVC` at the matching $C$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Multiplying @eq-svm-hinge by $C/n$ gives $\frac1n\sum\text{hinge} +
+\frac{1}{2Cn}\lVert w\rVert^2$, so $\lambda = 1/(Cn)$. `LinearSVC(loss="hinge",
+fit_intercept=False)` solves exactly @eq-svm-hinge without intercept. Compare
+the objective values, which are a fairer test than the coefficients.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_breast_cancer
+from sklearn.preprocessing import StandardScaler
+
+Xb, yb01 = load_breast_cancer(return_X_y=True)
+Xb1 = np.column_stack([StandardScaler().fit_transform(Xb), np.ones(len(yb01))])   # constant feature in place of b
+yb = 2 * yb01 - 1
+n_b, C = len(yb), 1.0
+lam = 1 / (C * n_b)
+objective = lambda w: lam / 2 * w @ w + np.mean(np.maximum(0, 1 - yb * (Xb1 @ w)))
+rp, w = np.random.default_rng(0), np.zeros(Xb1.shape[1])
+for t in range(1, 200_001):
+    i = rp.integers(n_b); eta = 1 / (lam * t)
+    if yb[i] * (Xb1[i] @ w) < 1:
+        w = (1 - eta * lam) * w + eta * yb[i] * Xb1[i]
+    else:
+        w = (1 - eta * lam) * w
+lsvc = LinearSVC(C=C, loss="hinge", fit_intercept=False, max_iter=200_000, tol=1e-8).fit(Xb1, yb)
+print(f"Pegasos:   objective {objective(w):.5f}, training accuracy {np.mean(np.sign(Xb1 @ w) == yb):.4f}")
+print(f"LinearSVC: objective {objective(lsvc.coef_[0]):.5f}, training accuracy {lsvc.score(Xb1, yb):.4f}")
+```
+After 200 000 cheap steps Pegasos is within a small fraction of the optimal
+objective. Its step $1/(\lambda t)$ is the strongly convex schedule of
+@sec-opt-schedules; with $\lambda = 1/(Cn)$ tiny, the first steps are huge,
+which is why many iterations are needed. Note that the constant feature is
+penalised along with $w$, unlike a true intercept; `LinearSVC` with
+`fit_intercept=True` also penalises its intercept (it is implemented the same
+way), unlike `SVC` — a detail that matters only with poorly centred data.
+:::
+
+::: {#exr-mla4-soft-hard}
+## Hard — choosing $C$ for three classes
+On the wine data, tune $C$ for `LinearSVC` (inside a pipeline with
+`StandardScaler`) by 5-fold cross-validation over a logarithmic grid; estimate
+the accuracy of the whole procedure by nested cross-validation; and compare
+the confusion matrices of `LinearSVC` (one-vs-rest) and `SVC(kernel="linear")`
+(one-vs-one) on a held-out test split. Which classes are confused, and does
+the multi-class strategy matter here?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`GridSearchCV` inside `cross_val_score` gives the nested estimate (@sec-selection).
+Fit both final models on the same training split. With three classes,
+one-vs-rest trains 3 classifiers and one-vs-one 3 as well — but different ones.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_wine
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
+from sklearn.metrics import confusion_matrix
+
+Xw, yw = load_wine(return_X_y=True)
+grid = {"linearsvc__C": np.logspace(-3, 2, 11)}
+inner, outer = StratifiedKFold(5, shuffle=True, random_state=0), StratifiedKFold(5, shuffle=True, random_state=1)
+search = GridSearchCV(make_pipeline(StandardScaler(), LinearSVC(max_iter=20_000)), grid, cv=inner)
+nested = cross_val_score(search, Xw, yw, cv=outer)
+print(f"nested CV accuracy {nested.mean():.3f} ± {nested.std(ddof=1) / np.sqrt(5):.3f}")
+Xtr, Xte, ytr, yte = train_test_split(Xw, yw, test_size=0.3, stratify=yw, random_state=0)
+ovr = search.fit(Xtr, ytr)
+ovo = GridSearchCV(make_pipeline(StandardScaler(), SVC(kernel="linear")), {"svc__C": np.logspace(-3, 2, 11)}, cv=inner).fit(Xtr, ytr)
+for name, mdl in (("LinearSVC, one-vs-rest", ovr), ("SVC linear, one-vs-one", ovo)):
+    print(f"{name}: best C {list(mdl.best_params_.values())[0]:.3g}, test accuracy {mdl.score(Xte, yte):.3f}")
+    print(confusion_matrix(yte, mdl.predict(Xte)))
+```
+The wine classes are almost linearly separable after standardisation, so both
+strategies reach very high accuracy and the confusion matrices differ by at
+most a wine or two; the nested estimate, not the test split alone, is the
+number to report. With many classes the strategies differ more: one-vs-one
+trains $K(K-1)/2$ small problems, one-vs-rest $K$ large and unbalanced ones.
+Typical mistakes: reporting the best inner CV score as the accuracy, and
+forgetting the scaler (an SVM's margin is measured in the units of the
+features, so a feature with a large range dominates it).
+:::
+
+## Duality, KKT conditions and support vectors {#sec-svm-dual}
+
+The constrained problem @eq-svm-soft has a **dual** that is the key to both
+efficient algorithms and kernels. Introduce a multiplier $\alpha_i \ge 0$ for
+each margin constraint and $\mu_i \ge 0$ for each $\xi_i \ge 0$; the
+**Lagrangian** is
+$$
+\mathcal{L} = \frac12\lVert w\rVert^2 + C\sum_i\xi_i - \sum_i\alpha_i\big(y_i(w^\top x_i + b) - 1 + \xi_i\big) - \sum_i\mu_i\xi_i .
+$$
+
+::: {#thm-svm-dual}
+## The dual problem and the support vectors
+The dual of @eq-svm-soft is
+$$
+\max_\alpha\;\sum_i\alpha_i - \frac12\sum_{i,j}\alpha_i\alpha_jy_iy_j\,x_i^\top x_j
+\quad\text{subject to}\quad 0 \le \alpha_i \le C,\;\; \sum_i\alpha_iy_i = 0,
+$$ {#eq-svm-dual}
+the optimal values of the two problems are equal, and the solutions are linked
+by
+$$
+w^* = \sum_i\alpha_i^*y_ix_i .
+$$ {#eq-svm-w}
+Moreover (**complementary slackness**): if $y_if(x_i) > 1$ then $\alpha_i^* =
+0$; if $0 < \alpha_i^* < C$ then $y_if(x_i) = 1$ (the point is on an edge of
+the street); and if $y_if(x_i) < 1$ then $\alpha_i^* = C$.
+:::
+
+*In one line:* the solution is a weighted sum of training points, and only the
+points on or inside the street — the **support vectors** — have non-zero
+weight; every other point could be deleted without changing the classifier.
+
+::: {.deep kind="proof"}
+## Proof of @thm-svm-dual
+**Dual function.** For fixed multipliers, minimise $\mathcal{L}$ over the
+primal variables. $\partial\mathcal{L}/\partial w = w - \sum_i\alpha_iy_ix_i =
+0$ gives @eq-svm-w; $\partial\mathcal{L}/\partial b = -\sum_i\alpha_iy_i$ must
+vanish, otherwise $\mathcal{L}$ is unbounded below in $b$; $\partial
+\mathcal{L}/\partial\xi_i = C - \alpha_i - \mu_i = 0$, otherwise unbounded in
+$\xi_i$. Substituting, the $\xi$ and $b$ terms vanish and $\frac12\lVert
+w\rVert^2 - \sum_i\alpha_iy_iw^\top x_i = -\frac12\lVert w\rVert^2$, giving the
+objective of @eq-svm-dual; $\mu_i = C - \alpha_i \ge 0$ gives $\alpha_i \le C$.
+**Weak duality**: for any primal-feasible point and $\alpha, \mu \ge 0$, the
+subtracted terms of $\mathcal{L}$ are non-negative, so $\mathcal{L} \le$
+primal objective, and the dual function (a minimum of $\mathcal{L}$) is at
+most the primal objective at every feasible point. **Strong duality**: the
+primal is a convex quadratic problem with affine constraints and is feasible
+(take $w = 0$, $b = 0$, $\xi_i = 1$), so the duality gap is zero and both
+optima are attained [@boyd2004, §5.2.3 and §5.5.3]. At the optimum, then, the
+**KKT conditions** hold, among them $\alpha_i(y_if_i - 1 + \xi_i) = 0$ and
+$\mu_i\xi_i = (C - \alpha_i)\xi_i = 0$. If $y_if_i > 1$ then $\xi_i = 0$ and
+$y_if_i - 1 + \xi_i > 0$, so $\alpha_i = 0$. If $0 < \alpha_i < C$, the second
+condition gives $\xi_i = 0$ and the first $y_if_i = 1$. If $y_if_i < 1$, then
+$\xi_i \ge 1 - y_if_i > 0$, so $\alpha_i = C$. $\blacksquare$
+:::
+
+The intercept follows from any **free** support vector ($0 < \alpha_i < C$),
+for which $y_i(w^{*\top}x_i + b) = 1$, i.e. $b = y_i - w^{*\top}x_i$
+(libraries average over all free support vectors). The dual is what libsvm,
+the solver behind `SVC`, actually solves, with Platt's **sequential minimal
+optimisation** (SMO): it repeatedly picks two multipliers and optimises over
+them analytically, the smallest step that respects $\sum_i\alpha_iy_i = 0$
+[@platt1998; @chang2011].
+
+Sparsity has a statistical consequence.
+
+::: {#thm-svm-loo}
+## The leave-one-out bound
+For the maximal margin classifier (and for any problem where the solution
+does not change when a non-support vector is removed), the leave-one-out
+cross-validation error is at most the fraction of support vectors,
+$\#\mathrm{SV}/n$.
+:::
+
+*In one line:* a model that depends on few training points cannot be very
+wrong about the others — removing any of them does not even change it.
+
+::: {.deep kind="proof"}
+## Proof of @thm-svm-loo
+Leave out a point $x_i$ that is not a support vector ($\alpha_i^* = 0$). The
+remaining multipliers are still feasible for the dual without $x_i$ (the
+equality $\sum\alpha_jy_j = 0$ is unaffected) and still satisfy all KKT
+conditions of the reduced problem, which by convexity characterise its
+optimum: the solution is unchanged. That solution classifies $x_i$
+correctly, since $y_if(x_i) > 0$ for every point that is not a support vector
+in the separable case ($y_if \ge 1$). Hence leave-one-out errors can only occur
+at support vectors, and their number is at most $\#\mathrm{SV}$. (For the
+soft margin, the same argument shows that a non-support vector with $y_if >
+1$ is classified correctly when left out.) [@vapnik1998, ch. 10]
+$\blacksquare$
+:::
+
+```{python}
+from scipy.optimize import minimize
+from sklearn.model_selection import LeaveOneOut
+
+r = np.random.default_rng(5)
+Xq = np.vstack([r.normal([1, 1], 1.0, (25, 2)), r.normal([-1, -1], 1.0, (25, 2))]); yq = np.repeat([1, -1], 25)
+Cq = 1.0
+G = (yq[:, None] * yq[None, :]) * (Xq @ Xq.T)                       # y_i y_j x_i^T x_j
+dual = minimize(lambda a: 0.5 * a @ G @ a - a.sum(), np.zeros(len(yq)), jac=lambda a: G @ a - 1,
+                bounds=[(0, Cq)] * len(yq), constraints=[{"type": "eq", "fun": lambda a: a @ yq, "jac": lambda a: yq.astype(float)}],
+                method="SLSQP", options={"ftol": 1e-12, "maxiter": 1000})
+alpha = dual.x
+w_dual = (alpha * yq) @ Xq                                            # @eq-svm-w
+free = (alpha > 1e-6) & (alpha < Cq - 1e-6)
+b_dual = np.mean(yq[free] - Xq[free] @ w_dual)
+svc = SVC(kernel="linear", C=Cq).fit(Xq, yq)
+print("dual by SLSQP: w =", w_dual.round(4), "b =", round(b_dual, 4), "| support vectors:", np.sum(alpha > 1e-6))
+print("SVC:           w =", svc.coef_[0].round(4), "b =", svc.intercept_.round(4)[0], "| support vectors:", len(svc.support_))
+dual_sk = np.zeros(len(yq)); dual_sk[svc.support_] = np.abs(svc.dual_coef_[0])        # dual_coef_ stores y_i alpha_i
+print(f"max |alpha difference| = {np.abs(alpha - dual_sk).max():.1e}")
+loo_err = 1 - cross_val_score(SVC(kernel="linear", C=Cq), Xq, yq, cv=LeaveOneOut()).mean()
+print(f"leave-one-out error {loo_err:.3f}  <=  support-vector fraction {len(svc.support_) / len(yq):.3f}")
+```
+
+Our dual solution matches libsvm's multipliers (`dual_coef_` stores
+$y_i\alpha_i$ for the support vectors), and the leave-one-out error is well
+below the support-vector fraction. With overlapping classes many points are
+inside the street, so the bound is loose; it is informative when the support
+vectors are few.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla4-dual-easy}
+## Easy — reading the multipliers
+An SVM with $C = 2$ has, at the optimum, multipliers $\alpha = (0, 0.7, 2,
+0, 2)$ for five training points. For each point, say whether it is outside
+the street, on an edge, or inside the street / misclassified. Which points
+determine $w$? Can you tell which of the points with $\alpha_i = C$ are
+misclassified?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use the three cases of complementary slackness in @thm-svm-dual.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Points 1 and 4 ($\alpha = 0$): on or outside the street — not support vectors
+($\alpha_i = 0$ allows $y_if_i \ge 1$, including exactly on the edge, a
+degenerate case). Point 2 ($0 < \alpha < C$): exactly on an edge, $y_if_2 =
+1$. Points 3 and 5 ($\alpha = C$): $y_if_i \le 1$ — inside the street or on
+the wrong side. $w = 0.7y_2x_2 + 2y_3x_3 + 2y_5x_5$. The multipliers alone do
+not say whether points 3 and 5 are misclassified: that needs the score
+$y_if_i$ (negative means misclassified). A common error is to call every
+support vector "misclassified".
+:::
+
+::: {#exr-mla4-dual-medium}
+## Medium — checking the KKT conditions
+For `SVC(kernel="linear", C=1)` fitted on the 50 points of the dual example,
+compute $y_if(x_i)$ for every point and check numerically each of the three
+complementary-slackness statements of @thm-svm-dual, using `support_` and
+`dual_coef_`. How many points are on the edges, how many inside the street,
+how many misclassified?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`decision_function` gives $f(x_i)$. Rebuild the full vector of $\alpha$ with
+zeros for non-support vectors. Use tolerances around $10^{-3}$: libsvm stops
+at `tol=1e-3`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+yf = yq * svc.decision_function(Xq)
+a = dual_sk
+tol = 1e-3
+print("alpha = 0 but y f < 1 - tol:", np.sum((a < tol) & (yf < 1 - tol)))
+print("0 < alpha < C but |y f - 1| > tol:", np.sum((a > tol) & (a < Cq - tol) & (np.abs(yf - 1) > tol)))
+print("y f < 1 - tol but alpha < C - tol:", np.sum((yf < 1 - tol) & (a < Cq - tol)))
+print(f"on an edge: {np.sum((a > tol) & (a < Cq - tol))}, inside the street but correct: {np.sum((yf > 0) & (yf < 1 - tol))}, "
+      f"misclassified: {np.sum(yf < 0)}")
+```
+All three violation counts are zero (up to the solver's tolerance). The
+support vectors split into the few free ones on the edges, which fix $b$, and
+the bounded ones inside the street or on the wrong side. Reading these counts
+is a quick diagnosis: very many bounded support vectors mean heavily
+overlapping classes or a $C$ too small. The usual mistake is to forget that
+`dual_coef_` contains $y_i\alpha_i$ (signed), not $\alpha_i$.
+:::
+
+::: {#exr-mla4-dual-hard}
+## Hard — how tight is the bound?
+For the breast-cancer data (standardised), compute for `SVC(kernel="linear")`
+with $C \in \{0.001, 0.01, 0.1, 1, 10\}$ the fraction of support vectors, the
+leave-one-out error, and the 10-fold cross-validated error. When is the bound
+of @thm-svm-loo useful, and which estimate would you report?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Put the scaler in a pipeline so that every leave-one-out fit rescales on its
+own training data; 569 fits per value of $C$ are fast for a linear SVM.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+for Cc in (0.001, 0.01, 0.1, 1, 10):
+    pipe = make_pipeline(StandardScaler(), SVC(kernel="linear", C=Cc))
+    sv_frac = len(pipe.fit(Xb, yb01)[-1].support_) / len(yb01)
+    loo = 1 - cross_val_score(pipe, Xb, yb01, cv=LeaveOneOut()).mean()
+    cv10 = 1 - cross_val_score(pipe, Xb, yb01, cv=StratifiedKFold(10, shuffle=True, random_state=0)).mean()
+    print(f"C = {Cc:6}: support vectors {sv_frac:.3f} | LOO error {loo:.3f} | 10-fold error {cv10:.3f}")
+```
+For small $C$ most points are support vectors and the bound says almost
+nothing; as $C$ grows the support vectors become few and the bound becomes
+informative, but always remains above the leave-one-out error, which is the
+estimate to report (with 10-fold CV as a cheaper alternative). The bound is
+useful as a free sanity check — computed from one fit — and as a theoretical
+explanation of why sparse solutions generalise. Mistake to avoid: fitting the
+scaler once on all the data before leave-one-out.
+:::
+
+## Kernels {#sec-svm-kernels}
+
+Many problems are not linearly separable in the original features, but become
+so after a transformation: two classes separated by a circle become separable
+by a plane after adding the feature $x_1^2 + x_2^2$ (@exr-mla2-choosing-medium).
+In general we could map every point through a **feature map** $\varphi :
+\mathbb{R}^d \to \mathbb{R}^D$ and fit a linear SVM to $\varphi(x_i)$. In the
+dual @eq-svm-dual and in the prediction
+$$
+f(x) = w^\top\varphi(x) + b = \sum_i\alpha_iy_i\,\varphi(x_i)^\top\varphi(x) + b
+$$ {#eq-svm-kernel-predict}
+the map appears only through inner products. If a function
+$K(x, z) = \varphi(x)^\top\varphi(z)$ can be computed directly, we never need
+$\varphi$ — even when $D$ is enormous or infinite. This is the **kernel
+trick**, introduced into machine learning by Aizerman, Braverman and Rozonoer
+[@aizerman1964] and combined with the maximal margin by Boser, Guyon and
+Vapnik [@boser1992].
+
+| Kernel (scikit-learn `kernel=`) | $K(x, z)$ | Parameters |
+|---|---|---|
+| `"linear"` | $x^\top z$ | — |
+| `"poly"` | $(\gamma\,x^\top z + r)^p$ | `degree` $p$, `gamma` $\gamma$, `coef0` $r$ |
+| `"rbf"` (Gaussian) | $\exp(-\gamma\lVert x - z\rVert^2)$ | `gamma` $\gamma > 0$ |
+| `"sigmoid"` | $\tanh(\gamma\,x^\top z + r)$ | `gamma`, `coef0` |
+
+: The kernels of `SVC`. The default `gamma="scale"` is $1/(d\cdot\operatorname{Var}(X))$, with the variance of all entries of the training matrix {#tbl-svm-kernels}
+
+::: {#prp-svm-poly}
+## The polynomial kernel is an inner product
+For $x, z \in \mathbb{R}^d$, $(x^\top z + r)^2 = \varphi(x)^\top\varphi(z)$ with
+$$
+\varphi(x) = \big(x_1^2, \dots, x_d^2,\; \sqrt2x_jx_k\ (j < k),\; \sqrt{2r}\,x_1, \dots, \sqrt{2r}\,x_d,\; r\big),
+$$
+a vector of dimension $\binom{d+2}{2}$: all monomials of degree at most 2.
+:::
+
+*In one line:* squaring an inner product computes, in $O(d)$ operations, the
+inner product of the $O(d^2)$ quadratic features.
+
+::: {.deep kind="proof"}
+## Proof of @prp-svm-poly
+$(x^\top z + r)^2 = (\sum_jx_jz_j)^2 + 2r\sum_jx_jz_j + r^2 = \sum_jx_j^2z_j^2 +
+2\sum_{j<k}x_jx_kz_jz_k + \sum_j2rx_jz_j + r^2$, which is $\varphi(x)^\top
+\varphi(z)$ term by term. Counting coordinates: $d$ squares, $\binom d2$
+products, $d$ linear terms and one constant, $\binom{d+2}{2}$ in total. For
+degree $p$ the same expansion (multinomial theorem) gives all monomials of
+degree $\le p$, $\binom{d+p}{p}$ of them [@scholkopf2002, §2.1]. $\blacksquare$
+:::
+
+Which functions $K$ are inner products in *some* feature space? A necessary
+condition is easy to prove; it is also sufficient.
+
+::: {#thm-svm-psd}
+## Kernels and positive semidefinite Gram matrices
+If $K(x, z) = \varphi(x)^\top\varphi(z)$, then for any points $x_1, \dots,
+x_m$ the **Gram matrix** $G_{ij} = K(x_i, x_j)$ is symmetric positive
+semidefinite. Conversely (Mercer; Moore–Aronszajn), every symmetric $K$ whose
+Gram matrices are all positive semidefinite is an inner product
+$\langle\varphi(x), \varphi(z)\rangle$ in some Hilbert space.
+:::
+
+*In one line:* a function is a valid kernel exactly when it never produces a
+"negative squared length" — and then the dual remains a convex problem.
+
+::: {.deep kind="proof"}
+## Proof of @thm-svm-psd (first part) and remarks
+Symmetry is clear. For any $c \in \mathbb{R}^m$, $c^\top Gc = \sum_{ij}c_ic_j
+\varphi(x_i)^\top\varphi(x_j) = \lVert\sum_ic_i\varphi(x_i)\rVert^2 \ge 0$.
+$\blacksquare$ The converse constructs $\varphi(x) = K(x, \cdot)$ in the space
+of functions spanned by the $K(x, \cdot)$ with the inner product
+$\langle K(x, \cdot), K(z, \cdot)\rangle = K(x, z)$ — the **reproducing
+kernel Hilbert space** [@aronszajn1950; @scholkopf2002, §2.2]; Mercer's
+theorem gives an explicit eigen-expansion for continuous kernels on compact
+sets [@mercer1909]. Positive semidefiniteness is what makes the quadratic
+form in @eq-svm-dual concave, so that the dual has no spurious local optima.
+:::
+
+::: {#prp-svm-rbf}
+## The Gaussian kernel has an infinite-dimensional feature map
+For $x, z \in \mathbb{R}$ and $\gamma > 0$,
+$$
+e^{-\gamma(x - z)^2} = \sum_{k=0}^\infty\varphi_k(x)\varphi_k(z),\qquad
+\varphi_k(x) = e^{-\gamma x^2}\sqrt{\frac{(2\gamma)^k}{k!}}\,x^k .
+$$
+Hence the RBF kernel is a valid kernel, whose feature space contains
+(weighted) monomials of every degree; the same holds in $d$ dimensions, where
+$K$ factorises over coordinates.
+:::
+
+*In one line:* the Gaussian kernel is a polynomial kernel of infinite degree,
+damped so that high degrees count less — which is why it can fit almost any
+boundary.
+
+::: {.deep kind="proof"}
+## Proof of @prp-svm-rbf
+$e^{-\gamma(x - z)^2} = e^{-\gamma x^2}e^{-\gamma z^2}e^{2\gamma xz}$ and
+$e^{2\gamma xz} = \sum_k\frac{(2\gamma xz)^k}{k!}$ (the series converges for
+all $x, z$); distributing $\sqrt{(2\gamma)^k/k!}$ and $e^{-\gamma(\cdot)^2}$ to
+the two factors gives $\sum_k\varphi_k(x)\varphi_k(z)$. In $d$ dimensions
+$e^{-\gamma\lVert x - z\rVert^2} = \prod_je^{-\gamma(x_j - z_j)^2}$, and a
+product of kernels is a kernel (its feature map is the tensor product of the
+feature maps). The sum of non-negative-definite rank-one terms gives
+positive semidefinite Gram matrices, as in @thm-svm-psd. $\blacksquare$
+:::
+
+The **sigmoid** kernel, by contrast, is not positive semidefinite for all
+parameters — its Gram matrices can have negative eigenvalues — so `SVC` with
+`kernel="sigmoid"` solves a non-convex problem and can behave erratically; it
+survives mainly for its resemblance to a neural network unit
+[@scholkopf2002, §2.3]. The figure compares the four kernels on the same
+non-linear problem.
+
+```{python}
+#| label: fig-svm-kernels
+#| fig-cap: "The four kernels of SVC on 200 points of the two-moons problem (standardised; C = 1, default gamma; polynomial of degree 3 with coef0 = 1). The 5-fold cross-validated accuracy is in each title."
+from sklearn.datasets import make_moons
+Xm, ym = make_moons(200, noise=0.25, random_state=0)
+Xm = StandardScaler().fit_transform(Xm)
+kernels = {"linear": SVC(kernel="linear"), "polynomial, degree 3": SVC(kernel="poly", degree=3, coef0=1),
+           "Gaussian (RBF)": SVC(kernel="rbf"), "sigmoid": SVC(kernel="sigmoid")}
+fig, axes = plt.subplots(1, 4, figsize=(12, 3.3), sharey=True)
+for ax, (name, mdl) in zip(axes, kernels.items()):
+    acc = cross_val_score(mdl, Xm, ym, cv=StratifiedKFold(5, shuffle=True, random_state=0)).mean()
+    mlalgbook.regions(ax, mdl.fit(Xm, ym), Xm, ym, s=10)
+    ax.set_title(f"{name}\nCV accuracy {acc:.3f}", fontsize=9)
+fig.tight_layout(); plt.show()
+```
+
+The Gaussian kernel has two knobs. $\gamma$ sets the **reach** of each
+training point: the kernel falls to $e^{-1}$ at distance $1/\sqrt\gamma$. A
+small $\gamma$ gives smooth, almost linear boundaries; a large $\gamma$ makes
+each support vector influence only its immediate surroundings, and the
+boundary can wrap around individual points. $C$, as before, trades margin for
+training errors. Explore the pair:
+
+```{python}
+#| echo: false
+_Xm, _ym = make_moons(150, noise=0.3, random_state=3)
+_Xm = StandardScaler().fit_transform(_Xm)
+_gx = np.linspace(-2.6, 2.6, 52)
+_xx, _yy = np.meshgrid(_gx, _gx)
+_P = np.column_stack([_xx.ravel(), _yy.ravel()])
+_Cs, _gs = [0.1, 1, 10, 100, 1000], [0.05, 0.3, 1, 5, 30]
+_rbf = []
+for _C in _Cs:
+    for _g in _gs:
+        _m = SVC(kernel="rbf", C=_C, gamma=_g).fit(_Xm, _ym)
+        _rbf.append({"C": _C, "gamma": _g, "pred": _m.predict(_P).astype(int).tolist(), "sv": int(len(_m.support_)),
+                     "train": float(_m.score(_Xm, _ym)),
+                     "cv": float(cross_val_score(SVC(kernel="rbf", C=_C, gamma=_g), _Xm, _ym, cv=StratifiedKFold(5, shuffle=True, random_state=0)).mean())})
+ojs_define(rbfPts=[{"x": float(a), "y": float(b), "label": int(c)} for (a, b), c in zip(_Xm, _ym)],
+           rbfFits=_rbf, rbfGrid=_gx.tolist(), rbfCs=_Cs, rbfGammas=_gs)
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof rbfC = Inputs.radio(rbfCs, {value: 1, label: "C"})
+```
+
+```{ojs}
+//| echo: false
+viewof rbfG = Inputs.radio(rbfGammas, {value: 1, label: "γ"})
+```
+
+```{ojs}
+//| echo: false
+rbfFit = rbfFits.find(d => d.C === rbfC && d.gamma === rbfG)
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">C = ${rbfFit.C}, γ = ${rbfFit.gamma} — support vectors ${rbfFit.sv} of ${rbfPts.length}, training accuracy ${rbfFit.train.toFixed(3)}, 5-fold CV accuracy ${rbfFit.cv.toFixed(3)}</p>`
+```
+
+```{ojs}
+//| echo: false
+rbfCells = {
+  const g = rbfGrid, n = g.length, h = (g[1] - g[0]) / 2, out = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++)
+    out.push({x1: g[j] - h, x2: g[j] + h, y1: g[i] - h, y2: g[i] + h, label: rbfFit.pred[i * n + j]});
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-svm-rbf-widget
+//| fig-cap: "Gaussian-kernel SVM on 150 points of the two-moons problem. Small γ: nearly linear boundary (bias). Large γ with large C: islands around individual points (variance); the training accuracy approaches 1 while the cross-validated accuracy drops."
+Plot.plot({
+  height: 360, width: 420, x: {domain: [-2.6, 2.6], label: "x₁"}, y: {domain: [-2.6, 2.6], label: "x₂"},
+  color: {type: "ordinal", domain: [0, 1], range: ["#2a78d6", "#eb6834"]},
+  marks: [
+    Plot.rect(rbfCells, {x1: "x1", x2: "x2", y1: "y1", y2: "y2", fill: "label", fillOpacity: 0.22}),
+    Plot.dot(rbfPts, {x: "x", y: "y", fill: "label", r: 3.2, stroke: "#fcfcfb", strokeWidth: 0.5})
+  ]
+})
+```
+:::
+
+### SVMs in practice
+
+- **Scale the features** (inside a pipeline). Distances and inner products
+  are computed in the units of the features: a feature measured in grams next
+  to one on a 1–10 scale would dominate both the margin and the RBF kernel.
+- **Tune $C$ and $\gamma$ together** on a logarithmic grid by
+  cross-validation; their effects interact (a large $\gamma$ needs a smaller
+  $C$ and vice versa) [@hsu2003].
+- **More than two classes**: `SVC` trains one binary SVM for every pair of
+  classes (one-vs-one, $K(K-1)/2$ models) and predicts by voting; `LinearSVC`
+  uses one-vs-rest.
+- **Probabilities**: SVM scores are not probabilities. `SVC(probability=True)`
+  fits Platt's logistic map from scores to probabilities with an internal
+  5-fold cross-validation [@platt2000], which is slower and can disagree with
+  `predict` on borderline points.
+- **Cost**: kernel SVMs need the $n \times n$ kernel matrix (or recompute it);
+  training time grows between $n^2$ and $n^3$. Beyond a few tens of thousands
+  of examples, prefer `LinearSVC` or `SGDClassifier(loss="hinge")`
+  (@sec-opt-sgd), possibly on approximate kernel features.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla4-kernels-easy}
+## Easy — a kernel value two ways
+For $x = (1, 2)$ and $z = (3, -1)$, compute $(x^\top z + 1)^2$ directly and
+through the explicit feature map of @prp-svm-poly; then compute the RBF
+kernel with $\gamma = 0.5$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$x^\top z = 1$. The feature map has 6 coordinates for $d = 2$: $x_1^2, x_2^2,
+\sqrt2x_1x_2, \sqrt2x_1, \sqrt2x_2, 1$ (with $r = 1$).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$(1 + 1)^2 = 4$. With $\varphi(x) = (1, 4, 2\sqrt2, \sqrt2, 2\sqrt2, 1)$ and
+$\varphi(z) = (9, 1, -3\sqrt2, 3\sqrt2, -\sqrt2, 1)$: $9 + 4 - 12 + 6 - 4 + 1
+= 4$. RBF: $\lVert x - z\rVert^2 = 4 + 9 = 13$, $e^{-6.5} \approx 0.0015$.
+```{python}
+phi = lambda v: np.array([v[0]**2, v[1]**2, np.sqrt(2) * v[0] * v[1], np.sqrt(2) * v[0], np.sqrt(2) * v[1], 1.0])
+x_, z_ = np.array([1.0, 2.0]), np.array([3.0, -1.0])
+print((x_ @ z_ + 1) ** 2, phi(x_) @ phi(z_), np.exp(-0.5 * np.sum((x_ - z_) ** 2)))
+```
+The RBF value is tiny: the two points are far apart relative to the reach
+$1/\sqrt{0.5} \approx 1.4$, so under this kernel they barely "see" each
+other. Forgetting the $\sqrt2$ factors in the feature map is the classic slip.
+:::
+
+::: {#exr-mla4-kernels-medium}
+## Medium — positive semidefinite or not
+For 100 random points in $\mathbb{R}^5$, compute the smallest eigenvalue of
+the Gram matrices of the RBF kernel ($\gamma = 0.2$) and of the sigmoid kernel
+$\tanh(\gamma x^\top z + r)$ for $(\gamma, r) = (0.2, 0)$ and $(0.2, -1)$.
+Then verify that `SVC(kernel="precomputed")` given the RBF Gram matrix
+reproduces `SVC(kernel="rbf", gamma=0.2)`.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`sklearn.metrics.pairwise` has `rbf_kernel` and `sigmoid_kernel`;
+`np.linalg.eigvalsh` returns eigenvalues in ascending order. For the
+precomputed SVM, prediction needs the kernel between the test and the
+training points.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.metrics.pairwise import rbf_kernel, sigmoid_kernel
+Z5 = np.random.default_rng(6).normal(size=(100, 5)); lab5 = (Z5[:, 0] * Z5[:, 1] > 0).astype(int)
+print("RBF: smallest eigenvalue", f"{np.linalg.eigvalsh(rbf_kernel(Z5, gamma=0.2))[0]:.2e}")
+for coef0 in (0, -1):
+    print(f"sigmoid (gamma 0.2, coef0 {coef0}): smallest eigenvalue {np.linalg.eigvalsh(sigmoid_kernel(Z5, gamma=0.2, coef0=coef0))[0]:.3f}")
+pre = SVC(kernel="precomputed").fit(rbf_kernel(Z5, gamma=0.2), lab5)
+direct = SVC(kernel="rbf", gamma=0.2).fit(Z5, lab5)
+Znew = np.random.default_rng(7).normal(size=(20, 5))
+print("same decisions:", np.allclose(pre.decision_function(rbf_kernel(Znew, Z5, gamma=0.2)), direct.decision_function(Znew)))
+```
+The RBF Gram matrix is positive (semi)definite, its smallest eigenvalue
+non-negative up to rounding; the sigmoid ones have clearly negative
+eigenvalues — they are not valid kernels for these points. The precomputed
+route gives identical decisions: an SVM only ever sees kernel values. Typical
+slip: passing the test–test kernel instead of the test–train kernel to
+`predict`.
+:::
+
+::: {#exr-mla4-kernels-hard}
+## Hard — tuning an RBF SVM on measurements
+On the wine data, tune $C$ and $\gamma$ of an RBF `SVC` in a pipeline with
+`StandardScaler` by 5-fold `GridSearchCV` on a $7 \times 7$ logarithmic grid;
+draw the heat map of the cross-validated accuracy; estimate the accuracy of
+the whole procedure by nested cross-validation; and compare with the linear
+SVM of @exr-mla4-soft-hard. Then remove the scaler and repeat the grid search:
+what happens, and why?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`GridSearchCV.cv_results_["mean_test_score"]` reshaped to the grid gives the
+heat map. Without scaling, look at the ranges of the wine features (proline is
+in the hundreds or thousands, most others below 10).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-svm-wine-grid
+#| fig-cap: "Cross-validated accuracy of an RBF SVM on the standardised wine data over a grid of C and γ. The good region is a diagonal band: larger γ needs smaller C."
+C_grid, g_grid = np.logspace(-2, 4, 7), np.logspace(-4, 2, 7)
+pipe = make_pipeline(StandardScaler(), SVC(kernel="rbf"))
+gs = GridSearchCV(pipe, {"svc__C": C_grid, "svc__gamma": g_grid}, cv=inner).fit(Xw, yw)
+acc_grid = gs.cv_results_["mean_test_score"].reshape(len(C_grid), len(g_grid))
+fig, ax = plt.subplots(figsize=(5.2, 4))
+im = ax.imshow(acc_grid, origin="lower", cmap="Blues", vmin=0.3, vmax=1)
+ax.set_xticks(range(7), [f"{g:g}" for g in g_grid], rotation=45); ax.set_yticks(range(7), [f"{c:g}" for c in C_grid])
+ax.set_xlabel("γ"); ax.set_ylabel("C"); ax.grid(False); fig.colorbar(im, label="CV accuracy"); plt.show()
+nested_rbf = cross_val_score(GridSearchCV(pipe, {"svc__C": C_grid, "svc__gamma": g_grid}, cv=inner), Xw, yw, cv=outer)
+raw = GridSearchCV(SVC(kernel="rbf"), {"C": C_grid, "gamma": g_grid}, cv=inner).fit(Xw, yw)
+print(f"best (scaled): {gs.best_params_}, CV accuracy {gs.best_score_:.3f}; nested estimate {nested_rbf.mean():.3f} ± {nested_rbf.std(ddof=1) / np.sqrt(5):.3f}")
+print(f"without scaling: best {raw.best_params_}, CV accuracy {raw.best_score_:.3f}")
+```
+With scaling, a broad diagonal band of $(C, \gamma)$ reaches very high
+accuracy, comparable with the linear SVM (the wine classes are nearly linearly
+separable, so the kernel adds little here). Without scaling, distances are
+dominated by proline and magnesium, the kernel effectively sees one or two
+features, and even the best grid point is much worse. For the project the
+lesson is direct: the fruit measurements are on very different scales
+(grams, millimetres, 1–10 scores), and any distance- or kernel-based model
+must be preceded by scaling fitted inside the cross-validation. Mistakes to
+avoid: a grid that is too narrow (check that the best point is not on its
+edge) and reporting `best_score_` instead of the nested estimate.
+:::
+
+::: {.project-link}
+**In the project.** An SVM with an RBF kernel is a strong competitor for a
+small table of continuous measurements with a handful of classes: it is the
+natural model to compare with $k$-NN, because both rely on **distances**
+between fruits — and both therefore require **scaling** inside a pipeline.
+For five classes `SVC` trains ten one-vs-one classifiers; its errors can be
+read from the same per-class confusion matrix. Two cautions: tune $C$ and
+$\gamma$ together, and report a nested estimate when the comparison between
+models is the result.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **No scaling.** The margin and the kernels are geometric: features with
+  large ranges dominate.
+- **Reading $C$ as a penalty strength.** It is the *inverse*: large $C$ means
+  little regularisation.
+- **Tuning $C$ and $\gamma$ separately**, or on a grid whose optimum sits on
+  the border.
+- **Using decision scores as probabilities**, or trusting
+  `probability=True` outputs without checking their calibration.
+- **Deleting outliers to improve the fit.** Lower $C$, or justify the removal
+  by what the point is, not by its effect on the score.
+- **Kernel SVMs on large data sets**: quadratic memory and super-quadratic
+  time; use linear models or approximations.
+- **The sigmoid kernel** is not a valid kernel for many parameter values.
+:::
+
+## Summary
+
+- The signed distance from $w^\top x + b = 0$ is $(w^\top x + b)/\lVert
+  w\rVert$; the maximal margin classifier minimises $\frac12\lVert w\rVert^2$
+  subject to $y_if(x_i) \ge 1$ — a convex problem with a unique solution.
+- The soft margin adds slacks at price $C$; it is equivalent to minimising the
+  hinge loss plus $\frac{1}{2C}\lVert w\rVert^2$. The hinge bounds the 0–1 loss
+  and is zero for points beyond the margin.
+- The dual depends on the data only through inner products; $w = \sum_i
+  \alpha_iy_ix_i$, with $\alpha_i > 0$ only for support vectors (KKT), and
+  the leave-one-out error is at most the fraction of support vectors.
+- Kernels replace inner products by $K(x, z)$; valid kernels have positive
+  semidefinite Gram matrices. The RBF kernel's feature space is
+  infinite-dimensional; $\gamma$ sets the reach, $C$ the trade-off.
+- In practice: scale, tune $C$ and $\gamma$ jointly by cross-validation, use
+  linear SVMs for large data.
+
+## Exercises
+
+::: {#exr-mla4-representer}
+**The representer property.** Show that for any $w \in \mathbb{R}^D$ the
+objective @eq-svm-hinge (with $\varphi(x_i)$ in place of $x_i$) does not
+increase when $w$ is replaced by its projection onto the span of the
+$\varphi(x_i)$. Conclude that an optimal $w$ is a combination of the training
+points even without going through the dual.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Write $w = w_\parallel + w_\perp$, with $w_\parallel$ in the span $S$ of the
+$\varphi(x_i)$ and $w_\perp$ orthogonal to $S$. Then $w^\top\varphi(x_i) =
+w_\parallel^\top\varphi(x_i)$ for every $i$, so the hinge terms are
+unchanged, while $\lVert w\rVert^2 = \lVert w_\parallel\rVert^2 + \lVert
+w_\perp\rVert^2 \ge \lVert w_\parallel\rVert^2$. Hence the projection is never
+worse, and any minimiser has $w_\perp = 0$: $w = \sum_i\beta_i\varphi(x_i)$.
+This is the **representer theorem** in its simplest form; it holds for every
+loss that depends on $w$ only through the values $w^\top\varphi(x_i)$, plus an
+increasing function of $\lVert w\rVert$ [@scholkopf2001]. It is why kernel
+ridge regression and kernel logistic regression also work with kernels.
+:::
+
+::: {#exr-mla4-svm-vs-logistic}
+**Hinge versus logistic.** On the moons data of @fig-svm-kernels, compare a
+linear SVM and logistic regression on the *same* polynomial features of
+degree 3 (pipeline with scaling), each with its regularisation chosen by
+cross-validation. Are their boundaries and accuracies different? What remains
+specific to the SVM?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LogisticRegression
+cv5 = StratifiedKFold(5, shuffle=True, random_state=0)
+svm_poly = GridSearchCV(make_pipeline(PolynomialFeatures(3), StandardScaler(), LinearSVC(max_iter=50_000)),
+                        {"linearsvc__C": np.logspace(-3, 2, 11)}, cv=cv5)
+log_poly = GridSearchCV(make_pipeline(PolynomialFeatures(3), StandardScaler(), LogisticRegression(max_iter=5000)),
+                        {"logisticregression__C": np.logspace(-3, 3, 13)}, cv=cv5)
+for name, m_ in (("linear SVM", svm_poly), ("logistic", log_poly)):
+    print(f"{name:10s}: nested CV accuracy {cross_val_score(m_, Xm, ym, cv=StratifiedKFold(5, shuffle=True, random_state=1)).mean():.3f}")
+```
+On the same features the two linear models perform almost identically: the
+choice of features and of the regularisation matters far more than hinge
+versus logistic loss [@hastie2009, §12.3.2]. What remains specific to the SVM
+is sparsity in the dual (support vectors) and, with kernels, the ability to
+work in feature spaces that are never built; what remains specific to
+logistic regression is calibrated probabilities.
+:::
+
+## Further reading {.unnumbered}
+
+- @james2023, ch. 9 — support vector machines, gently, with a Python lab;
+  @hastie2009, ch. 12 — the SVM as penalised hinge-loss minimisation, and
+  kernels.
+- @cortes1995 — the soft-margin paper; @boser1992 — margin plus kernels;
+  @vapnik1998 — the theory behind them.
+- @scholkopf2002, ch. 1–2 and 7 — kernels, feature spaces, the representer
+  theorem and SVMs in depth.
+- @boyd2004, ch. 5 — Lagrange duality and KKT conditions, the machinery of
+  @thm-svm-dual.
+- @platt1998 and @chang2011 — SMO and libsvm, the solver inside `SVC`;
+  @hsu2003 — a practical guide to scaling and to choosing $C$ and $\gamma$.
+- @shalevshwartz2014, ch. 15–16 — SVMs and kernels from the learning-theory
+  side; @shalevshwartz2011 — Pegasos.

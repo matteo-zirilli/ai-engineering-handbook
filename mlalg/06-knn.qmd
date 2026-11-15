@@ -1,0 +1,995 @@
+# Nearest neighbours {#sec-ch-mla-knn}
+
+> *"The nearest neighbor decision rule assigns to an unclassified sample point
+> the classification of the nearest of a set of previously classified
+> points."* — Thomas Cover and Peter Hart, 1967 [@cover1967]
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- define the **$k$-nearest-neighbour** rule for classification and regression,
+  with uniform or distance weights, and its **radius** variant; compute it by
+  hand and implement it in NumPy, matching scikit-learn;
+- choose a **distance**: verify the metric axioms, **prove** the triangle
+  inequality for the Minkowski distances, and explain why **scaling** decides
+  which points are neighbours (and why Mahalanobis is Euclidean after
+  whitening);
+- choose **$k$** by cross-validation, explaining its effect through the
+  bias–variance trade-off and the optimism of $k = 1$;
+- **prove** the Cover–Hart bound (asymptotically, 1-NN errs at most twice as
+  often as the Bayes classifier) and the geometric facts behind the **curse
+  of dimensionality**;
+- use the radius rule to **abstain** on inputs unlike anything seen in
+  training.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Nearest neighbours; the $k$-nearest-neighbour classifier; distance metrics;
+radius neighbours; in practice, training a $k$-NN model, visualising the
+neighbours, training a radius-neighbours model and visualising the
+neighbours within the radius.
+:::
+
+## Intuition: ask the neighbours {#sec-knn-intuition}
+
+To guess the price of a flat, an estate agent looks at the most similar flats
+sold recently and takes something like their average. To guess the species of
+a plant, a botanist compares it with the specimens it most resembles. The
+**nearest-neighbour** method does exactly this: it keeps every training
+example and, for a new point, finds the $k$ most similar ones and lets them
+vote (classification) or averages their values (regression).
+
+It is the archetypal non-parametric model (@sec-ch-mla-parametric): no
+training beyond storing the data, a boundary that can take any shape, and a
+single knob, $k$. Everything rests on one choice that the algorithm cannot
+make for you — what "similar" means, i.e. the **distance** — and on having
+enough data near every point where predictions are needed. This chapter
+studies both.
+
+## The $k$-nearest-neighbour rule {#sec-knn-rule}
+
+Let $(x_1, y_1), \dots, (x_n, y_n)$ be the training data and $d(\cdot,
+\cdot)$ a distance. For a query point $x$, order the training points by
+distance, $d(x, x_{(1)}) \le d(x, x_{(2)}) \le \dots$, and let $N_k(x)$ be the
+indices of the first $k$ (ties broken by some fixed rule).
+
+::: {#def-knn}
+## The $k$-NN classifier and regressor
+- **Classification**: predict the most frequent class among the neighbours,
+  $\hat y(x) = \arg\max_c\sum_{i \in N_k(x)}\mathbb{1}\{y_i = c\}$, and
+  estimate $P(y = c \mid x)$ by the fraction of neighbours in class $c$.
+- **Regression**: predict $\hat y(x) = \frac1k\sum_{i \in N_k(x)}y_i$.
+- **Distance weighting** replaces the equal votes by weights $w_i =
+  1/d(x, x_i)$ (scikit-learn's `weights="distance"`; if the query coincides
+  with training points, they alone vote).
+:::
+
+The rule goes back to an unpublished 1951 report by Fix and Hodges, which
+also proved its consistency in a non-parametric setting [@fix1951]. It has
+no training phase — `fit` only stores the data, possibly in a search structure
+— and all the work happens at prediction time ("lazy learning").
+
+::: {#exm-knn-hand}
+## Three neighbours by hand
+Training points on a line: $1.0$ (A), $1.5$ (A), $2.4$ (B), $3.0$ (B), $3.3$
+(A), $4.0$ (B). Query $x = 2.8$. Distances: $1.8, 1.3, 0.4, 0.2, 0.5, 1.2$.
+The three nearest are $3.0$ (B), $2.4$ (B), $3.3$ (A): $k = 3$ predicts B with
+estimated probability $2/3$. With $k = 1$: B (the point $3.0$). With $k = 5$
+the neighbours are $3.0, 2.4, 3.3, 4.0, 1.5$ — three B and two A: still B, with
+$3/5$. With distance weights and $k = 3$: B gets $1/0.2 + 1/0.4 = 7.5$, A gets
+$1/0.5 = 2$: B.
+:::
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.neighbors import KNeighborsClassifier, RadiusNeighborsClassifier
+
+xs = np.array([[1.0], [1.5], [2.4], [3.0], [3.3], [4.0]]); ls = np.array(["A", "A", "B", "B", "A", "B"])
+for k in (1, 3, 5):
+    m = KNeighborsClassifier(n_neighbors=k).fit(xs, ls)
+    print(f"k = {k}: prediction {m.predict([[2.8]])[0]}, P(A), P(B) = {m.predict_proba([[2.8]])[0].round(3)}")
+print("k = 3, distance weights:", KNeighborsClassifier(n_neighbors=3, weights="distance").fit(xs, ls).predict_proba([[2.8]])[0].round(3))
+```
+
+**Cost.** A brute-force query computes $n$ distances in $d$ dimensions —
+$O(nd)$ per prediction. Space-partitioning structures (**k-d trees**
+[@bentley1975], **ball trees** [@omohundro1989]) prune most of the training
+set in low dimension; scikit-learn chooses among brute force, k-d tree and
+ball tree automatically (`algorithm="auto"`). In high dimension the pruning
+stops working and the cost returns to $O(nd)$ — another face of the curse of
+dimensionality (@sec-knn-theory).
+
+### The radius variant
+
+Instead of a fixed number of neighbours, **radius neighbours** use all
+training points within a fixed distance $r$: $N_r(x) = \{i : d(x, x_i) \le
+r\}$. In dense regions many points vote, in sparse regions few — and a query
+with no training point within $r$ has **no** neighbours: scikit-learn's
+`RadiusNeighborsClassifier` then raises an error, unless an `outlier_label`
+is given to return instead. That is a feature: the model can say "nothing
+like this was seen in training" rather than force an answer.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla6-rule-easy}
+## Easy — regression and radius by hand
+With the six points of @exm-knn-hand and the numerical targets $10, 12, 20,
+22, 15, 30$ (in the same order), predict at $x = 2.8$ with the 3-NN regressor
+(uniform and distance-weighted) and with the radius rule $r = 0.45$ (majority
+class and mean target). What happens at $x = 6$ with the radius rule?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The three nearest are the points at $3.0$, $2.4$, $3.3$. Within $0.45$ of
+$2.8$: distances $0.2$ and $0.4$ only.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Uniform: $(22 + 20 + 15)/3 = 19$. Distance weights $5, 2.5, 2$:
+$(5\cdot22 + 2.5\cdot20 + 2\cdot15)/9.5 \approx 20.0$. Radius $0.45$: the
+points $3.0$ (B, 22) and $2.4$ (B, 20) — class B, mean $21$. At $x = 6$ no
+point is within $0.45$: no prediction (or the `outlier_label`).
+```{python}
+import warnings
+from sklearn.neighbors import KNeighborsRegressor, RadiusNeighborsRegressor
+warnings.filterwarnings("ignore", message="Outlier label")       # informs that "unknown" gets zero probabilities
+t = np.array([10, 12, 20, 22, 15, 30.0])
+print(KNeighborsRegressor(n_neighbors=3).fit(xs, t).predict([[2.8]]), KNeighborsRegressor(n_neighbors=3, weights="distance").fit(xs, t).predict([[2.8]]).round(3))
+rc = RadiusNeighborsClassifier(radius=0.45, outlier_label="unknown").fit(xs, ls.astype("<U7"))   # label dtype must fit "unknown"
+print(rc.predict([[2.8], [6.0]]), RadiusNeighborsRegressor(radius=0.45).fit(xs, t).predict([[2.8]]))
+```
+Weighting moves the prediction towards the closest neighbour; the radius rule
+uses fewer points here because the neighbourhood is sparse. The usual slip is
+to forget that $k$-NN *always* answers, even for a query far from all the
+data, whereas the radius rule can abstain.
+:::
+
+::: {#exr-mla6-rule-medium}
+## Medium — $k$-NN from scratch
+Write a vectorised `knn_predict(X_train, y_train, X_query, k, weights)` for
+classification (uniform or distance weights; exact matches get all the weight)
+and check that it reproduces `KNeighborsClassifier` on the wine data
+(standardised) for $k = 1, 5, 15$, both weightings.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Compute all squared distances at once with $\lVert a - b\rVert^2 = \lVert
+a\rVert^2 - 2a^\top b + \lVert b\rVert^2$, then `np.argpartition` for the $k$
+smallest. Ties between equally distant points are rare with continuous data;
+ties between classes in the vote are broken by scikit-learn in favour of the
+class that comes first.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_wine
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+def knn_predict(Xtr, ytr, Xq, k, weights="uniform"):
+    classes = np.unique(ytr)
+    D2 = (Xq ** 2).sum(1)[:, None] - 2 * Xq @ Xtr.T + (Xtr ** 2).sum(1)[None, :]
+    D2 = np.maximum(D2, 0)                                       # rounding can make tiny negatives
+    idx = np.argpartition(D2, k - 1, axis=1)[:, :k]              # the k nearest, in no particular order
+    d = np.sqrt(np.take_along_axis(D2, idx, axis=1))
+    if weights == "uniform":
+        w = np.ones_like(d)
+    else:
+        with np.errstate(divide="ignore"):
+            w = 1 / d
+        exact = np.isinf(w)
+        w = np.where(exact.any(1, keepdims=True), exact.astype(float), w)   # exact matches take all the weight
+    votes = np.stack([(w * (ytr[idx] == c)).sum(1) for c in classes], axis=1)
+    return classes[np.argmax(votes, axis=1)]                     # argmax: first class wins ties
+
+Xw, yw = load_wine(return_X_y=True)
+Xtr, Xte, ytr, yte = train_test_split(Xw, yw, test_size=0.3, stratify=yw, random_state=0)
+sc = StandardScaler().fit(Xtr); Ztr, Zte = sc.transform(Xtr), sc.transform(Xte)
+for k in (1, 5, 15):
+    for wt in ("uniform", "distance"):
+        same = np.array_equal(knn_predict(Ztr, ytr, Zte, k, wt), KNeighborsClassifier(n_neighbors=k, weights=wt).fit(Ztr, ytr).predict(Zte))
+        print(f"k = {k:2d}, {wt:8s}: identical to scikit-learn: {same}")
+```
+The expansion of the squared distance turns the whole computation into one
+matrix product. Two details matter: clipping the tiny negative values that
+rounding produces before the square root, and the exact-match rule for
+distance weights (otherwise $1/0$). A common bug is to sort the full distance
+matrix (`argsort`, $O(n\log n)$ per query) when `argpartition` suffices.
+:::
+
+::: {#exr-mla6-rule-hard}
+## Hard — a classifier that can say "I don't know"
+Train on two of the three wine cultivars only (standardised). Then classify
+the test wines of **all three** cultivars with `KNeighborsClassifier(k=5)` and
+with `RadiusNeighborsClassifier` with `outlier_label="unknown"`, choosing the
+radius as the 95th percentile of the distances from each training wine to its
+nearest other training wine. How are the wines of the unseen cultivar
+handled by each model? What is the price of the reject option on the known
+cultivars?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`NearestNeighbors(n_neighbors=2).fit(Z).kneighbors(Z)` returns, for each
+training point, itself (distance 0) and its nearest other point. Fit the
+scaler on the training cultivars only.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.neighbors import NearestNeighbors
+known = ytr < 2
+sc2 = StandardScaler().fit(Xtr[known]); Zk, Zall = sc2.transform(Xtr[known]), sc2.transform(Xte)
+d_nn = NearestNeighbors(n_neighbors=2).fit(Zk).kneighbors(Zk)[0][:, 1]
+radius = np.percentile(d_nn, 95)
+knn5 = KNeighborsClassifier(n_neighbors=5).fit(Zk, ytr[known])
+rad = RadiusNeighborsClassifier(radius=radius, outlier_label="unknown").fit(Zk, ytr[known].astype(str))
+p_knn, p_rad = knn5.predict(Zall), rad.predict(Zall)
+for c in (0, 1, 2):
+    m = yte == c
+    print(f"cultivar {c} ({'unseen' if c == 2 else 'seen'}): k-NN predicts {np.bincount(p_knn[m], minlength=2)} as (0, 1); "
+          f"radius predicts 'unknown' for {np.mean(p_rad[m] == 'unknown'):.0%}")
+print(f"radius = {radius:.2f}")
+```
+$k$-NN assigns every wine of the unseen cultivar to one of the two known ones —
+confidently, since its five neighbours usually agree. The radius rule rejects
+most of them, because they lie far from all training wines; the price is that
+a small fraction of genuine wines of the known cultivars, in sparse corners of
+their classes, are also rejected. Choosing the radius trades the two errors.
+In a warehouse this is the difference between mislabelling a new variety and
+asking an operator to look at it. Mistake to avoid: setting the radius by
+looking at the test data.
+:::
+
+## Distances {#sec-knn-distances}
+
+A **metric** on a set is a function $d$ with, for all $x, y, z$:
+$d(x, y) \ge 0$ with equality iff $x = y$; $d(x, y) = d(y, x)$; and the
+**triangle inequality** $d(x, z) \le d(x, y) + d(y, z)$. The last property is
+what makes "near" behave sensibly — two points near a third are near each
+other — and what search trees rely on to prune.
+
+For vectors the standard family is the **Minkowski** distance
+$$
+d_p(x, z) = \Big(\sum_{j=1}^d|x_j - z_j|^p\Big)^{1/p}\quad(p \ge 1),\qquad
+d_\infty(x, z) = \max_j|x_j - z_j| ,
+$$ {#eq-knn-minkowski}
+with $p = 2$ the **Euclidean**, $p = 1$ the **Manhattan** (city-block) and
+$p = \infty$ the **Chebyshev** distance (scikit-learn's `metric="minkowski"`
+with `p=`, default $p = 2$).
+
+::: {#thm-knn-minkowski}
+## The Minkowski distances are metrics
+For every $p \in [1, \infty]$, $d_p$ satisfies the metric axioms. For $p < 1$
+the formula violates the triangle inequality.
+:::
+
+*In one line:* $p = 1, 2, \infty$ and everything in between are genuine
+distances; below 1, the "distance" can make a detour shorter than the direct
+path.
+
+::: {.deep kind="proof"}
+## Proof of @thm-knn-minkowski
+Only the triangle inequality is not immediate; with $u = x - y$, $v = y - z$
+it is $\lVert u + v\rVert_p \le \lVert u\rVert_p + \lVert v\rVert_p$
+(**Minkowski's inequality**). For $p = 1$ and $p = \infty$ it follows from
+$|u_j + v_j| \le |u_j| + |v_j|$ coordinate-wise. For $1 < p < \infty$ we use
+convexity. If $u$ or $v$ is zero there is nothing to prove; otherwise put $a =
+\lVert u\rVert_p$, $b = \lVert v\rVert_p$ and $\lambda = a/(a + b)$. Then
+$\frac{u + v}{a + b} = \lambda\frac ua + (1 - \lambda)\frac vb$, and since $t
+\mapsto|t|^p$ is convex, coordinate by coordinate $\big|\frac{u_j + v_j}{a +
+b}\big|^p \le \lambda\big|\frac{u_j}{a}\big|^p + (1 - \lambda)\big|
+\frac{v_j}{b}\big|^p$. Summing over $j$, the right side is $\lambda + (1 -
+\lambda) = 1$ because $u/a$ and $v/b$ have unit norm; so $\lVert u + v
+\rVert_p^p \le (a + b)^p$. For $p < 1$: with $x = (0, 0)$, $y = (1, 0)$, $z =
+(1, 1)$, $d_p(x, z) = 2^{1/p} > 2 = d_p(x, y) + d_p(y, z)$. $\blacksquare$
+[@hardy1952, §2.11]
+:::
+
+```{python}
+#| label: fig-knn-balls
+#| fig-cap: "Unit balls {x : d_p(x, 0) ≤ 1} of the Minkowski distances. The neighbours of a point within a fixed distance form a diamond (p = 1), a disc (p = 2) or a square (p = ∞); the choice changes which points count as near, especially along diagonals."
+th = np.linspace(0, 2 * np.pi, 400); dirs = np.column_stack([np.cos(th), np.sin(th)])
+fig, ax = plt.subplots(figsize=(4, 4))
+for p, c in zip((1, 2, np.inf), mlalgbook.COLORS):
+    norms = np.linalg.norm(dirs, ord=p, axis=1)
+    ax.plot(dirs[:, 0] / norms, dirs[:, 1] / norms, color=c, label=f"p = {p}")
+ax.set_aspect("equal"); ax.legend(loc="upper right", fontsize=8); ax.set_xlim(-1.3, 1.3); ax.set_ylim(-1.3, 1.3); plt.show()
+```
+
+Two other dissimilarities are common. **Cosine distance** $1 - \frac{x^\top
+z}{\lVert x\rVert\lVert z\rVert}$ ignores the length of the vectors — useful
+for word counts, where a long document should be near a short one on the
+same topic; it is not a metric (it is zero for $x = 2z$, and violates the
+triangle inequality). The **Mahalanobis** distance $\sqrt{(x - z)^\top
+S^{-1}(x - z)}$, with $S$ a covariance matrix, measures distances in units of
+the data's own spread and correlations.
+
+::: {#prp-knn-scaling}
+## Distances depend on the units; Mahalanobis is Euclidean after whitening
+(i) Rescaling feature $j$ by $c_j > 0$ multiplies its contribution to $d_2$ by
+$c_j^2$; in general it changes which training points are the $k$ nearest.
+(ii) If $S = LL^\top$ (e.g. the Cholesky factorisation), the Mahalanobis
+distance between $x$ and $z$ equals the Euclidean distance between $L^{-1}x$
+and $L^{-1}z$. With a diagonal $S$ of the feature variances this is plain
+standardisation.
+:::
+
+*In one line:* a distance has units, and $k$-NN inherits them — so the
+choice of scaling *is* the choice of the model; standardisation is the
+diagonal case of the Mahalanobis distance.
+
+::: {.deep kind="proof"}
+## Proof of @prp-knn-scaling
+(i) $d_2(Dx, Dz)^2 = \sum_jc_j^2(x_j - z_j)^2$ with $D = \operatorname{diag}
+(c)$; e.g. with $x = (0, 0)$, $a = (1, 0)$, $b = (0, 2)$, $a$ is nearer than
+$b$, but after multiplying the first feature by 3, $b$ is nearer.
+(ii) $(x - z)^\top S^{-1}(x - z) = (x - z)^\top L^{-\top}L^{-1}(x - z) =
+\lVert L^{-1}(x - z)\rVert^2$. For $S = \operatorname{diag}(\sigma_j^2)$, $L^{-1}$
+divides each coordinate by $\sigma_j$. $\blacksquare$ [@mahalanobis1936]
+:::
+
+```{python}
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.preprocessing import MinMaxScaler
+
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+print("feature ranges of the wine data (min–max):", ", ".join(f"{a:.1f}–{b:.0f}" for a, b in zip(Xw.min(0)[[0, 4, 12]], Xw.max(0)[[0, 4, 12]])), "(alcohol, magnesium, proline)")
+for name, model in (("no scaling", KNeighborsClassifier()), ("min–max", make_pipeline(MinMaxScaler(), KNeighborsClassifier())),
+                    ("standardised", make_pipeline(StandardScaler(), KNeighborsClassifier()))):
+    print(f"5-NN, {name:12s}: CV accuracy {cross_val_score(model, Xw, yw, cv=cv).mean():.3f}")
+```
+
+Without scaling, proline (hundreds to well over a thousand) decides almost
+alone which wines are neighbours; scaling, fitted inside the pipeline, lets
+all thirteen measurements count. The difference is the largest effect in this
+chapter.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla6-distances-easy}
+## Easy — three distances, two rankings
+For $x = (0, 0)$, $a = (3, 0)$ and $b = (2, 2)$, compute $d_1, d_2, d_\infty$
+from $x$ to $a$ and to $b$. Which point is the nearest neighbour of $x$ under
+each distance?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$d_1$ adds the coordinates' differences, $d_\infty$ takes the largest.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+To $a$: $3, 3, 3$. To $b$: $4, 2\sqrt2 \approx 2.83, 2$. Nearest: $a$ under
+$d_1$, $b$ under $d_2$ and $d_\infty$.
+```{python}
+for p in (1, 2, np.inf):
+    print(p, np.linalg.norm([3, 0], ord=p), round(np.linalg.norm([2, 2], ord=p), 3))
+```
+The point on a diagonal is penalised by Manhattan and favoured by Chebyshev:
+the metric is a modelling decision, not a detail.
+:::
+
+::: {#exr-mla6-distances-medium}
+## Medium — choosing $p$ by cross-validation
+On the wine data (standardised in a pipeline), compare by repeated stratified
+5-fold cross-validation 5-NN with $p = 1, 2, \infty$ and with the cosine
+distance. Is any difference larger than the standard error?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`KNeighborsClassifier(metric="minkowski", p=1)`, `metric="chebyshev"` (or
+`p=np.inf`) and `metric="cosine"` (brute force is used automatically).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.model_selection import RepeatedStratifiedKFold
+cvr = RepeatedStratifiedKFold(n_splits=5, n_repeats=5, random_state=0)
+for name, kw in (("p = 1", {"p": 1}), ("p = 2", {"p": 2}), ("p = ∞", {"metric": "chebyshev"}), ("cosine", {"metric": "cosine"})):
+    s = cross_val_score(make_pipeline(StandardScaler(), KNeighborsClassifier(**kw)), Xw, yw, cv=cvr)
+    print(f"{name:7s}: {s.mean():.3f} ± {s.std(ddof=1) / np.sqrt(len(s)):.3f}")
+```
+On standardised data the Manhattan and Euclidean distances are typically the
+best and close to each other; Chebyshev, which looks at one coordinate only,
+is worse with 13 features; cosine, after standardisation, measures the
+direction of the deviation from the average wine and also works well. When
+the differences are within a standard error or two, prefer the default
+(Euclidean) rather than chasing noise.
+:::
+
+::: {#exr-mla6-distances-hard}
+## Hard — correlated features and Mahalanobis
+Build a two-class problem in which two features are strongly correlated
+within each class (e.g. size-related measurements) and the classes differ
+along the direction *across* the correlation. Compare 5-NN after
+standardisation and after **whitening** (multiplying by $L^{-1}$ of the
+pooled within-class covariance, estimated on the training folds only) by
+cross-validation. Then try the same on the wine data. When does whitening
+help?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Write a transformer whose `fit` computes the pooled within-class covariance
+from `(X, y)` and its Cholesky factor; `transform` solves $Lz = x$. A pipeline
+passes `y` to `fit`, so the covariance is learned inside each training fold.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.base import BaseEstimator, TransformerMixin
+from scipy.linalg import solve_triangular
+
+class Whiten(TransformerMixin, BaseEstimator):
+    """Mahalanobis-whitening with the pooled within-class covariance (needs y at fit time)."""
+    def __init__(self, ridge=1e-6):
+        self.ridge = ridge
+    def fit(self, X, y):
+        R = np.vstack([X[y == c] - X[y == c].mean(0) for c in np.unique(y)])
+        S = R.T @ R / len(R) + self.ridge * np.eye(X.shape[1])
+        self.mean_, self.L_ = X.mean(0), np.linalg.cholesky(S)
+        return self
+    def transform(self, X):
+        return solve_triangular(self.L_, (X - self.mean_).T, lower=True).T
+
+r = np.random.default_rng(0)
+n = 300; yc = r.integers(0, 2, n)
+size = r.normal(0, 3, n)                                         # a common "size" factor, strong within each class
+Xc = np.column_stack([size + r.normal(0, 0.3, n), size + r.normal(0, 0.3, n)]) + np.where(yc[:, None] == 1, [0.5, -0.5], [-0.5, 0.5])
+for name, Xd_, yd_ in (("correlated synthetic", Xc, yc), ("wine", Xw, yw)):
+    for prep_name, prep in (("standardised", StandardScaler()), ("whitened", Whiten())):
+        s = cross_val_score(make_pipeline(prep, KNeighborsClassifier()), Xd_, yd_, cv=cvr)
+        print(f"{name:21s} {prep_name:12s}: {s.mean():.3f} ± {s.std(ddof=1) / np.sqrt(len(s)):.3f}")
+```
+On the synthetic data the classes differ by $\pm0.5$ across a direction in
+which the data vary little, while the common size factor varies a lot:
+Euclidean distance, even after standardisation, is dominated by size;
+whitening shrinks the size direction and stretches the discriminative one,
+and the error of $k$-NN falls by a factor of about four. On the wine data the
+gain is large too: the pooled within-class covariance captures how the
+measurements vary *within* a cultivar, and measuring distances in those units
+emphasises the directions that separate cultivars. Using the labels to shape
+the metric is a simple form of **metric learning** — the idea behind linear
+discriminant analysis and NCA [@goldberger2004]. The fruit data have the synthetic
+example's structure in miniature — weight, diameter and length all grow with
+the size of a fruit — so it is worth looking at the within-class correlations
+before choosing the scaling. Mistake to avoid: estimating the covariance on
+all the data, labels included, before cross-validating (leakage).
+:::
+
+## Choosing $k$ {#sec-knn-k}
+
+$k$ is the smoothing level. With $k = 1$ the boundary follows every training
+point and the training error is zero — each point is its own nearest
+neighbour — which says nothing about new data (@thm-train-optimistic). With
+$k = n$ every prediction is the majority class. In between, the bias–variance
+trade-off of @exr-ml5-bv-knn applies: for regression with fixed inputs, the
+variance of the $k$-NN average is $\sigma^2/k$, while the bias grows as the
+neighbourhood widens. The widget shows the effect on a three-class problem.
+
+```{python}
+#| echo: false
+from sklearn.datasets import make_blobs
+_X, _y = make_blobs(n_samples=240, centers=[[-1.5, 0], [1.2, 1.2], [0.8, -1.4]], cluster_std=[1.0, 0.9, 1.1], random_state=4)
+_g = np.linspace(-4.5, 4.5, 60); _xx, _yy = np.meshgrid(_g, _g); _P = np.column_stack([_xx.ravel(), _yy.ravel()])
+_ks = [1, 3, 5, 9, 15, 25, 51, 101]
+_fits = []
+for _k in _ks:
+    _m = KNeighborsClassifier(n_neighbors=_k).fit(_X, _y)
+    _fits.append({"k": _k, "pred": _m.predict(_P).astype(int).tolist(), "train": float(_m.score(_X, _y)),
+                  "cv": float(cross_val_score(KNeighborsClassifier(n_neighbors=_k), _X, _y, cv=StratifiedKFold(5, shuffle=True, random_state=0)).mean())})
+ojs_define(knnPts=[{"x": float(a), "y": float(b), "label": int(c)} for (a, b), c in zip(_X, _y)], knnFits=_fits, knnGrid=_g.tolist())
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof knnK = Inputs.radio(knnFits.map(d => d.k), {value: 9, label: "k"})
+```
+
+```{ojs}
+//| echo: false
+knnFit = knnFits.find(d => d.k === knnK)
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">k = ${knnFit.k} — training accuracy ${knnFit.train.toFixed(3)}, 5-fold CV accuracy ${knnFit.cv.toFixed(3)}</p>`
+```
+
+```{ojs}
+//| echo: false
+knnCells = {
+  const g = knnGrid, n = g.length, h = (g[1] - g[0]) / 2, out = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++)
+    out.push({x1: g[j] - h, x2: g[j] + h, y1: g[i] - h, y2: g[i] + h, label: knnFit.pred[i * n + j]});
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-knn-k-widget
+//| fig-cap: "k-NN decision regions on 240 points from three overlapping groups. k = 1 carves an island around every point (training accuracy 1); large k gives smooth boundaries, and k = 101 starts to swallow the smallest class's territory."
+Plot.plot({
+  height: 360, width: 420, x: {domain: [-4.5, 4.5], label: "x₁"}, y: {domain: [-4.5, 4.5], label: "x₂"},
+  color: {type: "ordinal", domain: [0, 1, 2], range: ["#2a78d6", "#eb6834", "#1baf7a"], legend: true},
+  marks: [
+    Plot.rect(knnCells, {x1: "x1", x2: "x2", y1: "y1", y2: "y2", fill: "label", fillOpacity: 0.22}),
+    Plot.dot(knnPts, {x: "x", y: "y", fill: "label", r: 3, stroke: "#fcfcfb", strokeWidth: 0.5})
+  ]
+})
+```
+:::
+
+The standard procedure is a **validation curve**: cross-validated accuracy
+against $k$, inside a pipeline with the scaler, choosing the best $k$ or —
+more robustly — the largest $k$ within one standard error of the best
+(@sec-selection). For two classes, odd $k$ avoid tied votes. If the chosen $k$
+is then evaluated on the same folds, the estimate is optimistic: report a
+nested estimate or a separate test set.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla6-k-easy}
+## Easy — leave-one-out by hand
+Points on a line with labels: $1$ (A), $2$ (A), $3$ (B), $4$ (A), $5$ (B),
+$6$ (B). Compute the leave-one-out error of 1-NN and of 3-NN (break distance
+ties towards the smaller value). Which $k$ would you choose?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Remove each point in turn and classify it from the other five.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+1-NN (nearest other point, ties to the smaller): $1 \to 2$ (A, ok); $2 \to 1$
+(A, ok); $3 \to 2$ (A, wrong); $4 \to 3$ (B, wrong); $5 \to 4$ (A, wrong); $6
+\to 5$ (B, ok): 3 errors of 6. 3-NN: $1$: {2, 3, 4} → A, B, A → A ok; $2$:
+{1, 3, 4} → A, B, A → A ok; $3$: {2, 4, 1} → A, A, A → A wrong;
+$4$: {3, 5, 2} → B, B, A → B wrong; $5$: {4, 6, 3} → A, B, B → B ok; $6$:
+{5, 4, 3} → B, A, B → B ok: 2 errors. Choose $k = 3$ (with only six points,
+the difference is one example).
+```{python}
+from sklearn.model_selection import LeaveOneOut
+x6, l6 = np.arange(1, 7, dtype=float)[:, None], np.array(list("AABABB"))
+for k in (1, 3):
+    print(k, 1 - cross_val_score(KNeighborsClassifier(n_neighbors=k), x6, l6, cv=LeaveOneOut()).mean())
+```
+scikit-learn agrees (its tie-breaking among equally distant points follows
+the order of the training data, which here coincides with ours). The
+training error of 1-NN would be $0$; leave-one-out reveals $50\,\%$.
+:::
+
+::: {#exr-mla6-k-medium}
+## Medium — a validation curve with the one-standard-error rule
+On the wine data, plot training and repeated-5-fold CV accuracy of $k$-NN
+(standardised in a pipeline) for $k = 1, \dots, 40$, with ±1 standard-error
+bands; mark the best $k$ and the largest $k$ within one standard error.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`validation_curve(pipe, X, y, param_name="kneighborsclassifier__n_neighbors", param_range=..., cv=...)`
+returns training and validation scores per fold.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-knn-validation
+#| fig-cap: "Training and cross-validated accuracy of k-NN on the standardised wine data. The training accuracy of k = 1 is 1 by construction; the validation curve is flat over a wide range of k."
+from sklearn.model_selection import validation_curve
+ks = np.arange(1, 41)
+tr_s, va_s = validation_curve(make_pipeline(StandardScaler(), KNeighborsClassifier()), Xw, yw,
+                              param_name="kneighborsclassifier__n_neighbors", param_range=ks, cv=cvr)
+mean, se = va_s.mean(1), va_s.std(1, ddof=1) / np.sqrt(va_s.shape[1])
+best = int(np.argmax(mean)); one_se = ks[np.max(np.where(mean >= mean[best] - se[best])[0])]
+fig, ax = plt.subplots(figsize=(6.5, 3.2))
+ax.plot(ks, tr_s.mean(1), label="training"); ax.plot(ks, mean, label="cross-validation")
+ax.fill_between(ks, mean - se, mean + se, alpha=0.2, color=mlalgbook.COLORS[1], lw=0)
+ax.axvline(ks[best], color=mlalgbook.MUTED, ls="--", lw=1); ax.axvline(one_se, color=mlalgbook.MUTED, ls=":", lw=1)
+ax.set_xlabel("k"); ax.set_ylabel("accuracy"); ax.legend(); plt.show()
+print(f"best k = {ks[best]} (CV accuracy {mean[best]:.3f} ± {se[best]:.3f}); largest k within one s.e.: {one_se}")
+```
+The curve is flat: many $k$ are statistically indistinguishable, and the
+one-standard-error rule picks a larger, smoother one. The training curve
+starts at 1 for $k = 1$ — a memorised training set — and is meaningless for
+choosing $k$. Mistake to avoid: picking the $k$ with the single highest CV
+score and reporting that score as the expected accuracy.
+:::
+
+::: {#exr-mla6-k-hard}
+## Hard — honest selection of $k$ and of the scaling
+Treat the choice of $k \in \{1, \dots, 30\}$, of the weighting (uniform or
+distance) and of the scaler (standard or min–max) as one search on the wine
+data. Estimate the accuracy of the whole procedure by nested cross-validation
+and compare it with the best inner score. Then show, with
+`cross_val_predict` on the outer folds, the confusion matrix and the
+per-class recall of the selected procedure.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A pipeline step can itself be a hyper-parameter:
+`{"scaler": [StandardScaler(), MinMaxScaler()], ...}` with a step named
+`"scaler"`. `cross_val_predict` with the `GridSearchCV` object gives
+predictions in which every point was predicted by a procedure that never saw
+it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, cross_val_predict
+from sklearn.metrics import confusion_matrix, recall_score
+
+search = GridSearchCV(Pipeline([("scaler", StandardScaler()), ("knn", KNeighborsClassifier())]),
+                      {"scaler": [StandardScaler(), MinMaxScaler()], "knn__n_neighbors": list(range(1, 31)),
+                       "knn__weights": ["uniform", "distance"]}, cv=StratifiedKFold(5, shuffle=True, random_state=0))
+outer = StratifiedKFold(5, shuffle=True, random_state=1)
+nested = cross_val_score(search, Xw, yw, cv=outer)
+search.fit(Xw, yw)
+pred = cross_val_predict(search, Xw, yw, cv=outer)
+print(f"best inner CV score {search.best_score_:.3f} with {search.best_params_}")
+print(f"nested estimate {nested.mean():.3f} ± {nested.std(ddof=1) / np.sqrt(5):.3f}")
+print(confusion_matrix(yw, pred)); print("recall per cultivar:", recall_score(yw, pred, average=None).round(3))
+```
+The best inner score is higher than the nested estimate: 120 configurations
+were tried, and the winner is partly the luckiest. The nested estimate, and
+the confusion matrix built from outer-fold predictions, describe what the
+whole procedure will do on new wines; the per-class recalls show which
+cultivar is hardest. This is the evaluation protocol that a project with
+several knobs needs. Mistakes to avoid: choosing the scaler by hand after
+looking at test results, and computing the confusion matrix from the model
+refitted on all data, predicting its own training set.
+:::
+
+## Why and when nearest neighbours work {#sec-knn-theory}
+
+How good can such a simple rule be? Cover and Hart answered for $k = 1$ with
+an elegant bound in terms of the Bayes error $R^*$, the error of the best
+possible classifier (@thm-bayes-classifier).
+
+::: {#thm-knn-cover-hart}
+## The Cover–Hart bound
+For two classes, let $\eta(x) = P(Y = 1 \mid X = x)$ be continuous and
+suppose that, as $n \to \infty$, the nearest training point to $X$ converges
+to $X$ (true when $X$ has a density). Then the error of the 1-NN rule tends to
+$$
+R_{1\mathrm{NN}} = \mathbb{E}\big[2\eta(X)(1 - \eta(X))\big],
+\qquad\text{and}\qquad
+R^* \le R_{1\mathrm{NN}} \le 2R^*(1 - R^*) \le 2R^* .
+$$
+:::
+
+*In one line:* with unlimited data, the single nearest neighbour errs at most
+twice as often as the best possible classifier — half of all the information
+needed to classify is in the label of one neighbour.
+
+::: {.deep kind="proof"}
+## Proof of @thm-knn-cover-hart (under the stated convergence)
+Given the query $x$ and its nearest neighbour $x'$, the two labels are
+independent, with $P(Y = 1) = \eta(x)$ and $P(Y' = 1) = \eta(x')$, so the rule
+errs with probability $\eta(x)(1 - \eta(x')) + \eta(x')(1 - \eta(x))$. As $x'
+\to x$ and $\eta$ is continuous, this tends to $2\eta(x)(1 - \eta(x))$;
+taking expectations (dominated convergence; everything is bounded by 1) gives
+$R_{1\mathrm{NN}}$. With $m(x) = \min(\eta(x), 1 - \eta(x)) \le \frac12$, the
+Bayes risk is $R^* = \mathbb{E}m(X)$ (@thm-bayes-classifier) and $2\eta(1 -
+\eta) = 2m(1 - m)$. Lower bound: $2m(1 - m) \ge m$ because $m \le \frac12$.
+Upper bound: $\mathbb{E}[2m(1 - m)] = 2R^* - 2\mathbb{E}m^2 \le 2R^* -
+2(R^*)^2$ by Jensen's inequality $\mathbb{E}m^2 \ge (\mathbb{E}m)^2$.
+$\blacksquare$ Cover and Hart prove the convergence of the nearest neighbour
+and treat $K$ classes, with $R_{1\mathrm{NN}} \le R^*(2 - \frac{K}{K -
+1}R^*)$ [@cover1967].
+:::
+
+With $k$ growing slowly — $k \to \infty$ and $k/n \to 0$ — the $k$-NN rule is
+**universally consistent**: its error tends to $R^*$ for *every* distribution
+of the data, a theorem of Stone [@stone1977; @devroye1996, ch. 6]. These are
+statements about infinite data. With finite data, the obstacle is the
+dimension.
+
+::: {#prp-knn-curse}
+## Neighbourhoods in high dimension
+Let the data be uniform in the unit cube $[0, 1]^d$. A sub-cube that
+contains, on average, a fraction $r$ of the data has edge $r^{1/d}$. For $r =
+0.01$ this is $0.1$ in $d = 2$, $0.63$ in $d = 10$ and $0.95$ in $d = 100$.
+:::
+
+*In one line:* in high dimension, a neighbourhood that holds even 1 % of the
+data spans most of the range of every feature — it is no longer local.
+
+::: {.deep kind="proof"}
+## Proof of @prp-knn-curse
+Under the uniform distribution the expected fraction of points in a region is
+its volume; a cube of edge $e$ has volume $e^d$, and $e^d = r$ gives $e =
+r^{1/d}$. Then $0.01^{1/2} = 0.1$, $0.01^{1/10} \approx 0.631$, $0.01^{1/100}
+\approx 0.955$ [@hastie2009, §2.5]. $\blacksquare$
+:::
+
+Closely related is the **concentration of distances**: for many
+distributions, as $d$ grows, the ratio between the largest and the smallest
+distance from a query to the data points tends to 1, so that "nearest" loses
+its meaning [@beyer1999]. The practical consequence for $k$-NN is sharper
+than for most models: **irrelevant features hurt**. Every feature adds its
+differences to every distance; a feature that carries no information about
+the class adds only noise to the ranking of neighbours.
+
+```{python}
+#| label: fig-knn-noise-features
+#| fig-cap: "Cross-validated accuracy on the wine data as pure-noise features are appended (standardised; average of 5 random draws of the noise). k-NN degrades steadily; logistic regression, which can give the useless features small weights, is much less affected."
+from sklearn.linear_model import LogisticRegression
+extra = [0, 5, 10, 25, 50, 100]
+res = {"5-NN": [], "logistic regression": []}
+for m_extra in extra:
+    acc = {k: [] for k in res}
+    for seed in range(5):
+        Xn = np.column_stack([Xw, np.random.default_rng(seed).normal(size=(len(yw), m_extra))])
+        acc["5-NN"].append(cross_val_score(make_pipeline(StandardScaler(), KNeighborsClassifier()), Xn, yw, cv=cv).mean())
+        acc["logistic regression"].append(cross_val_score(make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000)), Xn, yw, cv=cv).mean())
+    for k in res:
+        res[k].append(np.mean(acc[k]))
+fig, ax = plt.subplots(figsize=(6, 3.2))
+for (k, v), c in zip(res.items(), mlalgbook.COLORS):
+    ax.plot(extra, v, marker="o", ms=4, color=c, label=k)
+ax.set_xlabel("number of added noise features"); ax.set_ylabel("CV accuracy"); ax.legend(); plt.show()
+for k, v in res.items():
+    print(f"{k:20s}", " ".join(f"{a:.3f}" for a in v))
+```
+
+Two remedies follow: **select** the features that matter (by domain
+knowledge, or inside the cross-validation, e.g. with `SelectKBest`), or
+**learn** the metric — scaling each feature by its usefulness rather than by
+its spread (metric learning, e.g. neighbourhood components analysis,
+`NeighborhoodComponentsAnalysis` in scikit-learn [@goldberger2004]).
+
+### Practice {.unnumbered}
+
+::: {#exr-mla6-theory-easy}
+## Easy — the bound in numbers
+If the Bayes error of a two-class problem is $5\,\%$, what is the largest
+asymptotic error of 1-NN allowed by @thm-knn-cover-hart? And if $R^* =
+0$? With $R^* = 0.5$?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Evaluate $2R^*(1 - R^*)$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$2\cdot0.05\cdot0.95 = 0.095$, i.e. $9.5\,\%$. With $R^* = 0$: 0 — on
+noise-free problems 1-NN is asymptotically perfect. With $R^* = 0.5$ (labels
+independent of $x$): $0.5$, the same as guessing — both bounds coincide.
+```{python}
+print([round(2 * r * (1 - r), 4) for r in (0.05, 0.0, 0.5)])
+```
+The bound is about infinite data; with finite data the error can be much
+larger, especially in high dimension.
+:::
+
+::: {#exr-mla6-theory-medium}
+## Medium — distances concentrate
+For $d = 1, 2, 5, 10, 50, 200$, draw 1 000 points uniformly in $[0, 1]^d$ and
+a query point, and compute the ratio between the largest and the smallest
+distance from the query to the points; average over 20 queries. Plot the ratio
+against $d$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`np.linalg.norm(P - q, axis=1)` gives all distances; use a log scale for
+the ratio.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-knn-concentration
+#| fig-cap: "Ratio between the farthest and the nearest of 1 000 uniform points from a random query, against the dimension (mean of 20 queries). In high dimension all points are almost equally far."
+r = np.random.default_rng(1)
+dims, ratios = [1, 2, 5, 10, 50, 200], []
+for d in dims:
+    rr = []
+    for _ in range(20):
+        P, q = r.random((1000, d)), r.random(d)
+        dist = np.linalg.norm(P - q, axis=1); rr.append(dist.max() / dist.min())
+    ratios.append(np.mean(rr))
+fig, ax = plt.subplots(figsize=(5.5, 3))
+ax.loglog(dims, ratios, marker="o"); ax.set_xlabel("dimension d"); ax.set_ylabel("max distance / min distance"); plt.show()
+print(" ".join(f"{x:.2f}" for x in ratios))
+```
+In one dimension the farthest point is hundreds or thousands of times farther
+than the nearest; in 200 dimensions only a little farther. When everything is
+roughly equally far, the "nearest" neighbours are hardly nearer than random
+points. Real data are rarely uniform — they often lie near
+lower-dimensional structures, which is why $k$-NN can still work with many
+features — but the effect explains why irrelevant dimensions hurt.
+:::
+
+::: {#exr-mla6-theory-hard}
+## Hard — which measurements matter?
+On the wine data with 25 appended noise features (as in
+@fig-knn-noise-features), put `SelectKBest(f_classif, k=m)` before the
+scaler-plus-5-NN pipeline and choose $m$ by cross-validation. Evaluate by
+nested cross-validation and compare with 5-NN on all 38 features and on the
+13 real ones. Which features are selected most often across the outer folds?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`f_classif` scores each feature by a one-way ANOVA $F$ statistic (between-class
+over within-class variance). Read the selected columns from
+`best_estimator_.named_steps["selectkbest"].get_support()` in each outer fold.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.feature_selection import SelectKBest, f_classif
+Xn25 = np.column_stack([Xw, np.random.default_rng(0).normal(size=(len(yw), 25))])
+sel = GridSearchCV(Pipeline([("selectkbest", SelectKBest(f_classif)), ("sc", StandardScaler()), ("knn", KNeighborsClassifier())]),
+                   {"selectkbest__k": [2, 4, 6, 8, 10, 13, 20, 38]}, cv=StratifiedKFold(5, shuffle=True, random_state=0))
+counts, scores = np.zeros(Xn25.shape[1]), []
+for tr, te in outer.split(Xn25, yw):
+    sel.fit(Xn25[tr], yw[tr]); scores.append(sel.score(Xn25[te], yw[te]))
+    counts += sel.best_estimator_.named_steps["selectkbest"].get_support()
+base_all = cross_val_score(make_pipeline(StandardScaler(), KNeighborsClassifier()), Xn25, yw, cv=outer).mean()
+base_real = cross_val_score(make_pipeline(StandardScaler(), KNeighborsClassifier()), Xw, yw, cv=outer).mean()
+names = load_wine().feature_names + [f"noise {i}" for i in range(25)]
+print(f"nested accuracy with selection {np.mean(scores):.3f}; all 38 features {base_all:.3f}; the 13 real ones {base_real:.3f}")
+print("selected in all 5 outer folds:", [names[j] for j in np.where(counts == 5)[0]])
+print("noise features ever selected:", int(np.sum(counts[13:] > 0)))
+```
+Univariate selection recovers most of the accuracy lost to the noise: the
+selected features are real measurements that separate the cultivars well on
+their own, and noise features are rarely chosen. Selection must be a step of
+the pipeline, so that the $F$ statistics are computed on training folds only
+— selecting on all the data first is the leakage demonstrated in
+@sec-leakage. For a project the same analysis answers a practical question:
+which measurements are worth taking at all. Its limit: features useless on
+their own but useful together are missed by univariate scores.
+:::
+
+::: {.project-link}
+**In the project.** This is the project's chapter. Its requirements translate
+into the techniques above: **scale** the five measurements — grams,
+millimetres and 1–10 scores — inside a pipeline, so that no unit dominates the
+distance (@prp-knn-scaling); **choose $k$** with a validation curve and a
+justified rule, not by the test set (@sec-knn-k); **compare metrics** honestly
+(@exr-mla6-distances-medium); look at the **per-class** errors with a
+confusion matrix; and keep in mind that with five features the curse of
+dimensionality is mild, but a useless or redundant measurement still dilutes
+the distances (@fig-knn-noise-features). The radius variant offers a way to
+flag fruits unlike any seen in training (@exr-mla6-rule-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **No scaling** — the most frequent and the most damaging mistake with
+  $k$-NN.
+- **Choosing $k$ on the training error** (always $k = 1$) or on the test set.
+- **Fitting the scaler on all the data** before cross-validation.
+- **Irrelevant or redundant features**: they dilute or double-count distance
+  differences.
+- **Ties**: even $k$ with two classes; equal distances with discretised
+  features. Use odd $k$ or distance weights.
+- **Large data at prediction time**: every query scans (or searches) the
+  training set; in high dimension search trees do not help.
+- **Unbalanced classes**: a large class dominates neighbourhoods; consider
+  distance weights, per-class evaluation and, if needed, resampling.
+:::
+
+## Summary
+
+- $k$-NN predicts by majority vote (or average) of the $k$ nearest training
+  points; distance weights and the radius rule are variants; radius
+  neighbours can abstain.
+- The distance is part of the model: Minkowski $d_p$ is a metric for $p \ge
+  1$; rescaling changes neighbours; Mahalanobis is Euclidean after whitening,
+  standardisation its diagonal case.
+- $k$ trades variance ($\sigma^2/k$) against bias; choose it by
+  cross-validation (the one-standard-error rule favours larger $k$) and
+  report a nested estimate.
+- Asymptotically 1-NN errs at most $2R^*(1 - R^*)$; $k$-NN with $k \to
+  \infty$, $k/n \to 0$ is universally consistent.
+- In high dimension neighbourhoods stop being local and distances
+  concentrate; irrelevant features hurt $k$-NN far more than linear models.
+
+## Exercises
+
+::: {#exr-mla6-regression}
+**$k$-NN regression and the bias–variance trade-off.** For 50 noisy points
+from $y = \sin(2\pi x)$ ($x$ uniform on $[0, 1]$, $\sigma = 0.3$), estimate by
+simulation over 200 training sets the squared bias and the variance of the
+$k$-NN regressor at $x_0 = 0.25$ (the peak) for $k = 1, 3, 5, 10, 20, 40$, and
+compare the variance with $\sigma^2/k$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+r = np.random.default_rng(2)
+preds = {k: [] for k in (1, 3, 5, 10, 20, 40)}
+for _ in range(200):
+    x50 = r.uniform(0, 1, 50); y50 = np.sin(2 * np.pi * x50) + r.normal(0, 0.3, 50)
+    for k in preds:
+        preds[k].append(KNeighborsRegressor(n_neighbors=k).fit(x50[:, None], y50).predict([[0.25]])[0])
+for k, p in preds.items():
+    p = np.array(p)
+    print(f"k = {k:2d}: bias^2 {(p.mean() - 1) ** 2:.4f}, variance {p.var():.4f} (sigma^2/k = {0.09 / k:.4f})")
+```
+For small $k$ the variance follows $\sigma^2/k$ closely; for large $k$ it
+stops falling, because with random inputs the neighbourhood's position along
+the sine changes from sample to sample, which adds variance coming from the
+function itself (the formula $\sigma^2/k$ assumed fixed inputs). The squared
+bias is negligible for small $k$ and grows quickly once the neighbourhood is
+wide enough to include points far from the peak, where the sine is lower. The best $k$ balances the two
+(@thm-bias-variance).
+:::
+
+::: {#exr-mla6-cost}
+**Search structures.** Time `KNeighborsClassifier(algorithm=...)` with
+`"brute"`, `"kd_tree"` and `"ball_tree"` for 2 000 queries against 50 000
+training points in $d = 2, 10, 50$. Explain the pattern.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import time
+r = np.random.default_rng(3)
+for d in (2, 10, 50):
+    Xt_, yt_ = r.random((50_000, d)), r.integers(0, 2, 50_000); Q = r.random((2000, d))
+    times = {}
+    for alg in ("brute", "kd_tree", "ball_tree"):
+        m = KNeighborsClassifier(algorithm=alg).fit(Xt_, yt_)
+        s = time.perf_counter(); m.predict(Q); times[alg] = time.perf_counter() - s
+    print(f"d = {d:2d}: " + ", ".join(f"{a} {1000 * t:.0f} ms" for a, t in times.items()))
+```
+In two dimensions the trees prune almost everything and beat brute force by a
+wide margin; as the dimension grows their advantage vanishes and, here already
+at ten uniform dimensions, reverses — the pruning relies on
+neighbourhoods being small, which @prp-knn-curse says they are not. Brute
+force, a matrix product, scales predictably. (Times depend on the machine;
+the pattern does not.)
+:::
+
+## Further reading {.unnumbered}
+
+- @hastie2009, §2.3–2.5 and ch. 13 — nearest neighbours versus linear models,
+  the curse of dimensionality, prototype methods; @james2023, §2.2.3 and 4.7.
+- @cover1967 — the nearest-neighbour bound; @fix1951 — the origin of the
+  method; @stone1977 and @devroye1996, ch. 5–6 and 11 — consistency and rates.
+- @beyer1999 — when is "nearest neighbour" meaningful?
+- @bentley1975 and @omohundro1989 — k-d trees and ball trees.
+- @goldberger2004 — learning the metric for $k$-NN (NCA).
+- scikit-learn user guide, "Nearest Neighbors" — algorithms, metrics, radius
+  neighbours and NCA [@pedregosa2011].

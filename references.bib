@@ -3475,6 +3475,1077 @@
   note      = {Free on arXiv (1810.03993). A template to document what a model is for and how it was evaluated}
 }
 
+% -----------------------------------------------------------------------------
+% Part IV — Machine learning: models and algorithms
+% -----------------------------------------------------------------------------
+
+% ---- Overview and data used throughout Part IV --------------------------------
+
+@book{box1987,
+  author    = {Box, George E. P. and Draper, Norman R.},
+  title     = {Empirical Model-Building and Response Surfaces},
+  publisher = {Wiley},
+  address   = {New York},
+  year      = {1987},
+  isbn      = {978-0-471-81033-9},
+  note      = {Libraries. The aphorism "Essentially, all models are wrong, but some are useful" is on p. 424}
+}
+
+@article{fisher1936,
+  author  = {Fisher, Ronald A.},
+  title   = {The Use of Multiple Measurements in Taxonomic Problems},
+  journal = {Annals of Eugenics},
+  volume  = {7},
+  number  = {2},
+  pages   = {179--188},
+  year    = {1936},
+  doi     = {10.1111/j.1469-1809.1936.tb02137.x},
+  note    = {Free via the publisher (Wiley Online Library). The paper that made the iris measurements famous}
+}
+
+@misc{fisher1936data,
+  author       = {Fisher, Ronald A.},
+  title        = {Iris},
+  howpublished = {UCI Machine Learning Repository, data set},
+  year         = {1936},
+  doi          = {10.24432/C56C76},
+  note         = {CC BY 4.0. 150 irises of three species, four measurements in cm; shipped with scikit-learn as load\_iris}
+}
+
+@misc{alpaydin1998,
+  author       = {Alpaydin, Ethem and Kaynak, Cenk},
+  title        = {Optical Recognition of Handwritten Digits},
+  howpublished = {UCI Machine Learning Repository, data set},
+  year         = {1998},
+  doi          = {10.24432/C50P49},
+  note         = {CC BY 4.0. 8 x 8 images, pixel counts 0--16; scikit-learn's load\_digits is the test set of 1 797 images}
+}
+
+% ---- Gradient descent and optimisation (Chapter on optimisation) -------------
+
+@book{euler1744,
+  author    = {Euler, Leonhard},
+  title     = {Methodus inveniendi lineas curvas maximi minimive proprietate gaudentes, sive solutio problematis isoperimetrici latissimo sensu accepti},
+  publisher = {Bousquet},
+  address   = {Lausanne and Geneva},
+  year      = {1744},
+  doi       = {10.3931/e-rara-1490},
+  note      = {Free digitised copy on e-rara (ETH Zurich); Euler Archive E65. The quoted sentence opens Additamentum I, De curvis elasticis; our translation}
+}
+
+@book{nocedal2006,
+  author    = {Nocedal, Jorge and Wright, Stephen J.},
+  title     = {Numerical Optimization},
+  edition   = {2},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {2006},
+  doi       = {10.1007/978-0-387-40065-5},
+  isbn      = {978-0-387-30303-1},
+  note      = {Libraries. Used: ch. 2--3 (line search, rates, Newton), §7.2 (L-BFGS), §8.1 (finite differences)}
+}
+
+@article{robbins1951,
+  author  = {Robbins, Herbert and Monro, Sutton},
+  title   = {A Stochastic Approximation Method},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {22},
+  number  = {3},
+  pages   = {400--407},
+  year    = {1951},
+  doi     = {10.1214/aoms/1177729586},
+  note    = {Open access via Project Euclid. The origin of stochastic gradient methods and of the step-size conditions}
+}
+
+@inproceedings{bottou2008,
+  author    = {Bottou, L{\'e}on and Bousquet, Olivier},
+  title     = {The Tradeoffs of Large Scale Learning},
+  booktitle = {Advances in Neural Information Processing Systems 20},
+  pages     = {161--168},
+  year      = {2008},
+  url       = {https://papers.nips.cc/paper/3323-the-tradeoffs-of-large-scale-learning},
+  note      = {Open access. Why optimising far below the statistical error is wasted effort}
+}
+
+@inproceedings{bottou2010,
+  author    = {Bottou, L{\'e}on},
+  title     = {Large-Scale Machine Learning with Stochastic Gradient Descent},
+  booktitle = {Proceedings of COMPSTAT 2010},
+  publisher = {Physica-Verlag},
+  pages     = {177--186},
+  year      = {2010},
+  doi       = {10.1007/978-3-7908-2604-3_16},
+  note      = {Free author copy on leon.bottou.org. A short case for SGD on large data}
+}
+
+@article{bottou2018,
+  author  = {Bottou, L{\'e}on and Curtis, Frank E. and Nocedal, Jorge},
+  title   = {Optimization Methods for Large-Scale Machine Learning},
+  journal = {SIAM Review},
+  volume  = {60},
+  number  = {2},
+  pages   = {223--311},
+  year    = {2018},
+  doi     = {10.1137/16M1080173},
+  eprint  = {1606.04838},
+  archiveprefix = {arXiv},
+  note    = {Free on arXiv. Used: §3--5 (SGD and its analysis, §4.2 strongly convex case)}
+}
+
+@book{cochran1977,
+  author    = {Cochran, William G.},
+  title     = {Sampling Techniques},
+  edition   = {3},
+  publisher = {Wiley},
+  address   = {New York},
+  year      = {1977},
+  isbn      = {978-0-471-16240-7},
+  note      = {Libraries. Ch. 2: simple random sampling and the finite-population correction}
+}
+
+@article{nemirovski2009,
+  author  = {Nemirovski, Arkadi and Juditsky, Anatoli and Lan, Guanghui and Shapiro, Alexander},
+  title   = {Robust Stochastic Approximation Approach to Stochastic Programming},
+  journal = {SIAM Journal on Optimization},
+  volume  = {19},
+  number  = {4},
+  pages   = {1574--1609},
+  year    = {2009},
+  doi     = {10.1137/070704277},
+  note    = {Free author copies online. The bound of order 1/√T for averaged (sub)gradient steps}
+}
+
+@inproceedings{zinkevich2003,
+  author    = {Zinkevich, Martin},
+  title     = {Online Convex Programming and Generalized Infinitesimal Gradient Ascent},
+  booktitle = {Proceedings of the 20th International Conference on Machine Learning (ICML)},
+  pages     = {928--936},
+  year      = {2003},
+  note      = {Free on the AAAI digital library. Regret bounds for online gradient descent}
+}
+
+@article{polyak1964,
+  author  = {Polyak, Boris T.},
+  title   = {Some Methods of Speeding up the Convergence of Iteration Methods},
+  journal = {USSR Computational Mathematics and Mathematical Physics},
+  volume  = {4},
+  number  = {5},
+  pages   = {1--17},
+  year    = {1964},
+  doi     = {10.1016/0041-5553(64)90137-5},
+  note    = {Libraries. The heavy-ball (momentum) method and its rate on quadratics}
+}
+
+@article{polyak1992,
+  author  = {Polyak, Boris T. and Juditsky, Anatoli B.},
+  title   = {Acceleration of Stochastic Approximation by Averaging},
+  journal = {SIAM Journal on Control and Optimization},
+  volume  = {30},
+  number  = {4},
+  pages   = {838--855},
+  year    = {1992},
+  doi     = {10.1137/0330046},
+  note    = {Libraries. Averaging the iterates of stochastic approximation}
+}
+
+@article{duchi2011,
+  author  = {Duchi, John and Hazan, Elad and Singer, Yoram},
+  title   = {Adaptive Subgradient Methods for Online Learning and Stochastic Optimization},
+  journal = {Journal of Machine Learning Research},
+  volume  = {12},
+  pages   = {2121--2159},
+  year    = {2011},
+  url     = {https://jmlr.org/papers/v12/duchi11a.html},
+  note    = {Open access. AdaGrad}
+}
+
+@misc{tieleman2012,
+  author       = {Tieleman, Tijmen and Hinton, Geoffrey},
+  title        = {Lecture 6.5 --- {RMSProp}: Divide the Gradient by a Running Average of Its Recent Magnitude},
+  howpublished = {COURSERA: Neural Networks for Machine Learning, video lecture},
+  year         = {2012},
+  note         = {The usual citation for RMSProp, which was never published in a paper}
+}
+
+@inproceedings{kingma2015,
+  author    = {Kingma, Diederik P. and Ba, Jimmy},
+  title     = {Adam: A Method for Stochastic Optimization},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2015},
+  eprint    = {1412.6980},
+  archiveprefix = {arXiv},
+  note      = {Free on arXiv. Read §2 (the algorithm) and §3 (bias correction)}
+}
+
+@inproceedings{reddi2018,
+  author    = {Reddi, Sashank J. and Kale, Satyen and Kumar, Sanjiv},
+  title     = {On the Convergence of {Adam} and Beyond},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2018},
+  eprint    = {1904.09237},
+  archiveprefix = {arXiv},
+  note      = {Free on arXiv. A counterexample to Adam's convergence and the AMSGrad fix}
+}
+
+@incollection{prechelt2012,
+  author    = {Prechelt, Lutz},
+  title     = {Early Stopping --- But When?},
+  booktitle = {Neural Networks: Tricks of the Trade},
+  edition   = {2},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {7700},
+  publisher = {Springer},
+  pages     = {53--67},
+  year      = {2012},
+  doi       = {10.1007/978-3-642-35289-8_5},
+  note      = {Libraries. Stopping criteria compared empirically}
+}
+
+@article{yao2007,
+  author  = {Yao, Yuan and Rosasco, Lorenzo and Caponnetto, Andrea},
+  title   = {On Early Stopping in Gradient Descent Learning},
+  journal = {Constructive Approximation},
+  volume  = {26},
+  number  = {2},
+  pages   = {289--315},
+  year    = {2007},
+  doi     = {10.1007/s00365-006-0663-2},
+  note    = {Free author copies online. Early stopping as regularisation, with rates}
+}
+
+@book{goodfellow2016,
+  author    = {Goodfellow, Ian and Bengio, Yoshua and Courville, Aaron},
+  title     = {Deep Learning},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2016},
+  isbn      = {978-0-262-03561-3},
+  url       = {https://www.deeplearningbook.org},
+  note      = {Free online. Used: ch. 6 (feed-forward networks), 7 (regularisation), 8 (optimisation)}
+}
+
+% ---- Parametric and non-parametric models -------------------------------------
+
+@book{wasserman2004,
+  author    = {Wasserman, Larry},
+  title     = {All of Statistics: A Concise Course in Statistical Inference},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {2004},
+  doi       = {10.1007/978-0-387-21736-9},
+  note      = {Libraries. Ch. 9: parametric inference and maximum likelihood}
+}
+
+@book{wasserman2006,
+  author    = {Wasserman, Larry},
+  title     = {All of Nonparametric Statistics},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {2006},
+  doi       = {10.1007/0-387-30623-4},
+  note      = {Libraries. Ch. 6: density estimation (histograms §6.2, kernels §6.3, high dimension §6.5)}
+}
+
+@article{white1982,
+  author  = {White, Halbert},
+  title   = {Maximum Likelihood Estimation of Misspecified Models},
+  journal = {Econometrica},
+  volume  = {50},
+  number  = {1},
+  pages   = {1--25},
+  year    = {1982},
+  doi     = {10.2307/1912526},
+  note    = {JSTOR. What maximum likelihood estimates when the model is wrong}
+}
+
+@article{scott1979,
+  author  = {Scott, David W.},
+  title   = {On Optimal and Data-Based Histograms},
+  journal = {Biometrika},
+  volume  = {66},
+  number  = {3},
+  pages   = {605--610},
+  year    = {1979},
+  doi     = {10.1093/biomet/66.3.605},
+  note    = {JSTOR. The optimal bin width of a histogram}
+}
+
+@article{rosenblatt1956,
+  author  = {Rosenblatt, Murray},
+  title   = {Remarks on Some Nonparametric Estimates of a Density Function},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {27},
+  number  = {3},
+  pages   = {832--837},
+  year    = {1956},
+  doi     = {10.1214/aoms/1177728190},
+  note    = {Open access via Project Euclid. The kernel density estimator}
+}
+
+@article{parzen1962,
+  author  = {Parzen, Emanuel},
+  title   = {On Estimation of a Probability Density Function and Mode},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {33},
+  number  = {3},
+  pages   = {1065--1076},
+  year    = {1962},
+  doi     = {10.1214/aoms/1177704472},
+  note    = {Open access via Project Euclid. Consistency of kernel density estimates}
+}
+
+@book{wand1995,
+  author    = {Wand, M. P. and Jones, M. C.},
+  title     = {Kernel Smoothing},
+  publisher = {Chapman \& Hall},
+  address   = {London},
+  year      = {1995},
+  doi       = {10.1201/b14876},
+  note      = {Libraries. Ch. 2: univariate kernel density estimation, bias, variance and AMISE}
+}
+
+@book{silverman1986,
+  author    = {Silverman, Bernard W.},
+  title     = {Density Estimation for Statistics and Data Analysis},
+  publisher = {Chapman \& Hall},
+  address   = {London},
+  year      = {1986},
+  doi       = {10.1201/9781315140919},
+  note      = {Libraries. Ch. 3, in particular §3.4.2 on the normal-reference bandwidth}
+}
+
+@book{scott2015,
+  author    = {Scott, David W.},
+  title     = {Multivariate Density Estimation: Theory, Practice, and Visualization},
+  edition   = {2},
+  publisher = {Wiley},
+  address   = {Hoboken, NJ},
+  year      = {2015},
+  doi       = {10.1002/9781118575574},
+  note      = {Libraries. Histograms and kernels in several dimensions}
+}
+
+@article{stone1982,
+  author  = {Stone, Charles J.},
+  title   = {Optimal Global Rates of Convergence for Nonparametric Regression},
+  journal = {The Annals of Statistics},
+  volume  = {10},
+  number  = {4},
+  pages   = {1040--1053},
+  year    = {1982},
+  doi     = {10.1214/aos/1176345969},
+  note    = {Open access via Project Euclid. Why non-parametric rates must degrade with the dimension}
+}
+
+@book{bellman1961,
+  author    = {Bellman, Richard},
+  title     = {Adaptive Control Processes: A Guided Tour},
+  publisher = {Princeton University Press},
+  address   = {Princeton, NJ},
+  year      = {1961},
+  doi       = {10.1515/9781400874668},
+  note      = {Libraries. Where the phrase "curse of dimensionality" became current}
+}
+
+% ---- Naive Bayes ----------------------------------------------------------------
+
+@book{laplace1814,
+  author    = {Laplace, Pierre-Simon},
+  title     = {Essai philosophique sur les probabilit{\'e}s},
+  publisher = {Courcier},
+  address   = {Paris},
+  year      = {1814},
+  note      = {Free digitised copies (Gallica, Internet Archive). The quoted sentence is in the conclusion; our translation. Also the rule of succession}
+}
+
+@article{bayes1763,
+  author  = {Bayes, Thomas and Price, Richard},
+  title   = {An Essay towards Solving a Problem in the Doctrine of Chances},
+  journal = {Philosophical Transactions of the Royal Society of London},
+  volume  = {53},
+  pages   = {370--418},
+  year    = {1763},
+  doi     = {10.1098/rstl.1763.0053},
+  note    = {Free via the Royal Society. Communicated by Price after Bayes's death}
+}
+
+@article{gigerenzer1995,
+  author  = {Gigerenzer, Gerd and Hoffrage, Ulrich},
+  title   = {How to Improve {B}ayesian Reasoning Without Instruction: Frequency Formats},
+  journal = {Psychological Review},
+  volume  = {102},
+  number  = {4},
+  pages   = {684--704},
+  year    = {1995},
+  doi     = {10.1037/0033-295X.102.4.684},
+  note    = {Libraries. Natural frequencies make Bayes' theorem intuitive}
+}
+
+@article{kahneman1973,
+  author  = {Kahneman, Daniel and Tversky, Amos},
+  title   = {On the Psychology of Prediction},
+  journal = {Psychological Review},
+  volume  = {80},
+  number  = {4},
+  pages   = {237--251},
+  year    = {1973},
+  doi     = {10.1037/h0034747},
+  note    = {Libraries. Neglect of base rates}
+}
+
+@inproceedings{ng2002,
+  author    = {Ng, Andrew Y. and Jordan, Michael I.},
+  title     = {On Discriminative vs. Generative Classifiers: A Comparison of Logistic Regression and Naive {B}ayes},
+  booktitle = {Advances in Neural Information Processing Systems 14},
+  pages     = {841--848},
+  year      = {2002},
+  note      = {Open access (NeurIPS proceedings). Learning curves of the two families}
+}
+
+@book{manning2008,
+  author    = {Manning, Christopher D. and Raghavan, Prabhakar and Sch{\"u}tze, Hinrich},
+  title     = {Introduction to Information Retrieval},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2008},
+  doi       = {10.1017/CBO9780511809071},
+  note      = {Free online at nlp.stanford.edu/IR-book. Ch. 13: naive Bayes for text, §13.2 smoothing}
+}
+
+@inproceedings{mccallum1998,
+  author    = {McCallum, Andrew and Nigam, Kamal},
+  title     = {A Comparison of Event Models for Naive {B}ayes Text Classification},
+  booktitle = {AAAI-98 Workshop on Learning for Text Categorization},
+  pages     = {41--48},
+  year      = {1998},
+  note      = {Free author copy online. Bernoulli versus multinomial models}
+}
+
+@inproceedings{rennie2003,
+  author    = {Rennie, Jason D. M. and Shih, Lawrence and Teevan, Jaime and Karger, David R.},
+  title     = {Tackling the Poor Assumptions of Naive {B}ayes Text Classifiers},
+  booktitle = {Proceedings of the 20th International Conference on Machine Learning (ICML)},
+  pages     = {616--623},
+  year      = {2003},
+  note      = {Free on the AAAI digital library. Complement naive Bayes and other fixes}
+}
+
+@article{domingos1997,
+  author  = {Domingos, Pedro and Pazzani, Michael},
+  title   = {On the Optimality of the Simple {B}ayesian Classifier under Zero-One Loss},
+  journal = {Machine Learning},
+  volume  = {29},
+  number  = {2--3},
+  pages   = {103--130},
+  year    = {1997},
+  doi     = {10.1023/A:1007413511361},
+  note    = {Free author copy online. Why naive Bayes classifies well despite dependence}
+}
+
+@inproceedings{zadrozny2002,
+  author    = {Zadrozny, Bianca and Elkan, Charles},
+  title     = {Transforming Classifier Scores into Accurate Multiclass Probability Estimates},
+  booktitle = {Proceedings of the 8th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining},
+  pages     = {694--699},
+  year      = {2002},
+  doi       = {10.1145/775047.775151},
+  note      = {Free author copy online. Isotonic calibration}
+}
+
+@article{chan1983,
+  author  = {Chan, Tony F. and Golub, Gene H. and LeVeque, Randall J.},
+  title   = {Algorithms for Computing the Sample Variance: Analysis and Recommendations},
+  journal = {The American Statistician},
+  volume  = {37},
+  number  = {3},
+  pages   = {242--247},
+  year    = {1983},
+  doi     = {10.1080/00031305.1983.10483115},
+  note    = {JSTOR. Numerically safe (pairwise) updates of means and variances}
+}
+
+% ---- Support vector machines ------------------------------------------------------
+
+@article{cortes1995,
+  author  = {Cortes, Corinna and Vapnik, Vladimir},
+  title   = {Support-Vector Networks},
+  journal = {Machine Learning},
+  volume  = {20},
+  number  = {3},
+  pages   = {273--297},
+  year    = {1995},
+  doi     = {10.1007/BF00994018},
+  note    = {Free via Springer. The soft-margin SVM}
+}
+
+@inproceedings{boser1992,
+  author    = {Boser, Bernhard E. and Guyon, Isabelle M. and Vapnik, Vladimir N.},
+  title     = {A Training Algorithm for Optimal Margin Classifiers},
+  booktitle = {Proceedings of the Fifth Annual Workshop on Computational Learning Theory (COLT)},
+  pages     = {144--152},
+  year      = {1992},
+  doi       = {10.1145/130385.130401},
+  note      = {Free author copies online. Maximal margin combined with kernels}
+}
+
+@article{aizerman1964,
+  author  = {Aizerman, M. A. and Braverman, E. M. and Rozonoer, L. I.},
+  title   = {Theoretical Foundations of the Potential Function Method in Pattern Recognition Learning},
+  journal = {Automation and Remote Control},
+  volume  = {25},
+  pages   = {821--837},
+  year    = {1964},
+  note    = {Libraries. The first use of kernels as inner products in a feature space for learning}
+}
+
+@book{vapnik1998,
+  author    = {Vapnik, Vladimir N.},
+  title     = {Statistical Learning Theory},
+  publisher = {Wiley},
+  address   = {New York},
+  year      = {1998},
+  isbn      = {978-0-471-03003-4},
+  note      = {Libraries. Ch. 10: support vector machines and the leave-one-out bound}
+}
+
+@book{scholkopf2002,
+  author    = {Sch{\"o}lkopf, Bernhard and Smola, Alexander J.},
+  title     = {Learning with Kernels: Support Vector Machines, Regularization, Optimization, and Beyond},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2002},
+  isbn      = {978-0-262-19475-4},
+  note      = {Libraries. Ch. 1--2 (kernels, feature spaces, RKHS) and 7 (SVM classification)}
+}
+
+@article{aronszajn1950,
+  author  = {Aronszajn, N.},
+  title   = {Theory of Reproducing Kernels},
+  journal = {Transactions of the American Mathematical Society},
+  volume  = {68},
+  number  = {3},
+  pages   = {337--404},
+  year    = {1950},
+  doi     = {10.1090/S0002-9947-1950-0051437-7},
+  note    = {Open access via the AMS. Reproducing kernel Hilbert spaces}
+}
+
+@article{mercer1909,
+  author  = {Mercer, James},
+  title   = {Functions of Positive and Negative Type, and Their Connection with the Theory of Integral Equations},
+  journal = {Philosophical Transactions of the Royal Society of London, Series A},
+  volume  = {209},
+  pages   = {415--446},
+  year    = {1909},
+  doi     = {10.1098/rsta.1909.0016},
+  note    = {Free via the Royal Society. Mercer's theorem}
+}
+
+@inproceedings{scholkopf2001,
+  author    = {Sch{\"o}lkopf, Bernhard and Herbrich, Ralf and Smola, Alexander J.},
+  title     = {A Generalized Representer Theorem},
+  booktitle = {Computational Learning Theory (COLT 2001)},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {2111},
+  pages     = {416--426},
+  year      = {2001},
+  doi       = {10.1007/3-540-44581-1_27},
+  note      = {Libraries. The representer theorem in general form}
+}
+
+@techreport{platt1998,
+  author      = {Platt, John C.},
+  title       = {Sequential Minimal Optimization: A Fast Algorithm for Training Support Vector Machines},
+  institution = {Microsoft Research},
+  number      = {MSR-TR-98-14},
+  year        = {1998},
+  note        = {Free from Microsoft Research. SMO}
+}
+
+@incollection{platt2000,
+  author    = {Platt, John C.},
+  title     = {Probabilistic Outputs for Support Vector Machines and Comparisons to Regularized Likelihood Methods},
+  booktitle = {Advances in Large Margin Classifiers},
+  editor    = {Smola, Alexander J. and Bartlett, Peter and Sch{\"o}lkopf, Bernhard and Schuurmans, Dale},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  pages     = {61--74},
+  year      = {2000},
+  note      = {Free author copy online. Platt scaling, used by SVC(probability=True)}
+}
+
+@article{chang2011,
+  author  = {Chang, Chih-Chung and Lin, Chih-Jen},
+  title   = {{LIBSVM}: A Library for Support Vector Machines},
+  journal = {ACM Transactions on Intelligent Systems and Technology},
+  volume  = {2},
+  number  = {3},
+  pages   = {27:1--27:27},
+  year    = {2011},
+  doi     = {10.1145/1961189.1961199},
+  note    = {Free author copy on the LIBSVM site. The solver inside scikit-learn's SVC}
+}
+
+@techreport{hsu2003,
+  author      = {Hsu, Chih-Wei and Chang, Chih-Chung and Lin, Chih-Jen},
+  title       = {A Practical Guide to Support Vector Classification},
+  institution = {Department of Computer Science, National Taiwan University},
+  year        = {2003},
+  url         = {https://www.csie.ntu.edu.tw/~cjlin/papers/guide/guide.pdf},
+  note        = {Free (revised several times since). Scaling and grid search over C and gamma}
+}
+
+@article{shalevshwartz2011,
+  author  = {Shalev-Shwartz, Shai and Singer, Yoram and Srebro, Nathan and Cotter, Andrew},
+  title   = {Pegasos: Primal Estimated Sub-Gradient Solver for {SVM}},
+  journal = {Mathematical Programming},
+  volume  = {127},
+  number  = {1},
+  pages   = {3--30},
+  year    = {2011},
+  doi     = {10.1007/s10107-010-0420-4},
+  note    = {Free author copy online. Stochastic subgradient training of linear SVMs}
+}
+
+% ---- Neural networks ----------------------------------------------------------------
+
+@article{rumelhart1986,
+  author  = {Rumelhart, David E. and Hinton, Geoffrey E. and Williams, Ronald J.},
+  title   = {Learning Representations by Back-Propagating Errors},
+  journal = {Nature},
+  volume  = {323},
+  pages   = {533--536},
+  year    = {1986},
+  doi     = {10.1038/323533a0},
+  note    = {Libraries. The paper that popularised backpropagation}
+}
+
+@article{mcculloch1943,
+  author  = {McCulloch, Warren S. and Pitts, Walter},
+  title   = {A Logical Calculus of the Ideas Immanent in Nervous Activity},
+  journal = {The Bulletin of Mathematical Biophysics},
+  volume  = {5},
+  number  = {4},
+  pages   = {115--133},
+  year    = {1943},
+  doi     = {10.1007/BF02478259},
+  note    = {Libraries. The threshold neuron}
+}
+
+@article{rosenblatt1958,
+  author  = {Rosenblatt, Frank},
+  title   = {The Perceptron: A Probabilistic Model for Information Storage and Organization in the Brain},
+  journal = {Psychological Review},
+  volume  = {65},
+  number  = {6},
+  pages   = {386--408},
+  year    = {1958},
+  doi     = {10.1037/h0042519},
+  note    = {Libraries. The perceptron and its learning rule}
+}
+
+@inproceedings{novikoff1962,
+  author    = {Novikoff, Albert B. J.},
+  title     = {On Convergence Proofs on Perceptrons},
+  booktitle = {Proceedings of the Symposium on the Mathematical Theory of Automata},
+  volume    = {12},
+  publisher = {Polytechnic Institute of Brooklyn},
+  pages     = {615--622},
+  year      = {1962},
+  note      = {Libraries. The $(R/\gamma)^2$ mistake bound}
+}
+
+@book{minsky1969,
+  author    = {Minsky, Marvin and Papert, Seymour},
+  title     = {Perceptrons: An Introduction to Computational Geometry},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {1969},
+  note      = {Libraries (expanded edition 1988). The limits of single-layer perceptrons}
+}
+
+@article{freund1999,
+  author  = {Freund, Yoav and Schapire, Robert E.},
+  title   = {Large Margin Classification Using the Perceptron Algorithm},
+  journal = {Machine Learning},
+  volume  = {37},
+  number  = {3},
+  pages   = {277--296},
+  year    = {1999},
+  doi     = {10.1023/A:1007662407062},
+  note    = {Free author copy online. The voted and averaged perceptron}
+}
+
+@mastersthesis{hochreiter1991,
+  author = {Hochreiter, Sepp},
+  title  = {Untersuchungen zu dynamischen neuronalen Netzen},
+  school = {Technische Universit{\"a}t M{\"u}nchen},
+  type   = {Diploma thesis},
+  year   = {1991},
+  note   = {In German; free copy on the author's former site. The first analysis of vanishing gradients}
+}
+
+@inproceedings{glorot2010,
+  author    = {Glorot, Xavier and Bengio, Yoshua},
+  title     = {Understanding the Difficulty of Training Deep Feedforward Neural Networks},
+  booktitle = {Proceedings of the 13th International Conference on Artificial Intelligence and Statistics (AISTATS)},
+  series    = {PMLR},
+  volume    = {9},
+  pages     = {249--256},
+  year      = {2010},
+  url       = {https://proceedings.mlr.press/v9/glorot10a.html},
+  note      = {Open access. Saturation, vanishing gradients and Glorot initialisation}
+}
+
+@inproceedings{glorot2011,
+  author    = {Glorot, Xavier and Bordes, Antoine and Bengio, Yoshua},
+  title     = {Deep Sparse Rectifier Neural Networks},
+  booktitle = {Proceedings of the 14th International Conference on Artificial Intelligence and Statistics (AISTATS)},
+  series    = {PMLR},
+  volume    = {15},
+  pages     = {315--323},
+  year      = {2011},
+  url       = {https://proceedings.mlr.press/v15/glorot11a.html},
+  note      = {Open access. ReLU units in deep networks}
+}
+
+@inproceedings{he2015,
+  author    = {He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  title     = {Delving Deep into Rectifiers: Surpassing Human-Level Performance on {ImageNet} Classification},
+  booktitle = {Proceedings of the IEEE International Conference on Computer Vision (ICCV)},
+  pages     = {1026--1034},
+  year      = {2015},
+  doi       = {10.1109/ICCV.2015.123},
+  eprint    = {1502.01852},
+  archiveprefix = {arXiv},
+  note      = {Free on arXiv. §2.2: the He initialisation for ReLU}
+}
+
+@mastersthesis{linnainmaa1970,
+  author = {Linnainmaa, Seppo},
+  title  = {The Representation of the Cumulative Rounding Error of an Algorithm as a {T}aylor Expansion of the Local Rounding Errors},
+  school = {University of Helsinki},
+  year   = {1970},
+  note   = {In Finnish. The first description of reverse-mode automatic differentiation}
+}
+
+@phdthesis{werbos1974,
+  author = {Werbos, Paul J.},
+  title  = {Beyond Regression: New Tools for Prediction and Analysis in the Behavioral Sciences},
+  school = {Harvard University},
+  year   = {1974},
+  note   = {Libraries. Backpropagation applied to networks}
+}
+
+@book{griewank2008,
+  author    = {Griewank, Andreas and Walther, Andrea},
+  title     = {Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation},
+  edition   = {2},
+  publisher = {SIAM},
+  address   = {Philadelphia},
+  year      = {2008},
+  doi       = {10.1137/1.9780898717761},
+  note      = {Libraries. Automatic differentiation, forward and reverse}
+}
+
+@article{cybenko1989,
+  author  = {Cybenko, George},
+  title   = {Approximation by Superpositions of a Sigmoidal Function},
+  journal = {Mathematics of Control, Signals and Systems},
+  volume  = {2},
+  number  = {4},
+  pages   = {303--314},
+  year    = {1989},
+  doi     = {10.1007/BF02551274},
+  note    = {Libraries. Universal approximation with sigmoids}
+}
+
+@article{hornik1991,
+  author  = {Hornik, Kurt},
+  title   = {Approximation Capabilities of Multilayer Feedforward Networks},
+  journal = {Neural Networks},
+  volume  = {4},
+  number  = {2},
+  pages   = {251--257},
+  year    = {1991},
+  doi     = {10.1016/0893-6080(91)90009-T},
+  note    = {Libraries. Universal approximation for bounded non-constant activations}
+}
+
+@article{leshno1993,
+  author  = {Leshno, Moshe and Lin, Vladimir Ya. and Pinkus, Allan and Schocken, Shimon},
+  title   = {Multilayer Feedforward Networks with a Nonpolynomial Activation Function Can Approximate Any Function},
+  journal = {Neural Networks},
+  volume  = {6},
+  number  = {6},
+  pages   = {861--867},
+  year    = {1993},
+  doi     = {10.1016/S0893-6080(05)80131-5},
+  note    = {Libraries. Universal approximation iff the activation is not a polynomial}
+}
+
+@inproceedings{telgarsky2016,
+  author    = {Telgarsky, Matus},
+  title     = {Benefits of Depth in Neural Networks},
+  booktitle = {Proceedings of the 29th Conference on Learning Theory (COLT)},
+  series    = {PMLR},
+  volume    = {49},
+  pages     = {1517--1539},
+  year      = {2016},
+  eprint    = {1602.04485},
+  archiveprefix = {arXiv},
+  note      = {Free on arXiv. Functions that deep networks represent exponentially more cheaply than shallow ones}
+}
+
+@book{nielsen2015,
+  author    = {Nielsen, Michael A.},
+  title     = {Neural Networks and Deep Learning},
+  publisher = {Determination Press},
+  year      = {2015},
+  url       = {http://neuralnetworksanddeeplearning.com},
+  note      = {Free online. A from-scratch introduction to networks and backpropagation}
+}
+
+% ---- Nearest neighbours ---------------------------------------------------------------
+
+@article{cover1967,
+  author  = {Cover, Thomas M. and Hart, Peter E.},
+  title   = {Nearest Neighbor Pattern Classification},
+  journal = {IEEE Transactions on Information Theory},
+  volume  = {13},
+  number  = {1},
+  pages   = {21--27},
+  year    = {1967},
+  doi     = {10.1109/TIT.1967.1053964},
+  note    = {Libraries. The bound $R^* \le R \le 2R^*(1 - R^*)$}
+}
+
+@techreport{fix1951,
+  author      = {Fix, Evelyn and Hodges, Joseph L.},
+  title       = {Discriminatory Analysis. Nonparametric Discrimination: Consistency Properties},
+  institution = {USAF School of Aviation Medicine, Randolph Field, Texas},
+  number      = {Project 21-49-004, Report 4},
+  year        = {1951},
+  note        = {Reprinted in International Statistical Review 57(3):238--247, 1989, doi 10.2307/1403797. The origin of the nearest-neighbour rule}
+}
+
+@article{bentley1975,
+  author  = {Bentley, Jon Louis},
+  title   = {Multidimensional Binary Search Trees Used for Associative Searching},
+  journal = {Communications of the ACM},
+  volume  = {18},
+  number  = {9},
+  pages   = {509--517},
+  year    = {1975},
+  doi     = {10.1145/361002.361007},
+  note    = {Libraries. The k-d tree}
+}
+
+@techreport{omohundro1989,
+  author      = {Omohundro, Stephen M.},
+  title       = {Five Balltree Construction Algorithms},
+  institution = {International Computer Science Institute, Berkeley},
+  number      = {TR-89-063},
+  year        = {1989},
+  note        = {Free from ICSI. Ball trees}
+}
+
+@book{hardy1952,
+  author    = {Hardy, G. H. and Littlewood, J. E. and P{\'o}lya, G.},
+  title     = {Inequalities},
+  edition   = {2},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {1952},
+  note      = {Libraries. §2.11: Minkowski's inequality}
+}
+
+@article{mahalanobis1936,
+  author  = {Mahalanobis, Prasanta Chandra},
+  title   = {On the Generalised Distance in Statistics},
+  journal = {Proceedings of the National Institute of Sciences of India},
+  volume  = {2},
+  number  = {1},
+  pages   = {49--55},
+  year    = {1936},
+  note    = {Free digitised copies online. The Mahalanobis distance}
+}
+
+@article{stone1977,
+  author  = {Stone, Charles J.},
+  title   = {Consistent Nonparametric Regression},
+  journal = {The Annals of Statistics},
+  volume  = {5},
+  number  = {4},
+  pages   = {595--620},
+  year    = {1977},
+  doi     = {10.1214/aos/1176343886},
+  note    = {Open access via Project Euclid. Universal consistency of k-NN with $k \to \infty$, $k/n \to 0$}
+}
+
+@book{devroye1996,
+  author    = {Devroye, Luc and Gy{\"o}rfi, L{\'a}szl{\'o} and Lugosi, G{\'a}bor},
+  title     = {A Probabilistic Theory of Pattern Recognition},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {1996},
+  doi       = {10.1007/978-1-4612-0711-5},
+  note      = {Libraries. Ch. 5--6 and 11: nearest-neighbour rules and their consistency}
+}
+
+@inproceedings{beyer1999,
+  author    = {Beyer, Kevin and Goldstein, Jonathan and Ramakrishnan, Raghu and Shaft, Uri},
+  title     = {When Is ``Nearest Neighbor'' Meaningful?},
+  booktitle = {Database Theory --- ICDT'99},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1540},
+  pages     = {217--235},
+  year      = {1999},
+  doi       = {10.1007/3-540-49257-7_15},
+  note      = {Free author copy online. Concentration of distances in high dimension}
+}
+
+@inproceedings{goldberger2004,
+  author    = {Goldberger, Jacob and Roweis, Sam and Hinton, Geoffrey and Salakhutdinov, Ruslan},
+  title     = {Neighbourhood Components Analysis},
+  booktitle = {Advances in Neural Information Processing Systems 17},
+  pages     = {513--520},
+  year      = {2004},
+  note      = {Open access (NeurIPS proceedings). Learning a metric for k-NN}
+}
+
+% ---- Decision trees and random forests ---------------------------------------------------
+
+@book{breiman1984,
+  author    = {Breiman, Leo and Friedman, Jerome H. and Olshen, Richard A. and Stone, Charles J.},
+  title     = {Classification and Regression Trees},
+  publisher = {Wadsworth},
+  address   = {Belmont, CA},
+  year      = {1984},
+  doi       = {10.1201/9781315139470},
+  note      = {Libraries (CRC reprint). CART; ch. 3: cost-complexity pruning}
+}
+
+@article{quinlan1986,
+  author  = {Quinlan, J. Ross},
+  title   = {Induction of Decision Trees},
+  journal = {Machine Learning},
+  volume  = {1},
+  number  = {1},
+  pages   = {81--106},
+  year    = {1986},
+  doi     = {10.1007/BF00116251},
+  note    = {Free via Springer. ID3 and information gain}
+}
+
+@book{quinlan1993,
+  author    = {Quinlan, J. Ross},
+  title     = {C4.5: Programs for Machine Learning},
+  publisher = {Morgan Kaufmann},
+  address   = {San Mateo, CA},
+  year      = {1993},
+  isbn      = {978-1-55860-238-0},
+  note      = {Libraries. C4.5}
+}
+
+@article{breiman1996,
+  author  = {Breiman, Leo},
+  title   = {Bagging Predictors},
+  journal = {Machine Learning},
+  volume  = {24},
+  number  = {2},
+  pages   = {123--140},
+  year    = {1996},
+  doi     = {10.1007/BF00058655},
+  note    = {Free via Springer. Bootstrap aggregating}
+}
+
+@techreport{breiman1996oob,
+  author      = {Breiman, Leo},
+  title       = {Out-of-Bag Estimation},
+  institution = {Department of Statistics, University of California, Berkeley},
+  year        = {1996},
+  note        = {Free from the Berkeley statistics department. The out-of-bag error estimate}
+}
+
+@article{breiman2001rf,
+  author  = {Breiman, Leo},
+  title   = {Random Forests},
+  journal = {Machine Learning},
+  volume  = {45},
+  number  = {1},
+  pages   = {5--32},
+  year    = {2001},
+  doi     = {10.1023/A:1010933404324},
+  note    = {Free via Springer. Random forests, out-of-bag estimates and permutation importance}
+}
+
+@article{efron1979,
+  author  = {Efron, Bradley},
+  title   = {Bootstrap Methods: Another Look at the Jackknife},
+  journal = {The Annals of Statistics},
+  volume  = {7},
+  number  = {1},
+  pages   = {1--26},
+  year    = {1979},
+  doi     = {10.1214/aos/1176344552},
+  note    = {Open access via Project Euclid. The bootstrap}
+}
+
+@article{strobl2007,
+  author  = {Strobl, Carolin and Boulesteix, Anne-Laure and Zeileis, Achim and Hothorn, Torsten},
+  title   = {Bias in Random Forest Variable Importance Measures: Illustrations, Sources and a Solution},
+  journal = {BMC Bioinformatics},
+  volume  = {8},
+  pages   = {25},
+  year    = {2007},
+  doi     = {10.1186/1471-2105-8-25},
+  note    = {Open access. Why impurity-based importances favour some features}
+}
+
+@book{molnar2022,
+  author    = {Molnar, Christoph},
+  title     = {Interpretable Machine Learning: A Guide for Making Black Box Models Explainable},
+  edition   = {2},
+  year      = {2022},
+  url       = {https://christophm.github.io/interpretable-ml-book/},
+  note      = {Free online. §8.5: permutation feature importance}
+}
+
+@article{freund1997,
+  author  = {Freund, Yoav and Schapire, Robert E.},
+  title   = {A Decision-Theoretic Generalization of On-Line Learning and an Application to Boosting},
+  journal = {Journal of Computer and System Sciences},
+  volume  = {55},
+  number  = {1},
+  pages   = {119--139},
+  year    = {1997},
+  doi     = {10.1006/jcss.1997.1504},
+  note    = {Free via the publisher. AdaBoost}
+}
+
+@article{friedman2001,
+  author  = {Friedman, Jerome H.},
+  title   = {Greedy Function Approximation: A Gradient Boosting Machine},
+  journal = {The Annals of Statistics},
+  volume  = {29},
+  number  = {5},
+  pages   = {1189--1232},
+  year    = {2001},
+  doi     = {10.1214/aos/1013203451},
+  note    = {Open access via Project Euclid. Gradient boosting}
+}
+
+@phdthesis{louppe2014,
+  author = {Louppe, Gilles},
+  title  = {Understanding Random Forests: From Theory to Practice},
+  school = {University of Li{\`e}ge},
+  year   = {2014},
+  eprint = {1407.7502},
+  archiveprefix = {arXiv},
+  note   = {Free on arXiv. Random forests in depth, including importances}
+}
+
 % ---- Appendix: finding sources -------------------------------------------------
 
 @misc{pep1,

@@ -1,0 +1,1650 @@
+# Gradient descent and optimisation algorithms {#sec-ch-mla-optim}
+
+> *"Nothing at all takes place in the universe in which some rule of maximum
+> or minimum does not appear."* — Leonhard Euler, 1744 [@euler1744]
+
+```{python}
+#| echo: false
+import mlalgbook
+mlalgbook.setup()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what a **gradient** is, **prove** that its opposite is the
+  direction of steepest descent, and check an analytic gradient against
+  **finite differences**;
+- apply gradient descent to any differentiable loss (least squares, logistic,
+  softmax), and **prove** for which step sizes it converges and how fast;
+- define **stochastic**, **mini-batch** and **online** gradient descent,
+  **prove** that a mini-batch gradient is unbiased with variance falling like
+  $1/b$, and prove the $1/\sqrt{T}$ convergence bound of SGD;
+- use scikit-learn's `SGDRegressor` and `SGDClassifier`, their learning-rate
+  **schedules** and `partial_fit`, and explain **momentum** and **Adam**
+  (with the proofs of the momentum rate and of Adam's bias correction);
+- read a **training history**, use **early stopping**, and **prove** that
+  stopping gradient descent early acts like a ridge penalty.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Derivatives and gradients; how gradient descent works and how to choose its
+step; online learning, mini-batch and stochastic gradient descent; regression
+and classification fitted by gradient descent; constant and adaptive learning
+rates; incremental training with `partial_fit`; plotting the training history;
+early stopping.
+:::
+
+## Intuition: walking down a hill in the fog {#sec-opt-intuition}
+
+You are on a hillside in thick fog and want to reach the bottom of the valley.
+You cannot see the valley, but you can feel the slope under your feet. A
+sensible rule: take a step in the direction in which the ground falls most
+steeply, feel the slope again, repeat. That is **gradient descent**. Three
+questions decide whether you get down quickly:
+
+- **How long a step?** Too short and you need forever; too long and you jump
+  across the valley and may end higher on the other side.
+- **How well do you feel the slope?** Measuring it exactly at each step is
+  expensive when "the ground" is the average error on millions of examples.
+  Feeling it roughly — on a few examples — is cheaper, and, as we will prove,
+  often good enough: that is **stochastic** gradient descent.
+- **When do you stop?** Not necessarily at the very bottom: if the valley is
+  the training error, its lowest point may fit the noise. Stopping a little
+  before it is a form of regularisation — **early stopping**.
+
+Part III introduced gradient descent for least squares and proved its $1/k$
+rate (@thm-gd-rate). This chapter makes it the general-purpose tool used by
+every model of the following chapters that has no closed form — logistic and
+softmax regression, linear SVMs, neural networks — and develops the variants
+that make it work on large data.
+
+## Derivatives and gradients {#sec-opt-gradients}
+
+For a function of one variable, the **derivative** $f'(x) = \lim_{h\to0}
+(f(x+h) - f(x))/h$ is the slope of the tangent: near $x$, $f(x + h) \approx
+f(x) + f'(x)h$. For a function of several variables $f : \mathbb{R}^p \to
+\mathbb{R}$ — a loss as a function of the parameters — the **partial
+derivative** $\partial f/\partial x_j$ is the derivative in $x_j$ with the
+other coordinates fixed, and the **gradient** collects them,
+$\nabla f(x) = (\partial f/\partial x_1, \dots, \partial f/\partial x_p)$.
+$f$ is **differentiable** at $x$ when the linear approximation is accurate to
+first order in every direction:
+$$
+f(x + h) = f(x) + \nabla f(x)^\top h + o(\lVert h\rVert) \qquad (h \to 0).
+$$ {#eq-opt-first-order}
+
+How fast does $f$ change if we move from $x$ along a direction $v$? The
+**directional derivative** is $D_vf(x) = \lim_{t\to0^+}(f(x + tv) - f(x))/t$.
+
+::: {#prp-opt-steepest}
+## The negative gradient is the direction of steepest descent
+If $f$ is differentiable at $x$, then $D_vf(x) = \nabla f(x)^\top v$ for every
+$v$. If $\nabla f(x) \neq 0$, among unit vectors ($\lVert v\rVert = 1$) the
+directional derivative is smallest, and equal to $-\lVert\nabla f(x)\rVert$,
+for $v = -\nabla f(x)/\lVert\nabla f(x)\rVert$.
+:::
+
+*In one line:* the slope along any direction is the dot product with the
+gradient, so the steepest way down is straight against the gradient, and the
+gradient's length is how steep that is.
+
+::: {.deep kind="proof"}
+## Proof of @prp-opt-steepest
+Put $h = tv$ in @eq-opt-first-order: $(f(x + tv) - f(x))/t = \nabla
+f(x)^\top v + o(t\lVert v\rVert)/t \to \nabla f(x)^\top v$. For the second
+claim, by the Cauchy–Schwarz inequality (proved in @sec-correlation)
+$\nabla f(x)^\top v \ge -\lVert\nabla f(x)\rVert\,\lVert v\rVert =
+-\lVert\nabla f(x)\rVert$, with equality iff $v$ is a non-negative multiple of
+$-\nabla f(x)$, i.e. $v = -\nabla f(x)/\lVert\nabla f(x)\rVert$.
+$\blacksquare$
+:::
+
+::: {#exm-opt-gradient-hand}
+## A gradient by hand
+Let $f(x_1, x_2) = x_1^2 + 3x_2^2$. Then $\nabla f = (2x_1, 6x_2)$, and at
+$(1, 1)$ the gradient is $(2, 6)$, of length $\sqrt{40} \approx 6.32$. Moving
+from $(1,1)$ in the direction $(1, 0)$ the function rises at rate $2$; in the
+direction $-(2,6)/\sqrt{40}$ it falls at the maximal rate $6.32$. Notice that
+this direction points mostly along $x_2$, not towards the minimum $(0,0)$: the
+steepest direction and the direction to the goal coincide only when the level
+curves are circles. This is the root of every difficulty of gradient descent
+on badly scaled problems (@sec-opt-gd).
+:::
+
+### Checking a gradient numerically
+
+Analytic gradients are easy to get wrong (a missing $1/n$, a transposed
+matrix). The standard check compares them with **finite differences**.
+
+::: {#prp-opt-central-difference}
+## Accuracy of finite differences
+Let $g$ be a function of one variable with continuous third derivative,
+$|g'''| \le M$ near $x$, and $|g''| \le M_2$. Then
+$$
+\Big|\frac{g(x+h) - g(x)}{h} - g'(x)\Big| \le \frac{M_2}{2}h, \qquad
+\Big|\frac{g(x+h) - g(x-h)}{2h} - g'(x)\Big| \le \frac{M}{6}h^2 .
+$$
+:::
+
+*In one line:* the one-sided difference is accurate to order $h$, the
+centred one to order $h^2$ — because the even terms of the Taylor expansion
+cancel.
+
+::: {.deep kind="proof"}
+## Proof of @prp-opt-central-difference
+By Taylor's theorem with Lagrange remainder, $g(x \pm h) = g(x) \pm g'(x)h +
+\frac12g''(x)h^2 \pm \frac16g'''(\xi_\pm)h^3$ for some $\xi_\pm$ between $x$
+and $x \pm h$, and $g(x+h) = g(x) + g'(x)h + \frac12 g''(\xi)h^2$. The first
+expansion gives the forward bound directly. Subtracting the two expansions
+with $\pm$, the $g(x)$ and $g''$ terms cancel: $g(x+h) - g(x-h) = 2g'(x)h +
+\frac16(g'''(\xi_+) + g'''(\xi_-))h^3$, so the error of the centred quotient
+is at most $\frac{1}{2h}\cdot\frac{2M}{6}h^3 = \frac{M}{6}h^2$.
+$\blacksquare$
+:::
+
+In floating point the step cannot be made arbitrarily small: rounding errors
+of size $\epsilon_{\text{mach}}|g|/h$ grow as $h$ shrinks, so the best centred
+step is around $\epsilon_{\text{mach}}^{1/3} \approx 10^{-5}$
+[@nocedal2006, §8.1]. To check a gradient in $p$ dimensions, apply the centred
+difference to each coordinate and compare with the analytic vector through the
+relative error $\lVert g_{\text{num}} - g\rVert / \max(\lVert
+g_{\text{num}}\rVert, \lVert g\rVert)$; values around $10^{-8}$ or below mean
+the formula is right.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_breast_cancer
+from sklearn.preprocessing import StandardScaler
+
+def numerical_gradient(f, theta, h=1e-5):
+    """Centred finite differences, one coordinate at a time."""
+    g = np.zeros_like(theta)
+    for j in range(theta.size):
+        e = np.zeros_like(theta); e[j] = h
+        g[j] = (f(theta + e) - f(theta - e)) / (2 * h)
+    return g
+
+def logistic_loss(theta, X, y):
+    """Binary cross-entropy (@eq-cross-entropy) of a model with intercept theta[0]."""
+    t = theta[0] + X @ theta[1:]
+    return np.mean(np.logaddexp(0, -t) * y + np.logaddexp(0, t) * (1 - y))    # stable form of -y ln p - (1-y) ln(1-p)
+
+def logistic_grad(theta, X, y):
+    p = 1 / (1 + np.exp(-(theta[0] + X @ theta[1:])))
+    r = p - y                                              # "prediction minus label"
+    return np.concatenate([[r.mean()], X.T @ r / len(y)])
+
+Xbc, ybc = load_breast_cancer(return_X_y=True)
+Xbc = StandardScaler().fit_transform(Xbc)
+theta = np.random.default_rng(0).normal(size=Xbc.shape[1] + 1)
+ga, gn = logistic_grad(theta, Xbc, ybc), numerical_gradient(lambda t: logistic_loss(t, Xbc, ybc), theta)
+print(f"relative error, correct gradient: {np.linalg.norm(ga - gn) / np.linalg.norm(gn):.1e}")
+wrong = ga * len(ybc) / (len(ybc) - 1)                     # a classic slip: dividing by n-1 instead of n
+print(f"relative error, gradient off by a factor n/(n-1): {np.linalg.norm(wrong - gn) / np.linalg.norm(gn):.1e}")
+```
+
+The check separates a correct formula (error near $10^{-10}$) from one off by
+less than 0.2 % — exactly the kind of bug that would otherwise only slow
+training down without any visible error.
+
+### Practice {.unnumbered}
+
+::: {#exr-mla1-gradients-easy}
+## Easy — a gradient and its directions
+For $f(w_1, w_2) = \frac12(w_1 + 2w_2 - 3)^2$, compute $\nabla f$ at $(1, 1)$,
+the unit direction of steepest descent, and the rate at which $f$ decreases
+along it. Then compute the directional derivative along $(1, 0)$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use the chain rule: the inner function $u = w_1 + 2w_2 - 3$ has gradient
+$(1, 2)$. Then apply @prp-opt-steepest.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+With $u = w_1 + 2w_2 - 3$, $\nabla f = u\,(1, 2)$. At $(1, 1)$, $u = 0$: the
+gradient is **zero**. The point is a minimum (indeed $f \ge 0 = f(1,1)$), so
+there is no direction of descent and every directional derivative is $0$,
+including along $(1, 0)$. A second point shows the general case: at $(0, 0)$,
+$u = -3$ and $\nabla f = (-3, -6)$, steepest descent direction $(1,
+2)/\sqrt5$, rate $\lVert\nabla f\rVert = \sqrt{45} \approx 6.71$; along $(1,
+0)$ the derivative is $-3$.
+```{python}
+f = lambda w: 0.5 * (w[0] + 2 * w[1] - 3) ** 2
+for point in ([1.0, 1.0], [0.0, 0.0]):
+    g = numerical_gradient(f, np.array(point))
+    print(point, "gradient", g.round(6), " |grad| =", round(float(np.linalg.norm(g)), 4))
+```
+The typical mistake is to report the steepest *ascent* direction $\nabla f/
+\lVert\nabla f\rVert$; descent goes the other way. Note also that a zero
+gradient here does not mean a *unique* minimum: every point of the line $w_1 +
+2w_2 = 3$ is a minimum — the function is flat along it.
+:::
+
+::: {#exr-mla1-gradients-medium}
+## Medium — the two finite differences
+For $g(x) = \sin x$ at $x = 1$, compute the error of the forward and of the
+centred difference for $h = 10^{-1}, 10^{-2}, \dots, 10^{-12}$, plot both on
+log–log axes and explain the shape of the curves with
+@prp-opt-central-difference and rounding.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The exact derivative is $\cos 1$. Expect slopes $1$ and $2$ for large $h$, and
+an error that *grows* again when $h$ is very small.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-opt-finite-diff
+#| fig-cap: "Error of the forward and centred differences for sin at x = 1. Right part: truncation error, slopes 1 and 2 (@prp-opt-central-difference). Left part: rounding error, which grows like ε/h as h shrinks."
+hs = 10.0 ** -np.arange(1, 13)
+fwd = np.abs((np.sin(1 + hs) - np.sin(1)) / hs - np.cos(1))
+ctr = np.abs((np.sin(1 + hs) - np.sin(1 - hs)) / (2 * hs) - np.cos(1))
+fig, ax = plt.subplots(figsize=(6, 3.2))
+ax.loglog(hs, fwd, marker="o", ms=4, label="forward"); ax.loglog(hs, ctr, marker="o", ms=4, label="centred")
+ax.set_xlabel("step h"); ax.set_ylabel("absolute error"); ax.legend(); plt.show()
+print(f"best forward: h = {hs[fwd.argmin()]:.0e}, error {fwd.min():.1e};  best centred: h = {hs[ctr.argmin()]:.0e}, error {ctr.min():.1e}")
+```
+For large $h$ the errors fall like $h$ and $h^2$ (slopes 1 and 2 on the
+log–log plot). Below about $10^{-8}$ (forward) and $10^{-5}$ (centred) the
+subtraction $g(x+h) - g(x)$ loses digits — both values agree in almost all
+their 16 significant digits — and the rounding error, roughly
+$\epsilon_{\text{mach}}/h$, takes over. The common mistake is to believe that
+smaller is always better.
+:::
+
+::: {#exr-mla1-gradients-hard}
+## Hard — checking a multi-class gradient
+The softmax loss of @prp-softmax-gradient, averaged over $n$ examples with an
+intercept per class, is $J(W, b) = \frac1n\sum_i -\ln p_{i,y_i}$. Write a
+vectorised NumPy function returning $J$ and its gradient with respect to $W$
+($K\times d$) and $b$ ($K$), and verify it with finite differences on the iris
+data (3 species, 4 measurements [@fisher1936]) at a random point. Then
+introduce a deliberate bug — forgetting to subtract the one-hot labels — and
+show that the check catches it.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Stack the gradient of one example, $(p_i - y_i)x_i^\top$, over the data with a
+matrix product: $(P - Y)^\top X / n$, where $P$ and $Y$ are $n \times K$.
+Compute the softmax stably by subtracting the row maximum before
+exponentiating. Flatten $(W, b)$ into one vector for the numerical check.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_iris
+
+def softmax(T):
+    T = T - T.max(axis=1, keepdims=True)              # stability: softmax is unchanged by a shift
+    E = np.exp(T)
+    return E / E.sum(axis=1, keepdims=True)
+
+def softmax_loss_grad(W, b, X, y, K, bug=False):
+    n = len(y)
+    P = softmax(X @ W.T + b)                           # n x K probabilities
+    Y = np.eye(K)[y]                                   # one-hot labels
+    loss = -np.mean(np.log(P[np.arange(n), y]))
+    R = P if bug else P - Y                            # the bug forgets "- labels"
+    return loss, R.T @ X / n, R.mean(axis=0)
+
+Xi, yi = load_iris(return_X_y=True)
+K, d = 3, Xi.shape[1]
+rng = np.random.default_rng(1)
+W0, b0 = rng.normal(size=(K, d)), rng.normal(size=K)
+pack = lambda W, b: np.concatenate([W.ravel(), b])
+unpack = lambda v: (v[:K * d].reshape(K, d), v[K * d:])
+num = numerical_gradient(lambda v: softmax_loss_grad(*unpack(v), Xi, yi, K)[0], pack(W0, b0))
+for bug in (False, True):
+    _, gW, gb = softmax_loss_grad(W0, b0, Xi, yi, K, bug=bug)
+    err = np.linalg.norm(pack(gW, gb) - num) / np.linalg.norm(num)
+    print(f"bug = {bug!s:5}: relative error {err:.1e}")
+```
+The correct gradient agrees to about $10^{-10}$; the buggy one is off by order
+one. Why the check is so sensitive: the bug changes the gradient by $Y^\top
+X/n$, which is never small. Typical mistakes: computing `np.exp` without the
+shift (overflow for large scores), using `X.T @ R` with the wrong orientation
+(shape errors are lucky — they fail loudly; transposes of square matrices do
+not), and checking at $W = 0$, where many wrong formulas happen to agree with
+the right one.
+:::
+
+## Gradient descent beyond least squares {#sec-opt-gd}
+
+**Gradient descent** minimises a differentiable $J(\theta)$ by iterating
+$$
+\theta_{k+1} = \theta_k - \eta\,\nabla J(\theta_k)
+$$ {#eq-opt-gd}
+with a **step size** or **learning rate** $\eta > 0$. In Part III we proved
+that for a convex $J$ with $L$-Lipschitz gradient and $\eta = 1/L$ the excess
+cost falls at least like $1/k$ (@thm-gd-rate and the remark after its proof).
+Two questions remain: what happens with other steps, and why progress can be
+so slow.
+
+### The step size
+
+The answer is cleanest for quadratics, which describe every smooth function
+near a minimum (by Taylor's theorem).
+
+::: {#thm-opt-step}
+## Gradient descent on a quadratic
+Let $J(\theta) = \frac12(\theta - \theta^*)^\top H(\theta - \theta^*) + c$
+with $H$ symmetric positive definite, eigenvalues $0 < \mu = \lambda_{\min}
+\le \dots \le \lambda_{\max} = L$ and condition number $\kappa = L/\mu$. With
+a fixed step $\eta$:
+
+1. $\theta_k \to \theta^*$ from every starting point **iff** $0 < \eta <
+   2/L$; for $\eta > 2/L$ the iterates diverge from almost every start.
+2. $\lVert\theta_k - \theta^*\rVert \le \rho(\eta)^k\lVert\theta_0 -
+   \theta^*\rVert$ with $\rho(\eta) = \max(|1 - \eta\mu|, |1 - \eta L|)$.
+3. The best fixed step is $\eta = 2/(L + \mu)$, giving
+   $\rho = \frac{\kappa - 1}{\kappa + 1}$.
+:::
+
+*In one line:* the step must be smaller than twice the inverse of the
+steepest curvature, and even with the best step each iteration only removes a
+fraction $\approx 2/\kappa$ of the error — so a large condition number means
+slow progress.
+
+::: {.deep kind="proof"}
+## Proof of @thm-opt-step
+$\nabla J(\theta) = H(\theta - \theta^*)$, so the error $e_k = \theta_k -
+\theta^*$ obeys $e_{k+1} = e_k - \eta He_k = (I - \eta H)e_k$, hence $e_k = (I
+- \eta H)^ke_0$. Write $H = Q\Lambda Q^\top$ with $Q$ orthogonal. In the
+coordinates $z = Q^\top e$ the iteration decouples: $z_{k,j} = (1 -
+\eta\lambda_j)^kz_{0,j}$. Each coordinate tends to zero iff $|1 -
+\eta\lambda_j| < 1$, i.e. $0 < \eta < 2/\lambda_j$; for all $j$ at once iff
+$\eta < 2/L$. If $\eta > 2/L$, $|1 - \eta L| > 1$ and every start with
+$z_{0,j} \ne 0$ along an eigenvector of $L$ diverges. Since $Q$ preserves
+lengths, $\lVert e_k\rVert = \lVert z_k\rVert \le \max_j|1 -
+\eta\lambda_j|^k\lVert z_0\rVert$, and the maximum of $|1 - \eta\lambda|$ over
+$\lambda \in [\mu, L]$ is attained at an endpoint (the function is convex in
+$\lambda$), which is claim 2. Finally $|1 - \eta\mu|$ decreases and $|1 -
+\eta L|$ increases with $\eta$ (in the relevant range), so their maximum is
+smallest where $1 - \eta\mu = \eta L - 1$, i.e. $\eta = 2/(L + \mu)$, giving
+$\rho = 1 - 2\mu/(L+\mu) = (L - \mu)/(L + \mu)$. $\blacksquare$
+:::
+
+The theorem explains the slow convergence on raw features seen in
+@sec-gradient-descent, where $\kappa$ was in the millions: with $\rho =
+(\kappa - 1)/(\kappa + 1) \approx 1 - 2/\kappa$, reducing the error by a
+factor $e$ takes about $\kappa/2$ iterations. Standardising the features
+(@sec-scaling) is the cheapest way to make $\kappa$ small.
+
+### Classification by gradient descent
+
+Logistic regression has no closed form, so it is the natural first
+application. Its loss is not quadratic, but its Hessian
+$\frac1n\tilde X^\top S\tilde X$ (@thm-logistic-loss) has weights $p_i(1 -
+p_i) \le \frac14$, so it is bounded by $\frac1{4n}\tilde X^\top\tilde X$: the
+gradient is $L$-Lipschitz with
+$$
+L \le \frac{\lambda_{\max}(\tilde X^\top\tilde X)}{4n},
+$$ {#eq-opt-logistic-L}
+and $\eta = 1/L$ computed from this bound is a safe step. The figure shows
+the training loss of logistic regression on synthetic two-class data for
+steps smaller and larger than that.
+
+```{python}
+#| label: fig-opt-steps
+#| fig-cap: "Training loss of logistic regression fitted by gradient descent on 400 synthetic points, for five multiples of the safe step 1/L of @eq-opt-logistic-L (curves end where the excess loss reaches zero in double precision). Small steps are slow; steps many times larger than 1/L are faster, because the bound on L is pessimistic; very large steps oscillate."
+from sklearn.linear_model import LogisticRegression
+
+rng = np.random.default_rng(0)
+n = 400
+Xs = np.vstack([rng.normal([-1, -1], 1.0, (n // 2, 2)), rng.normal([1.5, 1], 1.0, (n // 2, 2))])
+ys = np.repeat([0, 1], n // 2)
+X1 = np.column_stack([np.ones(n), Xs])
+L = np.linalg.eigvalsh(X1.T @ X1).max() / (4 * n)
+ref = LogisticRegression(C=np.inf, tol=1e-10).fit(Xs, ys)      # unpenalised maximum likelihood, tight tolerance
+J_log_min = logistic_loss(np.concatenate([ref.intercept_, ref.coef_[0]]), Xs, ys)
+
+def gd_logistic(X, y, eta, steps):
+    theta, hist = np.zeros(X.shape[1] + 1), []
+    for _ in range(steps):
+        theta -= eta * logistic_grad(theta, X, y)
+        hist.append(logistic_loss(theta, X, y))
+    return theta, np.array(hist)
+
+fig, ax = plt.subplots(figsize=(6.5, 3.3))
+for m, c in zip((0.1, 1, 4, 20, 60), mlalgbook.COLORS):
+    _, hist = gd_logistic(Xs, ys, m / L, 200)
+    ax.plot(np.arange(1, 201), hist - J_log_min, color=c, lw=1.5, label=f"η = {m}/L")
+ax.set_yscale("log"); ax.set_xlabel("iteration"); ax.set_ylabel("training loss − minimum"); ax.legend(ncol=2)
+plt.show()
+theta_gd, _ = gd_logistic(Xs, ys, 4 / L, 5000)
+print(f"L bound = {L:.4f}; GD (eta = 4/L, 5000 steps): {theta_gd.round(4)};  scikit-learn: "
+      f"{np.concatenate([ref.intercept_, ref.coef_[0]]).round(4)}")
+```
+
+With the safe step the loss falls steadily; because @eq-opt-logistic-L uses
+the worst case $p(1-p) = \frac14$, which is attained only where the model is
+completely uncertain, steps even twenty times larger still converge — and much
+faster. Steps far beyond the true curvature make the loss oscillate. After
+enough iterations gradient descent and scikit-learn's solver (run with a tight
+tolerance) agree on the coefficients to the digits shown. (scikit-learn uses L-BFGS, a quasi-Newton
+method that also exploits curvature [@nocedal2006, §7.2]; with
+`C=np.inf` it maximises the likelihood without penalty.)
+
+### Practice {.unnumbered}
+
+::: {#exr-mla1-gd-easy}
+## Easy — the step of a two-dimensional bowl
+For $J(\theta) = \frac12(\theta_1^2 + 10\,\theta_2^2)$: what is the largest
+step for which gradient descent converges from every start? What are the best
+fixed step and its contraction factor? Starting from $(1, 1)$, compute two
+iterations with the best step by hand.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$H = \operatorname{diag}(1, 10)$: read $\mu$ and $L$ off the diagonal and use
+@thm-opt-step. Each coordinate is multiplied by $1 - \eta\lambda_j$ at every
+step.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$\mu = 1$, $L = 10$, $\kappa = 10$. Convergence iff $\eta < 2/10 = 0.2$. Best
+step $\eta = 2/11 \approx 0.182$, contraction $\rho = 9/11 \approx 0.818$. The
+factors per coordinate are $1 - 2/11 = 9/11$ and $1 - 20/11 = -9/11$: both
+coordinates shrink by $9/11$ in absolute value, the second changing sign each
+time — $(0.818, -0.818)$, then $(0.669, 0.669)$.
+```{python}
+theta, eta = np.array([1.0, 1.0]), 2 / 11
+for k in range(2):
+    theta = theta - eta * np.array([1.0, 10.0]) * theta      # gradient = H theta
+    print(k + 1, theta.round(4))
+```
+At the best step the two extreme eigen-directions contract by the *same*
+factor, one of them oscillating: this balance is what makes the step optimal.
+A frequent mistake is to take $\eta = 1/L$ as "the best" step: it is the safe
+step of @thm-gd-rate, not the fastest for quadratics.
+:::
+
+::: {#exr-mla1-gd-medium}
+## Medium — penalised logistic regression from scratch
+On the standardised breast-cancer data, fit logistic regression with the
+penalty that scikit-learn's `LogisticRegression(C=1.0)` uses, by your own
+gradient descent, and compare coefficients and training accuracy with
+scikit-learn. scikit-learn minimises $C\sum_i\ell_i(\theta) +
+\frac12\lVert w\rVert^2$ (intercept not penalised).
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Divide scikit-learn's objective by $Cn$: you get the mean loss plus
+$\frac{\lambda}{2}\lVert w\rVert^2$ with $\lambda = 1/(Cn)$. Add $\lambda w$ to
+the gradient of the weights (not of the intercept), and add $\lambda$ to the
+smoothness constant when choosing the step.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def gd_penalised_logistic(X, y, lam, steps=20000):
+    n = len(y)
+    X1 = np.column_stack([np.ones(n), X])
+    eta = 1 / (np.linalg.eigvalsh(X1.T @ X1).max() / (4 * n) + lam)     # 1/L, penalty included
+    theta = np.zeros(X.shape[1] + 1)
+    for _ in range(steps):
+        g = logistic_grad(theta, X, y)
+        g[1:] += lam * theta[1:]                                          # gradient of (lam/2)||w||^2
+        theta -= eta * g
+    return theta
+
+lam = 1 / (1.0 * len(ybc))                                                # C = 1
+mine = gd_penalised_logistic(Xbc, ybc, lam)
+sk = LogisticRegression(C=1.0, tol=1e-10, max_iter=10_000).fit(Xbc, ybc)
+skt = np.concatenate([sk.intercept_, sk.coef_[0]])
+acc = lambda th: np.mean(((th[0] + Xbc @ th[1:]) > 0) == ybc)
+print(f"max |difference| of coefficients: {np.abs(mine - skt).max():.1e}; "
+      f"training accuracy: mine {acc(mine):.4f}, scikit-learn {sk.score(Xbc, ybc):.4f}")
+```
+The two agree to about $10^{-6}$. Why the conversion matters: if
+you forget the factor $n$, your $\lambda$ is $569$ times too large and the
+coefficients come out heavily shrunk. Without a penalty the breast-cancer
+data are nearly separable and the unpenalised maximum likelihood estimate
+grows very large (@prp-separable) — another reason scikit-learn penalises by
+default.
+:::
+
+::: {#exr-mla1-gd-hard}
+## Hard — a three-class model, end to end
+On the wine data (@sec-multiclass), split 70/30 (stratified), standardise
+using the training part only, fit a softmax regression by gradient descent
+with your gradient of @exr-mla1-gradients-hard plus an L2 penalty, and report
+the test accuracy and the confusion matrix. Compare with
+`LogisticRegression` with the same penalty in a pipeline. Which wines are
+confused, if any?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Fit the scaler on the training split and *apply* it to the test split. For the
+step, a safe smoothness constant for the softmax loss is
+$\lambda_{\max}(\tilde X^\top\tilde X)/(2n)$ plus the penalty. Use
+`confusion_matrix` from `sklearn.metrics`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_wine
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import confusion_matrix, accuracy_score
+
+Xw, yw = load_wine(return_X_y=True)
+Xtr, Xte, ytr, yte = train_test_split(Xw, yw, test_size=0.3, stratify=yw, random_state=0)
+sc = StandardScaler().fit(Xtr)                              # learned on the training part only
+Ztr, Zte = sc.transform(Xtr), sc.transform(Xte)
+K, n, d = 3, len(ytr), Xw.shape[1]
+C = 1.0; lam = 1 / (C * n)                                   # same penalty as LogisticRegression(C=1)
+Z1 = np.column_stack([np.ones(n), Ztr])
+eta = 1 / (np.linalg.eigvalsh(Z1.T @ Z1).max() / (2 * n) + lam)
+W, b = np.zeros((K, d)), np.zeros(K)
+for _ in range(20000):
+    _, gW, gb = softmax_loss_grad(W, b, Ztr, ytr, K)
+    W -= eta * (gW + lam * W); b -= eta * gb
+pred = np.argmax(Zte @ W.T + b, axis=1)
+pipe = make_pipeline(StandardScaler(), LogisticRegression(C=C, tol=1e-10, max_iter=10_000)).fit(Xtr, ytr)
+print(f"test accuracy: mine {accuracy_score(yte, pred):.3f}, scikit-learn {pipe.score(Xte, yte):.3f}; "
+      f"max |W difference| {np.abs(W - pipe[-1].coef_).max():.1e}")
+print(confusion_matrix(yte, pred))
+```
+The two fits coincide (the softmax model with the same penalty has a unique
+solution, because the penalty makes the loss strictly convex). On this split
+the few errors, if any, sit off the diagonal of the confusion matrix — read
+row $i$, column $j$ as "true class $i$ predicted as $j$". Typical mistakes:
+standardising before the split (a mild leakage, @sec-leakage), evaluating on
+the training data, and comparing your unpenalised model with scikit-learn's
+penalised default. With only 54 test wines, one error moves the accuracy by
+almost two points: report it with that caveat (@thm-test-set-size).
+:::
+
+## Stochastic, mini-batch and online gradient descent {#sec-opt-sgd}
+
+The empirical risk is an average, $J(\theta) = \frac1n\sum_{i=1}^n
+\ell_i(\theta)$, and so is its gradient: computing it touches **every**
+example. With $n$ in the millions, one step of gradient descent is one pass
+over the data set. **Stochastic gradient descent** (SGD) uses instead the
+gradient of a randomly chosen example, or of a small random **mini-batch**
+$B$ of $b$ examples:
+$$
+\theta_{t+1} = \theta_t - \eta_t\,g_t, \qquad
+g_t = \frac1b\sum_{i\in B_t}\nabla\ell_i(\theta_t).
+$$ {#eq-opt-sgd}
+Each step is $n/b$ times cheaper; the price is that $g_t$ is a noisy version
+of $\nabla J(\theta_t)$. The idea goes back to Robbins and Monro's
+**stochastic approximation** [@robbins1951]; Bottou made the case for it in
+large-scale learning [@bottou2010; @bottou2018]. Vocabulary: $b = n$ is
+**batch** gradient descent, $b = 1$ is SGD in the strict sense, $1 < b < n$
+**mini-batch**; one **epoch** is one pass over the data, $n/b$ steps.
+
+::: {#prp-opt-minibatch}
+## A mini-batch gradient is unbiased, with variance $\propto 1/b$
+Fix $\theta$ and let $\Sigma = \frac1n\sum_i(\nabla\ell_i - \nabla J)(\nabla
+\ell_i - \nabla J)^\top$ be the covariance of the per-example gradients. If
+the $b$ indices of $B$ are drawn uniformly **with** replacement,
+$$
+\mathbb{E}[g] = \nabla J(\theta), \qquad \operatorname{Cov}(g) = \frac{\Sigma}{b};
+$$
+if they are drawn **without** replacement ($b \le n$), $\mathbb{E}[g] =
+\nabla J(\theta)$ and $\operatorname{Cov}(g) = \frac{n - b}{n - 1}\cdot
+\frac{\Sigma}{b}$.
+:::
+
+*In one line:* on average the mini-batch points exactly downhill, and its
+noise shrinks like one over the batch size — a batch of 100 is ten times less
+noisy than one example (in standard deviation), not a hundred.
+
+::: {.deep kind="proof"}
+## Proof of @prp-opt-minibatch
+With replacement, $g = \frac1b\sum_{s=1}^b G_s$ where $G_s = \nabla\ell_{I_s}$
+and the $I_s$ are independent and uniform on $\{1,\dots,n\}$. Each $G_s$ has
+mean $\frac1n\sum_i\nabla\ell_i = \nabla J$ and covariance $\Sigma$; the
+average of $b$ independent copies has the same mean and covariance
+$\Sigma/b$. Without replacement, the inclusion indicators $Z_i =
+[i \in B]$ satisfy $\mathbb{E}Z_i = b/n$, $\operatorname{Var}Z_i = \frac
+bn(1 - \frac bn)$ and, for $i \ne j$, $\operatorname{Cov}(Z_i, Z_j) =
+\frac{b(b-1)}{n(n-1)} - \frac{b^2}{n^2} = -\frac{b(n-b)}{n^2(n-1)}$. Write
+$g = \frac1b\sum_iZ_iu_i$ with $u_i = \nabla\ell_i$; then $\mathbb{E}g =
+\frac1n\sum_iu_i$. With $v_i = u_i - \nabla J$ (so $\sum_iv_i = 0$),
+$g - \nabla J = \frac1b\sum_iZ_iv_i$ (because $\sum_i Z_i = b$), and
+$$
+\operatorname{Cov}(g) = \frac{1}{b^2}\Big[\frac bn\Big(1 - \frac bn\Big)\sum_iv_iv_i^\top
+- \frac{b(n-b)}{n^2(n-1)}\sum_{i\ne j}v_iv_j^\top\Big].
+$$
+Since $\sum_{i\ne j}v_iv_j^\top = (\sum_iv_i)(\sum_jv_j)^\top - \sum_iv_iv_i^\top
+= -n\Sigma$ and $\sum_iv_iv_i^\top = n\Sigma$, the bracket is $\frac{b(n-b)}{n}
+\Sigma\big(1 + \frac{1}{n-1}\big) = \frac{b(n-b)}{n-1}\Sigma$, and dividing by
+$b^2$ gives the claim — the finite-population correction of survey sampling
+[@cochran1977, ch. 2]. $\blacksquare$
+:::
+
+### How fast does SGD converge?
+
+Noise has a price: with a constant step, SGD does not settle at the minimum
+but keeps jittering around it. The classical guarantee for convex losses
+averages the iterates.
+
+::: {#thm-opt-sgd}
+## Convergence of SGD for convex losses
+Let $J$ be convex and differentiable with a minimiser $\theta^*$, and let
+$g_t$ satisfy $\mathbb{E}[g_t \mid \theta_t] = \nabla J(\theta_t)$ and
+$\mathbb{E}\lVert g_t\rVert^2 \le G^2$. With $\lVert\theta_0 -
+\theta^*\rVert \le R$ and a constant step $\eta$, the average $\bar\theta_T =
+\frac1T\sum_{t=0}^{T-1}\theta_t$ satisfies
+$$
+\mathbb{E}\,J(\bar\theta_T) - J(\theta^*) \le \frac{R^2}{2\eta T} + \frac{\eta G^2}{2},
+$$
+and with $\eta = R/(G\sqrt T)$ the bound is $RG/\sqrt T$.
+:::
+
+*In one line:* the error has a term that a larger step removes faster and a
+noise term that a larger step makes worse; balancing them gives an error that
+falls like $1/\sqrt T$ — slower than gradient descent per step, but each step
+is $n/b$ times cheaper.
+
+::: {.deep kind="proof"}
+## Proof of @thm-opt-sgd
+Expand $\lVert\theta_{t+1} - \theta^*\rVert^2 = \lVert\theta_t -
+\theta^*\rVert^2 - 2\eta g_t^\top(\theta_t - \theta^*) + \eta^2\lVert
+g_t\rVert^2$. Take the expectation conditional on $\theta_t$: the middle term
+becomes $-2\eta\nabla J(\theta_t)^\top(\theta_t - \theta^*)$, and by convexity
+$\nabla J(\theta_t)^\top(\theta_t - \theta^*) \ge J(\theta_t) - J(\theta^*)$.
+Taking full expectations and writing $D_t = \mathbb{E}\lVert\theta_t -
+\theta^*\rVert^2$,
+$$
+2\eta\big(\mathbb{E}J(\theta_t) - J(\theta^*)\big) \le D_t - D_{t+1} + \eta^2G^2 .
+$$
+Summing over $t = 0, \dots, T-1$ the right side telescopes to at most $D_0 +
+T\eta^2G^2 \le R^2 + T\eta^2G^2$. Divide by $2\eta T$ and use Jensen's
+inequality, $J(\bar\theta_T) \le \frac1T\sum_tJ(\theta_t)$ for convex $J$.
+Minimising $\frac{R^2}{2\eta T} + \frac{\eta G^2}{2}$ over $\eta$ gives $\eta =
+R/(G\sqrt T)$ and the value $RG/\sqrt T$. $\blacksquare$
+
+This is the analysis of Nemirovski, Juditsky, Lan and Shapiro
+[@nemirovski2009]; the same argument, with the losses arriving one at a
+time and chosen by an adversary, is Zinkevich's bound for online learning
+[@zinkevich2003]. Robbins and Monro had shown that steps with $\sum_t\eta_t =
+\infty$ and $\sum_t\eta_t^2 < \infty$ (for instance $\eta_t = \eta_0/t$) make
+the iterates themselves converge [@robbins1951]: the first condition lets them
+travel any distance, the second makes the accumulated noise finite.
+:::
+
+### Online learning and `partial_fit`
+
+When the data arrive as a stream — transactions, sensor readings, new fruit
+at the warehouse door — **online learning** updates the model with each new
+example or batch and then discards it, never storing the whole data set. SGD
+is naturally online: each step needs only the current batch. scikit-learn
+exposes this through `partial_fit`, implemented by the estimators that can be
+trained incrementally (`SGDRegressor`, `SGDClassifier`, `MLPClassifier`, the
+naive Bayes classifiers of @sec-ch-mla-nb, `StandardScaler`, …): each call
+performs one pass over the batch it receives.
+
+The experiment below fits least squares on $n = 20\,000$ synthetic examples
+with 20 features of different scales (condition number about 100) and
+compares, per pass over the data, batch gradient descent, mini-batch SGD and
+single-example SGD (constant steps, our own code), and scikit-learn's
+`SGDRegressor`.
+
+```{python}
+#| label: fig-opt-sgd
+#| fig-cap: "Least squares on 20 000 synthetic examples: excess training loss against the number of passes over the data. One step of batch gradient descent costs a whole pass; in that time SGD makes 20 000 steps and mini-batch SGD 625. With a constant step, the stochastic methods stall at a noise floor; batch gradient descent keeps decreasing slowly."
+from sklearn.linear_model import SGDRegressor
+
+rng = np.random.default_rng(1)
+n, p = 20_000, 20
+scales = np.logspace(0, -1, p)                                # feature scales 1 ... 0.1: Hessian eigenvalues 1 ... 0.01
+Xr = rng.normal(size=(n, p)) * scales; beta_true = 0.3 * rng.normal(size=p) / scales
+yr = Xr @ beta_true + rng.normal(scale=1.0, size=n)
+beta_ls = np.linalg.lstsq(Xr, yr, rcond=None)[0]
+loss = lambda b: 0.5 * np.mean((yr - Xr @ b) ** 2)
+J_star = loss(beta_ls)
+
+def minibatch_sgd(b_size, eta, epochs, seed=0):
+    r, beta, hist = np.random.default_rng(seed), np.zeros(p), [loss(np.zeros(p))]
+    for _ in range(epochs):
+        order = r.permutation(n)                            # one epoch = one shuffled pass
+        for start in range(0, n, b_size):
+            B = order[start:start + b_size]
+            beta -= eta * (-(Xr[B].T @ (yr[B] - Xr[B] @ beta)) / len(B))
+        hist.append(loss(beta))
+    return beta, np.array(hist)
+
+L_r = np.linalg.eigvalsh(Xr.T @ Xr / n).max()
+epochs = 30
+curves = {"batch GD (η = 1/L)": minibatch_sgd(n, 1 / L_r, epochs)[1],
+          "mini-batch, b = 32 (η = 0.2)": minibatch_sgd(32, 0.2, epochs)[1],
+          "SGD, b = 1 (η = 0.02)": minibatch_sgd(1, 0.02, epochs)[1]}
+fig, ax = plt.subplots(figsize=(6.5, 3.3))
+for (name, h), c in zip(curves.items(), mlalgbook.COLORS):
+    ax.plot(np.arange(epochs + 1), h - J_star, marker="o", ms=3, color=c, label=name)
+ax.set_yscale("log"); ax.set_xlabel("passes over the data (epochs)"); ax.set_ylabel("training loss − minimum"); ax.legend()
+plt.show()
+sgd = SGDRegressor(penalty=None, learning_rate="constant", eta0=0.02, max_iter=10, tol=None,
+                   fit_intercept=False, random_state=0).fit(Xr, yr)
+sgd_avg = SGDRegressor(penalty=None, learning_rate="constant", eta0=0.02, max_iter=10, tol=None,
+                       fit_intercept=False, average=True, random_state=0).fit(Xr, yr)
+for name, h in curves.items():
+    print(f"{name:30s} excess loss after 1 epoch {h[1] - J_star:.2e}, after {epochs}: {h[-1] - J_star:.2e}")
+print(f"SGDRegressor (constant step 0.02, 10 epochs): {loss(sgd.coef_) - J_star:.2e}; with averaging: {loss(sgd_avg.coef_) - J_star:.2e}")
+```
+
+After one pass, the stochastic methods are twenty to forty times closer to
+the minimum than batch gradient descent, which has taken a single
+step. Then they stop improving: with a constant step they jitter at a **noise
+floor** proportional to $\eta$ (the second term of @thm-opt-sgd), while batch
+gradient descent keeps going down — slowly, at the rate of @thm-opt-step with
+$\kappa \approx 100$ — and would pass below the floor only after many more
+passes. Averaging the iterates —
+`SGDRegressor(average=True)`, Polyak–Ruppert averaging [@polyak1992] — or a
+decreasing step removes most of the floor. For machine learning the floor is
+often harmless: optimising the training loss far below the statistical error
+of the model gains nothing on new data [@bottou2008].
+
+::: {.deep}
+## Why `SGDRegressor` does not match our loop step by step
+scikit-learn's SGD shuffles the data with its own generator, includes an
+intercept by default, and its squared loss is $\frac12(y - \hat y)^2$ per
+example — the same as ours — but it also scales the step in some schedules
+and stops when the loss stops improving by `tol` unless `tol=None`. Matching it
+iteration by iteration is not the point; matching the *behaviour* (one pass
+gives a good model; a constant step leaves a noise floor that averaging
+removes) is.
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-mla1-sgd-easy}
+## Easy — one-example gradients by hand
+Three examples with one feature and no intercept: $(x, y) = (1, 2), (2, 2),
+(3, 5)$, loss $\ell_i(\beta) = \frac12(y_i - \beta x_i)^2$. At $\beta = 0$
+compute the full gradient, the three one-example gradients, their mean and
+their variance. What is the variance of a mini-batch gradient of size 2 drawn
+with replacement? And without replacement?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$\ell_i'(\beta) = -x_i(y_i - \beta x_i)$. Use @prp-opt-minibatch with $n = 3$,
+$b = 2$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+At $\beta = 0$: $\ell_i' = -x_iy_i = -2, -4, -15$. Their mean $-7$ is the full
+gradient. The (population) variance is $\Sigma = \frac13[(5)^2 + (3)^2 +
+(8)^2] = 98/3 \approx 32.67$. A mini-batch of 2 has variance $\Sigma/2 \approx
+16.33$ with replacement and $\frac{3-2}{3-1}\cdot\frac{\Sigma}{2} \approx 8.17$
+without.
+```{python}
+import itertools
+G = np.array([-2.0, -4.0, -15.0])
+with_rep = [G[[i, j]].mean() for i in range(3) for j in range(3)]           # all 9 ordered draws
+without = [G[list(c)].mean() for c in itertools.combinations(range(3), 2)]    # all 3 subsets
+print(G.mean(), G.var(), np.mean(with_rep), np.var(with_rep), np.mean(without), np.var(without))
+```
+Enumerating all equally likely batches confirms both formulas. The typical
+slip is using the sample variance with $n - 1$ in place of $\Sigma$, which is
+defined with $1/n$.
+:::
+
+::: {#exr-mla1-sgd-medium}
+## Medium — the noise floor
+On the regression data of @fig-opt-sgd, run single-example SGD for 10 epochs
+with constant steps $\eta = 0.005, 0.01, 0.02, 0.04$ and record the final
+excess loss. Check that it grows roughly in proportion to $\eta$. Then repeat
+with the iterates averaged over the last epoch.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Reuse `minibatch_sgd` and modify a copy to accumulate the running mean of
+$\beta$ during the last epoch. Divide the floors by $\eta$ to see the
+proportionality.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def sgd_last_epoch_average(eta, epochs, seed=0):
+    r, beta = np.random.default_rng(seed), np.zeros(p)
+    for e in range(epochs):
+        avg, count = np.zeros(p), 0
+        for i in r.permutation(n):
+            beta -= eta * (-(Xr[i] * (yr[i] - Xr[i] @ beta)))
+            if e == epochs - 1:                                  # average only the last epoch
+                count += 1; avg += (beta - avg) / count
+    return beta, avg
+
+for eta in (0.005, 0.01, 0.02, 0.04):
+    last, avg = sgd_last_epoch_average(eta, 10)
+    fl = loss(last) - J_star
+    print(f"eta = {eta}: floor {fl:.2e} (floor/eta = {fl / eta:.2f}), averaged: {loss(avg) - J_star:.2e}")
+```
+The ratio floor/$\eta$ stays of the same order: the stationary jitter of SGD
+with a constant step has a variance proportional to $\eta$ (heuristically,
+each step adds noise of order $\eta^2G^2$ and the pull towards the minimum
+removes a fraction of order $\eta$). Averaging cancels most of the jitter,
+because the fluctuations on the two sides of the minimum compensate. Common
+mistake: averaging from the very first step, which drags in the poor early
+iterates.
+:::
+
+::: {#exr-mla1-sgd-hard}
+## Hard — learning from a stream
+Treat the wine training split of @exr-mla1-gd-hard as a stream of 8 batches.
+After each batch, update a `StandardScaler` and an `SGDClassifier` (logistic
+loss) with `partial_fit`, and record the accuracy on the fixed test split.
+Report the final confusion matrix. What is subtle about updating the scaler
+and the classifier together?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`SGDClassifier.partial_fit` needs `classes=` at the first call. Call
+`scaler.partial_fit(batch)` first, then transform the batch with the updated
+scaler. Shuffle the training rows before cutting them into batches.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.linear_model import SGDClassifier
+
+order = np.random.default_rng(0).permutation(len(ytr))
+scaler, clf = StandardScaler(), SGDClassifier(loss="log_loss", random_state=0)
+accs = []
+for batch in np.array_split(order, 8):
+    scaler.partial_fit(Xtr[batch])                                     # running mean and variance
+    clf.partial_fit(scaler.transform(Xtr[batch]), ytr[batch], classes=np.unique(yw))
+    accs.append(clf.score(scaler.transform(Xte), yte))
+print("test accuracy after each batch:", np.round(accs, 3))
+print(confusion_matrix(yte, clf.predict(scaler.transform(Xte))))
+```
+The accuracy rises quickly and fluctuates: each batch moves the weights
+noticeably (default schedule `"optimal"`) and the test set is small. The
+subtlety: the scaler's mean and variance change as data arrive, so the
+weights learned on early batches were learned in a slightly different
+coordinate system from the one used later. With stable statistics the effect
+fades; with drifting data it can hurt, and the scaler should be frozen after
+a warm-up or the model periodically refitted. Classic mistakes: forgetting
+`classes=` (an error at the first call) and calling `fit` in the loop, which
+restarts from scratch each time.
+:::
+
+## Learning-rate schedules, momentum and adaptive methods {#sec-opt-schedules}
+
+### Schedules in scikit-learn
+
+The step need not be constant. `SGDRegressor` and `SGDClassifier` offer four
+schedules (`learning_rate=`), where $t$ counts the updates:
+
+| Schedule | Step $\eta_t$ | Idea |
+|---|---|---|
+| `"constant"` | $\eta_0$ | simple; leaves a noise floor |
+| `"invscaling"` | $\eta_0/t^{\,\text{power\_t}}$ (default power $0.5$) | slowly decreasing, as in @thm-opt-sgd with $\eta \propto 1/\sqrt T$ |
+| `"optimal"` (classifier default) | $1/(\alpha(t + t_0))$, $t_0$ by a heuristic of Bottou | the $1/t$ rate that is optimal for strongly convex losses with penalty $\alpha$ |
+| `"adaptive"` | $\eta_0$, divided by 5 whenever `n_iter_no_change` epochs fail to improve the loss by `tol` | constant while progress is made, then smaller |
+
+: The learning-rate schedules of scikit-learn's SGD estimators (from their documentation) {#tbl-opt-schedules}
+
+The $1/t$ schedule matches a classical fact: with an L2 penalty the loss is
+**strongly convex** — it curves upwards at least like $\frac\alpha2\lVert
+\theta\rVert^2$ — and then SGD with $\eta_t = 1/(\alpha t)$ reaches error
+$O(1/T)$ instead of $O(1/\sqrt T)$ [@bottou2018, §4.2].
+
+### Momentum
+
+On an ill-conditioned bowl, gradient descent zig-zags across the narrow
+direction while creeping along the long one (@exm-opt-gradient-hand). The
+**heavy-ball** or **momentum** method of Polyak [@polyak1964] adds to each
+step a fraction $\beta$ of the previous one:
+$$
+\theta_{k+1} = \theta_k - \eta\nabla J(\theta_k) + \beta(\theta_k - \theta_{k-1}).
+$$ {#eq-opt-momentum}
+Unrolling it, the step is $-\eta$ times an exponentially weighted sum of past
+gradients, $\sum_{s\le k}\beta^{k-s}\nabla J(\theta_s)$ (by induction on $k$):
+components that keep the same sign accumulate, those that alternate cancel.
+
+::: {#thm-opt-heavy-ball}
+## The rate of the heavy-ball method on quadratics
+For the quadratic of @thm-opt-step, take
+$$
+\eta = \frac{4}{(\sqrt L + \sqrt\mu)^2}, \qquad
+\beta = \Big(\frac{\sqrt\kappa - 1}{\sqrt\kappa + 1}\Big)^2 .
+$$
+Then in each eigen-direction the error is a combination of two geometric
+sequences of ratio of modulus $\sqrt\beta = \frac{\sqrt\kappa -
+1}{\sqrt\kappa + 1}$, so the error decreases like $\big(\frac{\sqrt\kappa -
+1}{\sqrt\kappa + 1}\big)^k$ (up to a factor at most linear in $k$).
+:::
+
+*In one line:* momentum replaces $\kappa$ by $\sqrt\kappa$ in the rate — for
+$\kappa = 10\,000$, about 100 instead of 10 000 iterations per factor $e$.
+
+::: {.deep kind="proof"}
+## Proof of @thm-opt-heavy-ball
+In the eigen-coordinates of the proof of @thm-opt-step, each coordinate of
+the error obeys $z_{k+1} = (1 + \beta - \eta\lambda)z_k - \beta z_{k-1}$, a
+linear recurrence with characteristic equation $r^2 - (1 + \beta -
+\eta\lambda)r + \beta = 0$. Its roots are complex conjugate — hence of equal
+modulus $\sqrt{r_1r_2} = \sqrt\beta$ — when the discriminant is $\le 0$, that
+is when $|1 + \beta - \eta\lambda| \le 2\sqrt\beta$, i.e.
+$(1 - \sqrt\beta)^2 \le \eta\lambda \le (1 + \sqrt\beta)^2$. With the chosen
+values, $1 - \sqrt\beta = \frac{2}{\sqrt\kappa + 1}$, so $(1 - \sqrt\beta)^2 =
+\frac{4}{(\sqrt\kappa + 1)^2} = \frac{4\mu}{(\sqrt L + \sqrt\mu)^2} =
+\eta\mu$; and $1 + \sqrt\beta = \frac{2\sqrt\kappa}{\sqrt\kappa + 1}$, so
+$(1 + \sqrt\beta)^2 = \frac{4\kappa}{(\sqrt\kappa + 1)^2} = \eta L$. Every
+eigenvalue $\lambda \in [\mu, L]$ therefore satisfies the condition, every
+coordinate is $z_k = c_1r_1^k + c_2r_2^k$ (or $(c_1 + c_2k)r^k$ at a double
+root, which happens at the two endpoints), and $|r_{1,2}| = \sqrt\beta$.
+$\blacksquare$
+
+The result is Polyak's [@polyak1964]; for general smooth convex functions the
+heavy ball can fail, and Nesterov's accelerated gradient achieves the
+$\sqrt\kappa$ dependence with guarantees [@nesterov2018, §2.2].
+:::
+
+The widget lets you compare the two methods on a two-dimensional quadratic:
+the condition number sets how elongated the bowl is, and the step and momentum
+are given as fractions of their optimal values.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof hbKappa = Inputs.range([1, 100], {step: 1, value: 25, label: "condition number κ"})
+```
+
+```{ojs}
+//| echo: false
+viewof hbEta = Inputs.range([0.1, 1.2], {step: 0.05, value: 1, label: "step / optimal step"})
+```
+
+```{ojs}
+//| echo: false
+viewof hbBeta = Inputs.range([0, 1.2], {step: 0.05, value: 1, label: "momentum / optimal momentum"})
+```
+
+```{ojs}
+//| echo: false
+hbPaths = {
+  const L = 1, mu = 1 / hbKappa, steps = 40;
+  const etaGD = hbEta * 2 / (L + mu);
+  const etaHB = hbEta * 4 / (Math.sqrt(L) + Math.sqrt(mu)) ** 2;
+  const betaHB = Math.min(0.999, hbBeta * ((Math.sqrt(hbKappa) - 1) / (Math.sqrt(hbKappa) + 1)) ** 2);
+  const out = [];
+  // f(x, y) = (mu x^2 + L y^2) / 2, start far along the flat direction
+  let x = 10, y = 1;
+  for (let k = 0; k <= steps; k++) { out.push({x, y, k, method: "gradient descent"});
+    x -= etaGD * mu * x; y -= etaGD * L * y; }
+  let xp = 10, yp = 1; x = 10; y = 1;
+  for (let k = 0; k <= steps; k++) { out.push({x, y, k, method: "heavy ball"});
+    const xn = x - etaHB * mu * x + betaHB * (x - xp), yn = y - etaHB * L * y + betaHB * (y - yp);
+    xp = x; yp = y; x = xn; y = yn; }
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+hbEllipses = {
+  const out = [], mu = 1 / hbKappa;
+  for (const c of [0.02, 0.1, 0.3, 0.6, 1]) {
+    const lev = c * (mu * 100 + 1) / 2;
+    for (let t = 0; t <= 2 * Math.PI + 1e-9; t += Math.PI / 60)
+      out.push({x: Math.sqrt(2 * lev / mu) * Math.cos(t), y: Math.sqrt(2 * lev) * Math.sin(t), level: c});
+  }
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-opt-momentum-widget
+//| fig-cap: "Forty iterations of gradient descent and of the heavy-ball method on f(x, y) = (μx² + Ly²)/2 with κ = L/μ, starting at (10, 1); grey curves are level sets. At the optimal parameters (@thm-opt-step, @thm-opt-heavy-ball) gradient descent creeps along the flat direction, while momentum reaches the minimum much sooner. Steps beyond the limits diverge."
+Plot.plot({
+  height: 300, x: {domain: [-11, 11], label: "x (flat direction)"}, y: {domain: [-1.6, 1.6], label: "y (steep direction)"},
+  color: {legend: true, domain: ["gradient descent", "heavy ball"], range: ["#2a78d6", "#eb6834"]},
+  marks: [
+    Plot.line(hbEllipses, {x: "x", y: "y", z: "level", stroke: "#d6d5d0", strokeWidth: 1, clip: true}),
+    Plot.line(hbPaths.filter(d => Math.abs(d.x) < 40 && Math.abs(d.y) < 40), {x: "x", y: "y", z: "method", stroke: "method", strokeWidth: 1.5, curve: "linear", clip: true}),
+    Plot.dot(hbPaths.filter(d => Math.abs(d.x) < 40 && Math.abs(d.y) < 40), {x: "x", y: "y", fill: "method", r: 2, clip: true}),
+    Plot.dot([{x: 0, y: 0}], {x: "x", y: "y", symbol: "plus", r: 6, stroke: "#0b0b0b"})
+  ]
+})
+```
+:::
+
+### Adaptive methods: AdaGrad, RMSProp, Adam
+
+A single step for all parameters is a compromise when the gradient
+components have very different scales. **Adaptive** methods give each
+coordinate its own step, divided by a running measure of that coordinate's
+past gradient magnitude: AdaGrad [@duchi2011] uses the sum of past squared
+gradients, RMSProp an exponential average of them [@tieleman2012], and
+**Adam** [@kingma2015] combines that with momentum. With $g_t$ the (stochastic)
+gradient at step $t$ and operations coordinate by coordinate:
+$$
+m_t = \beta_1m_{t-1} + (1 - \beta_1)g_t,\quad
+v_t = \beta_2v_{t-1} + (1 - \beta_2)g_t^2,\quad
+\hat m_t = \frac{m_t}{1 - \beta_1^t},\quad
+\hat v_t = \frac{v_t}{1 - \beta_2^t},\quad
+\theta_t = \theta_{t-1} - \eta\frac{\hat m_t}{\sqrt{\hat v_t} + \epsilon},
+$$ {#eq-opt-adam}
+with $m_0 = v_0 = 0$ and defaults $\beta_1 = 0.9$, $\beta_2 = 0.999$,
+$\epsilon = 10^{-8}$. Adam is the default solver of scikit-learn's neural
+networks (@sec-ch-mla-nn). The divisions by $1 - \beta^t$ look arbitrary;
+they are not.
+
+::: {#prp-opt-adam-bias}
+## Adam's bias correction
+If the gradients $g_1, g_2, \dots$ have the same mean $\mathbb{E}g_t = \bar g$,
+then $\mathbb{E}m_t = (1 - \beta_1^t)\,\bar g$, so $\mathbb{E}\hat m_t =
+\bar g$. The same holds for $v_t$ and $\mathbb{E}g_t^2$.
+:::
+
+*In one line:* starting the averages at zero biases them towards zero in the
+first steps, by exactly the factor that the correction divides out.
+
+::: {.deep kind="proof"}
+## Proof of @prp-opt-adam-bias
+By induction, $m_t = (1 - \beta_1)\sum_{s=1}^t\beta_1^{t-s}g_s$ ($m_0 = 0$ and
+each step multiplies the old sum by $\beta_1$ and adds $(1-\beta_1)g_t$).
+Taking expectations, $\mathbb{E}m_t = (1 - \beta_1)\bar g\sum_{s=1}^t
+\beta_1^{t-s} = (1 - \beta_1)\bar g\,\frac{1 - \beta_1^t}{1 - \beta_1} = (1 -
+\beta_1^t)\bar g$ by the geometric sum. The argument for $v_t$ is identical
+with $g_s^2$ [@kingma2015, §3]. $\blacksquare$
+:::
+
+Without correction, with $\beta_2 = 0.999$ the first $v_t$ is $0.001\,g_1^2$:
+the step $m_t/\sqrt{v_t}$ would start about $0.1/\sqrt{0.001} \approx 3$ times
+too large. Adaptive methods are robust and need little tuning, which explains
+their popularity for neural networks; their convergence theory is subtler than
+that of SGD (the original proof of Adam has a gap, closed by a modified
+algorithm [@reddi2018]).
+
+### Practice {.unnumbered}
+
+::: {#exr-mla1-schedules-easy}
+## Easy — bias correction by hand
+Adam with $\beta_1 = 0.9$, $\beta_2 = 0.999$ receives the constant gradient
+$g_t = 2$. Compute $m_1, m_2, v_1, v_2$, the corrected values, and the first
+two steps for $\eta = 0.01$ (ignore $\epsilon$). What would the first step be
+without the correction?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$m_1 = 0.1\cdot2$, $v_1 = 0.001\cdot4$. With a constant gradient the
+corrected values should equal $2$ and $4$ exactly.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+$m_1 = 0.2$, $m_2 = 0.9\cdot0.2 + 0.2 = 0.38$; $v_1 = 0.004$, $v_2 =
+0.999\cdot0.004 + 0.004 = 0.007996$. Corrections: $\hat m_1 = 0.2/0.1 = 2$,
+$\hat m_2 = 0.38/0.19 = 2$, $\hat v_1 = 0.004/0.001 = 4$, $\hat v_2 =
+0.007996/0.001999 = 4$. Each step is $\eta\cdot2/\sqrt4 = \eta = 0.01$.
+Without correction the first step would be $0.01\cdot0.2/\sqrt{0.004} \approx
+0.0316$.
+```{python}
+m = v = 0.0
+for t in (1, 2):
+    m = 0.9 * m + 0.1 * 2; v = 0.999 * v + 0.001 * 4
+    mh, vh = m / (1 - 0.9**t), v / (1 - 0.999**t)
+    print(t, round(m, 6), round(v, 6), mh, round(vh, 10), "step", 0.01 * mh / np.sqrt(vh), "uncorrected", 0.01 * m / np.sqrt(v))
+```
+A property worth noticing: with a constant gradient, Adam's step is $\eta$
+whatever the size of the gradient — the update is scale-free. The usual
+error is to apply the correction with $t$ starting at 0 (division by zero) or
+to forget it entirely.
+:::
+
+::: {#exr-mla1-schedules-medium}
+## Medium — momentum against gradient descent
+For $H = \operatorname{diag}(0.01, 1)$ ($\kappa = 100$), count the iterations
+needed by gradient descent with the best fixed step and by the heavy ball
+with the parameters of @thm-opt-heavy-ball to bring $\lVert\theta_k\rVert$
+below $10^{-6}\lVert\theta_0\rVert$, from $\theta_0 = (1, 1)$. Compare with
+the predictions $\ln(10^6)/\ln(1/\rho)$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Keep the previous iterate to form $\theta_k - \theta_{k-1}$; start with
+$\theta_{-1} = \theta_0$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+lam = np.array([0.01, 1.0]); mu, Lh = lam.min(), lam.max(); kappa = Lh / mu
+def count(method):
+    th, prev = np.ones(2), np.ones(2)
+    for k in range(1, 100_000):
+        if method == "gd":
+            th = th - 2 / (Lh + mu) * lam * th
+        else:
+            eta, beta = 4 / (np.sqrt(Lh) + np.sqrt(mu)) ** 2, ((np.sqrt(kappa) - 1) / (np.sqrt(kappa) + 1)) ** 2
+            th, prev = th - eta * lam * th + beta * (th - prev), th
+        if np.linalg.norm(th) < 1e-6 * np.sqrt(2):
+            return k
+rho_gd, rho_hb = (kappa - 1) / (kappa + 1), (np.sqrt(kappa) - 1) / (np.sqrt(kappa) + 1)
+print("gradient descent:", count("gd"), "iterations; predicted", round(np.log(1e6) / -np.log(rho_gd)))
+print("heavy ball:      ", count("hb"), "iterations; predicted", round(np.log(1e6) / -np.log(rho_hb)))
+```
+Momentum needs about seven times fewer iterations; the rates alone predict a
+factor of about ten ($\sqrt{100}$). The heavy ball takes more iterations than
+its bare prediction because of the factor linear in $k$ at the double roots of
+the two extreme eigenvalues (@thm-opt-heavy-ball), which matters for a
+target as demanding as $10^{-6}$. Common mistake: using the optimal momentum with the
+gradient-descent step $2/(L + \mu)$; the two parameters are tuned together.
+:::
+
+::: {#exr-mla1-schedules-hard}
+## Hard — choosing a schedule honestly
+On the handwritten digits data shipped with scikit-learn (1 797 images of
+$8 \times 8$ pixels, 10 classes [@alpaydin1998]), compare the four schedules
+of @tbl-opt-schedules for `SGDClassifier(loss="log_loss")` in a pipeline with
+`StandardScaler`, by repeated stratified 5-fold cross-validation (keep a 25 %
+test split aside). Choose a schedule with the one-standard-error rule
+(@sec-selection), then report its test accuracy and the two most confused
+digit pairs.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`eta0` matters for three schedules; give them the same value (e.g. 0.01) and
+`max_iter=50`. To find the most confused pairs, zero the diagonal of the
+confusion matrix and look for the largest entries.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import warnings
+from sklearn.datasets import load_digits
+from sklearn.model_selection import cross_val_score, RepeatedStratifiedKFold
+from sklearn.exceptions import ConvergenceWarning
+
+Xd, yd = load_digits(return_X_y=True)
+Xd_tr, Xd_te, yd_tr, yd_te = train_test_split(Xd, yd, test_size=0.25, stratify=yd, random_state=0)
+cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=0)
+results = {}
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", ConvergenceWarning)          # 50 epochs is deliberately short
+    for sched in ("constant", "invscaling", "adaptive", "optimal"):
+        model = make_pipeline(StandardScaler(), SGDClassifier(loss="log_loss", learning_rate=sched, eta0=0.01,
+                                                              max_iter=50, random_state=0))
+        s = cross_val_score(model, Xd_tr, yd_tr, cv=cv)
+        results[sched] = (s.mean(), s.std(ddof=1) / np.sqrt(len(s)))
+        print(f"{sched:10s} CV accuracy {s.mean():.4f} ± {results[sched][1]:.4f}")
+    best = max(results, key=lambda k: results[k][0])
+    ok = [k for k in results if results[k][0] >= results[best][0] - results[best][1]]
+    print("best:", best, "| within one standard error:", ok)
+    chosen = make_pipeline(StandardScaler(), SGDClassifier(loss="log_loss", learning_rate=best, eta0=0.01,
+                                                           max_iter=50, random_state=0)).fit(Xd_tr, yd_tr)
+cm = confusion_matrix(yd_te, chosen.predict(Xd_te))
+off = cm + cm.T; np.fill_diagonal(off, 0)
+pairs = sorted(((off[i, j], i, j) for i in range(10) for j in range(i + 1, 10)), reverse=True)[:2]
+print(f"test accuracy {chosen.score(Xd_te, yd_te):.4f}; most confused pairs:",
+      "; ".join(f"{i} and {j} ({int(c)} errors)" for c, i, j in pairs))
+```
+With `eta0=0.01`, the constant and adaptive schedules tie, `"optimal"` is
+about one point behind and `"invscaling"` clearly worse: its step
+$0.01/\sqrt t$, with $t$ counting single updates, becomes tiny long before
+50 epochs are over. The one-standard-error rule admits the constant and the
+adaptive schedule; prefer the simpler, constant one. The test accuracy is
+reported once, for the chosen schedule only. Errors concentrate on a few
+pairs of digits whose shapes are similar — exactly the kind of structure a
+per-class analysis should look for. Typical mistakes: tuning on the test set,
+reading differences smaller than the standard error as real, and forgetting
+to scale (SGD is very sensitive to it, @thm-opt-step).
+:::
+
+## Training history and early stopping {#sec-opt-early-stopping}
+
+An iterative fit produces a **training history**: the training loss after each
+epoch and, if part of the data is held out, a validation score. scikit-learn
+stores it in attributes such as `loss_curve_` (neural networks) and, when
+`early_stopping=True`, `validation_scores_`; for SGD estimators the simplest
+route is a loop of `partial_fit` calls, one per epoch. Reading the history is
+the same diagnosis as in @tbl-diagnosis, with the epochs in place of the
+model's complexity: training loss still falling and validation score still
+rising — keep training; validation score falling while the training loss
+falls — overfitting.
+
+**Early stopping** turns this into a rule: hold out a validation set, evaluate
+after every epoch, stop when the validation score has not improved for a
+number of epochs (the **patience**, `n_iter_no_change` in scikit-learn), and
+keep the best parameters seen. It is one of the oldest and most effective
+regularisers of neural networks [@prechelt2012]. Why is it a regulariser at
+all? For least squares the answer is exact.
+
+::: {#thm-opt-early-ridge}
+## Early stopping behaves like ridge regression
+Let $J(\beta) = \frac{1}{2n}\lVert y - X\beta\rVert^2$, let $H = \frac1n
+X^\top X = \sum_js_jv_jv_j^\top$ be its eigen-decomposition, and run gradient
+descent from $\beta_0 = 0$ with step $\eta \le 1/s_{\max}$. After $k$ steps,
+in each eigen-direction with $s_j > 0$ the iterate equals the least-squares
+coefficient multiplied by the **filter factor**
+$$
+\varphi^{\text{GD}}_j = 1 - (1 - \eta s_j)^k ,
+$$
+whereas ridge regression $\min_\beta J(\beta) + \frac\lambda2\lVert\beta\rVert^2$
+multiplies it by $\varphi^{\text{R}}_j = s_j/(s_j + \lambda)$. With $\lambda
+= 1/(\eta k)$,
+$$
+\varphi^{\text{R}}_j \le \varphi^{\text{GD}}_j \le 2\,\varphi^{\text{R}}_j
+\qquad\text{for every } j .
+$$
+:::
+
+*In one line:* stopping after $k$ steps of size $\eta$ shrinks the fit in the
+same directions and by nearly the same amounts as a ridge penalty
+$\lambda = 1/(\eta k)$ — fewer steps, stronger penalty.
+
+::: {.deep kind="proof"}
+## Proof of @thm-opt-early-ridge
+Let $c = X^\top y/n$; the gradient is $H\beta - c$, so $\beta_{k+1} = (I -
+\eta H)\beta_k + \eta c$ and, from $\beta_0 = 0$, $\beta_k = \eta\sum_{i<k}(I
+- \eta H)^ic$. In the eigenbasis, the component along $v_j$ is
+$\eta\sum_{i<k}(1 - \eta s_j)^i\,c_j = \frac{1 - (1 - \eta s_j)^k}{s_j}c_j$
+by the geometric sum, and $c_j/s_j$ is the least-squares component (the normal
+equations in the eigenbasis read $s_j\beta_j = c_j$). Ridge solves $(H +
+\lambda I)\beta = c$, giving $c_j/(s_j + \lambda) = \frac{s_j}{s_j +
+\lambda}\cdot\frac{c_j}{s_j}$. For the bounds put $x = k\eta s_j \ge 0$ and
+use $0 \le \eta s_j \le 1$. Lower bound: $(1 - \eta s_j)^k \le e^{-k\eta s_j}
+= e^{-x}$ and $e^{x} \ge 1 + x$ give $\varphi^{\text{GD}} \ge 1 - e^{-x} \ge
+1 - \frac{1}{1+x} = \frac{x}{1+x} = \varphi^{\text{R}}$ (with $\lambda =
+1/(\eta k)$, $\frac{s_j}{s_j + \lambda} = \frac{x}{x + 1}$). Upper bound:
+$\varphi^{\text{GD}} \le 1$, and by Bernoulli's inequality $(1 - \eta s_j)^k
+\ge 1 - k\eta s_j$, so $\varphi^{\text{GD}} \le \min(1, x)$; finally
+$\min(1, x) \le \frac{2x}{1 + x}$ (for $x \le 1$ because $1 + x \le 2$, for
+$x \ge 1$ because $1 + x \le 2x$). $\blacksquare$
+
+The connection is classical in the inverse-problems literature (Landweber
+iteration) and was made precise for learning by Yao, Rosasco and Caponnetto
+[@yao2007]; Bishop gives the quadratic-approximation argument for neural
+networks [@bishop2006, §5.5.2].
+:::
+
+The experiment fits a degree-12 polynomial to 30 noisy points of a sine curve
+by gradient descent, holding out 10 of them for validation, and compares the
+error after each step with ridge regression of the matching penalty.
+
+```{python}
+#| label: fig-opt-early-stopping
+#| fig-cap: "Gradient descent on a degree-12 polynomial regression (20 training points, 10 for validation, 2 000 new points for the test). Left: training, validation and test MSE along the iterations; the dashed line marks the iteration chosen by early stopping. Right: the test MSE of ridge with λ = 1/(ηk), which tracks the gradient-descent curve as @thm-opt-early-ridge predicts."
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import Ridge
+
+rng = np.random.default_rng(3)
+truth = lambda x: np.sin(2 * np.pi * x)
+x_all = rng.uniform(0, 1, 30); y_all = truth(x_all) + rng.normal(0, 0.3, 30)
+x_new = rng.uniform(0, 1, 2000); y_new = truth(x_new) + rng.normal(0, 0.3, 2000)
+tr, va = np.arange(20), np.arange(20, 30)
+poly = make_pipeline(PolynomialFeatures(12, include_bias=False), StandardScaler()).fit(x_all[tr, None])
+P_tr, P_va, P_new = (poly.transform(v[:, None]) for v in (x_all[tr], x_all[va], x_new))
+yc = y_all[tr] - y_all[tr].mean()                                  # centred target: no intercept to fit
+mse = lambda P, yv, b: np.mean((yv - y_all[tr].mean() - P @ b) ** 2)
+s_max = np.linalg.eigvalsh(P_tr.T @ P_tr / len(tr)).max()
+eta, iters = 1 / s_max, 20_000
+record = set(np.unique(np.logspace(0, np.log10(iters), 120).astype(int)).tolist())
+beta = np.zeros(P_tr.shape[1]); hist = []
+for k in range(1, iters + 1):
+    beta -= eta * (P_tr.T @ (P_tr @ beta - yc) / len(tr))
+    if k in record:
+        hist.append((k, mse(P_tr, y_all[tr], beta), mse(P_va, y_all[va], beta), mse(P_new, y_new, beta)))
+hist = np.array(hist)
+k_best = int(hist[np.argmin(hist[:, 2]), 0])
+ridge_test = [mse(P_new, y_new, Ridge(alpha=len(tr) / (eta * k), fit_intercept=False).fit(P_tr, yc).coef_) for k in hist[:, 0]]
+
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.3), sharey=True)
+for col, name, c in zip((1, 2, 3), ("training", "validation", "test"), mlalgbook.COLORS):
+    axes[0].plot(hist[:, 0], hist[:, col], color=c, label=name)
+axes[0].axvline(k_best, color=mlalgbook.MUTED, ls="--", lw=1)
+axes[1].plot(hist[:, 0], hist[:, 3], color=mlalgbook.COLORS[2], label="gradient descent, k steps")
+axes[1].plot(hist[:, 0], ridge_test, color=mlalgbook.COLORS[3], ls="--", label="ridge, λ = 1/(ηk)")
+for ax in axes:
+    ax.set_xscale("log"); ax.set_yscale("log"); ax.set_xlabel("iteration k"); ax.legend()
+axes[0].set_ylabel("MSE")
+fig.tight_layout(); plt.show()
+i_best = np.argmin(hist[:, 2])
+print(f"early stopping picks k = {k_best}: test MSE {hist[i_best, 3]:.4f};  after {iters} steps: {hist[-1, 3]:.4f};  "
+      f"best test MSE along the path: {hist[:, 3].min():.4f} (noise variance 0.09)")
+```
+
+The training error keeps decreasing; the validation and test errors decrease,
+reach a minimum and rise again as the polynomial starts to follow the noise.
+The validation set, chosen independently of the test set, stops close to the
+best point. In the right panel the two curves track each other closely up to
+the region of the minimum: running gradient descent longer is like lowering
+the ridge penalty. Past it, gradient descent overfits faster than the matching
+ridge — the theorem allows its filter factors to be up to twice as large. (scikit-learn's
+`Ridge(alpha)` has no $1/n$ in front of the loss, hence `alpha = n/(ηk)` in
+the code, @tbl-sklearn-penalties.)
+
+::: {.deep}
+## Early stopping in scikit-learn
+`SGDClassifier`, `SGDRegressor`, `MLPClassifier` and `MLPRegressor` accept
+`early_stopping=True`: a stratified fraction `validation_fraction` (default
+0.1) of the training data is set aside, the score is computed after each
+epoch, and training stops when it has not improved by `tol` for
+`n_iter_no_change` epochs. Two details matter. The held-out fraction is taken
+**inside** `fit`, so in a cross-validation loop it is correctly carved from the
+training folds only. And the SGD estimators keep the parameters of the **last**
+epoch, not of the best one; the neural networks keep the best
+(`best_validation_score_`). The attribute `n_iter_` says how many epochs were
+actually run.
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-mla1-early-easy}
+## Easy — filter factors
+With $\eta = 0.05$ and $k = 20$, compute the gradient-descent filter factors
+for eigenvalues $s = 0.1, 1, 10$ and the ridge factors with $\lambda =
+1/(\eta k)$. Check the inequalities of @thm-opt-early-ridge. Which directions
+are kept and which suppressed?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$\lambda = 1/(0.05\cdot20) = 1$. Note that $\eta s \le 1$ requires $s \le 20$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+eta_e, k_e = 0.05, 20
+for s in (0.1, 1, 10):
+    gd_f, r_f = 1 - (1 - eta_e * s) ** k_e, s / (s + 1 / (eta_e * k_e))
+    print(f"s = {s:5}: GD {gd_f:.4f}  ridge {r_f:.4f}  ratio {gd_f / r_f:.3f}")
+```
+The direction with $s = 10$ (strong signal in the data) is kept almost
+entirely by both; $s = 0.1$ (a direction in which the features barely vary,
+where least squares is unstable) is shrunk to about a tenth. The ratios lie in
+$[1, 2]$, as proved. A common slip is to plug $\lambda = \eta k$ instead of
+its inverse: more iterations mean *less* regularisation.
+:::
+
+::: {#exr-mla1-early-medium}
+## Medium — early stopping with scikit-learn
+On the polynomial features of @fig-opt-early-stopping (all 30 points as
+training data), fit `SGDRegressor(penalty=None, learning_rate="constant",
+eta0=0.01)` for 2 000 epochs (`max_iter=2000, tol=None`) and with
+`early_stopping=True` (`tol=1e-4`, patience 20, validation fraction 0.3).
+Report `n_iter_` and the test MSE on the 2 000 new points; repeat for 10
+random seeds. Is early stopping worth it here?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Scale the polynomial features with a scaler fitted on the 30 training points,
+and centre nothing — `SGDRegressor` fits the intercept itself. Average the two
+test MSEs over the seeds.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+poly30 = make_pipeline(PolynomialFeatures(12, include_bias=False), StandardScaler()).fit(x_all[:, None])
+P30, Pn = poly30.transform(x_all[:, None]), poly30.transform(x_new[:, None])
+rows = []
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", ConvergenceWarning)
+    for seed in range(10):
+        for es in (False, True):
+            m = SGDRegressor(penalty=None, learning_rate="constant", eta0=0.01, max_iter=2000,
+                             tol=1e-4 if es else None, early_stopping=es, validation_fraction=0.3,
+                             n_iter_no_change=20, random_state=seed).fit(P30, y_all)
+            rows.append((es, m.n_iter_, np.mean((y_new - m.predict(Pn)) ** 2)))
+rows = np.array(rows, float)
+for es in (0, 1):
+    r = rows[rows[:, 0] == es]
+    print(f"early_stopping={bool(es)!s:5}: mean epochs {r[:, 1].mean():7.1f}, mean test MSE {r[:, 2].mean():.4f} (min {r[:, 2].min():.4f}, max {r[:, 2].max():.4f})")
+```
+Early stopping runs far fewer epochs — and is **worse** on average here, with
+a much larger spread across seeds. Two reasons. With 30 points, the validation
+set has 9 of them, so the score that decides when to stop is very noisy and
+training often stops long before the useful part is learned. And the 2 000
+unstopped epochs of SGD with this step have not yet reached the overfitting
+regime of @fig-opt-early-stopping, so there is little to protect against.
+Early stopping is not free: it spends data on validation and adds a noisy
+decision. Mistakes to avoid: judging from a single seed, and assuming that a
+regulariser always helps.
+:::
+
+::: {#exr-mla1-early-hard}
+## Hard — early stopping by hand, evaluated honestly
+On the digits data (split of @exr-mla1-schedules-hard), train a softmax
+regression by full-batch gradient descent (your function of
+@exr-mla1-gradients-hard, no penalty) for up to 3 000 iterations. Hold out 20 %
+of the training split as validation; implement early stopping with patience
+100 that **restores** the best parameters. Compare the test accuracy with
+(a) the model after all 3 000 iterations and (b)
+`LogisticRegression` with `C` chosen by `GridSearchCV`. Which regulariser
+wins, and by how much relative to the test-set uncertainty?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Standardise with statistics of the inner training part only; pixels that are
+constant there have zero variance — `StandardScaler` handles them (it leaves
+them at zero). Evaluate the validation accuracy every iteration, keep a copy
+of the best $(W, b)$. The standard error of an accuracy $a$ on $m$ test points
+is about $\sqrt{a(1-a)/m}$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.model_selection import GridSearchCV
+
+Xa, Xv, ya, yv = train_test_split(Xd_tr, yd_tr, test_size=0.2, stratify=yd_tr, random_state=1)
+sc_d = StandardScaler().fit(Xa)
+Za, Zv, Zt = sc_d.transform(Xa), sc_d.transform(Xv), sc_d.transform(Xd_te)
+K, d = 10, Za.shape[1]
+Za1 = np.column_stack([np.ones(len(ya)), Za])
+eta_d = 1 / (np.linalg.eigvalsh(Za1.T @ Za1).max() / (2 * len(ya)))
+W, b = np.zeros((K, d)), np.zeros(K)
+best = (-1, None, None, 0); wait = 0
+for it in range(1, 3001):
+    _, gW, gb = softmax_loss_grad(W, b, Za, ya, K)
+    W -= eta_d * gW; b -= eta_d * gb
+    va_acc = np.mean(np.argmax(Zv @ W.T + b, 1) == yv)
+    if va_acc > best[0]:
+        best, wait = (va_acc, W.copy(), b.copy(), it), 0             # restore point
+    else:
+        wait += 1
+        if wait >= 100:
+            break
+test_acc = lambda W_, b_: np.mean(np.argmax(Zt @ W_.T + b_, 1) == yd_te)
+acc_es = test_acc(best[1], best[2])
+W_full, b_full = np.zeros((K, d)), np.zeros(K)
+for _ in range(3000):
+    _, gW, gb = softmax_loss_grad(W_full, b_full, Za, ya, K)
+    W_full -= eta_d * gW; b_full -= eta_d * gb
+acc_full = test_acc(W_full, b_full)
+gs = GridSearchCV(make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000)),
+                  {"logisticregression__C": np.logspace(-3, 2, 11)}, cv=5).fit(Xd_tr, yd_tr)
+acc_lr = gs.score(Xd_te, yd_te)
+m_te = len(yd_te); se = np.sqrt(acc_lr * (1 - acc_lr) / m_te)
+print(f"early stopping: stopped at {it}, best iteration {best[3]}, test accuracy {acc_es:.4f}")
+print(f"3000 iterations, no stopping: test accuracy {acc_full:.4f}")
+print(f"LogisticRegression, C = {gs.best_params_['logisticregression__C']:.3g} by CV: test accuracy {acc_lr:.4f}  (s.e. ≈ {se:.4f})")
+```
+The three accuracies differ by amounts comparable with the standard error of
+a test set of 450 images: on this problem the data are plentiful relative to
+the 650 parameters and regularisation, of either kind, changes little — the
+same lesson as @fig-validation-curve. Early stopping spends 20 % of the
+training data on validation, while `GridSearchCV` reuses all of it through
+cross-validation and then refits; that is one reason the penalised model is
+usually at least as good. Mistakes to avoid: forgetting to restore the best
+weights (you would report the model `patience` iterations past the optimum),
+and scaling with statistics that include the validation part.
+:::
+
+::: {.project-link}
+**In the project.** The classifier the project asks for (k-nearest neighbours,
+@sec-ch-mla-knn) has no training loop at all, so gradient descent is not
+needed to fit it. This chapter matters for the comparison models: logistic
+regression, linear SVMs (@sec-ch-mla-svm) and neural networks
+(@sec-ch-mla-nn) are all fitted by the methods above. Three lessons carry
+over directly: **scale the features** before any gradient-based model
+(@thm-opt-step), **choose hyper-parameters by cross-validation inside a
+pipeline**, and **read the training history** before trusting a model that
+stopped early.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Unscaled features.** The condition number, and with it the number of
+  iterations, can grow by orders of magnitude (@thm-opt-step).
+- **A step that is too large** makes the loss oscillate or explode; a step
+  that is too small looks like "converged" in the history but is merely slow.
+  Plot the loss on a log scale.
+- **Wrong gradients that still "work".** A gradient off by a constant factor
+  or with a sign error on a few components may still decrease the loss slowly.
+  Check it with finite differences (@prp-opt-central-difference).
+- **Comparing SGD and batch GD per iteration** rather than per pass over the
+  data or per unit of time.
+- **Expecting a constant-step SGD to reach the minimum.** It stalls at a
+  noise floor proportional to the step; average the iterates or decrease the
+  step.
+- **Early stopping without restoring the best parameters**, and using the
+  test set as the validation set.
+- **Calling `fit` in an online loop**: it restarts from scratch; use
+  `partial_fit` (and pass `classes=` at the first call for classifiers).
+:::
+
+## Summary
+
+- The gradient gives the slope in every direction; $-\nabla J$ is the
+  steepest descent. Check analytic gradients with centred differences (error
+  $O(h^2)$).
+- On a quadratic, gradient descent converges iff $\eta < 2/L$; the best fixed
+  step gives the rate $(\kappa - 1)/(\kappa + 1)$. Scaling reduces $\kappa$.
+- A mini-batch gradient is unbiased with covariance $\Sigma/b$; SGD with a
+  constant step reaches error $RG/\sqrt T$ for averaged iterates, and in
+  practice gives a good model in one or a few passes. `partial_fit` makes it
+  online.
+- Schedules lower the step over time; momentum improves the rate to
+  $(\sqrt\kappa - 1)/(\sqrt\kappa + 1)$ on quadratics; Adam adapts the step per
+  coordinate and corrects the bias of its zero-initialised averages.
+- Early stopping is a regulariser: for least squares, $k$ steps of size $\eta$
+  shrink like ridge with $\lambda = 1/(\eta k)$, within a factor 2.
+
+## Exercises
+
+::: {#exr-mla1-newton}
+**Newton's method.** For the logistic loss, Newton's method replaces the step
+$\eta\nabla J$ by $(\nabla^2J)^{-1}\nabla J$. Implement it on the synthetic
+data of @fig-opt-steps (Hessian from @thm-logistic-loss) and count the
+iterations needed to reach the loss of scikit-learn to $10^{-10}$; compare with
+gradient descent at $\eta = 4/L$. Why is each Newton iteration more expensive,
+and when does that matter?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+theta_n, it_n = np.zeros(3), 0
+X1s = np.column_stack([np.ones(len(ys)), Xs])
+while logistic_loss(theta_n, Xs, ys) - J_log_min > 1e-10 and it_n < 100:
+    pr = 1 / (1 + np.exp(-(X1s @ theta_n)))
+    Hn = X1s.T @ (X1s * (pr * (1 - pr))[:, None]) / len(ys)
+    theta_n -= np.linalg.solve(Hn, logistic_grad(theta_n, Xs, ys)); it_n += 1
+theta_g, it_g = np.zeros(3), 0
+while logistic_loss(theta_g, Xs, ys) - J_log_min > 1e-10 and it_g < 100_000:
+    theta_g -= 4 / L * logistic_grad(theta_g, Xs, ys); it_g += 1
+print(f"Newton: {it_n} iterations; gradient descent (eta = 4/L): {it_g} iterations")
+```
+Newton converges in a handful of iterations — quadratically near the
+minimum [@nocedal2006, §3.3] — against more than ten times as many for
+gradient descent even with a step four times the safe one on these
+well-conditioned data (and many more
+with $\eta = 1/L$, @fig-opt-steps). Each iteration, however, forms a $p \times p$ Hessian ($O(np^2)$) and
+solves a linear system ($O(p^3)$): trivial for $p = 3$, prohibitive for the
+millions of parameters of a neural network, where only first-order methods
+remain practical. Quasi-Newton methods such as L-BFGS sit in between.
+:::
+
+::: {#exr-mla1-sgd-decreasing}
+**Decreasing steps.** Adapt the proof of @thm-opt-sgd to steps $\eta_t$ that
+vary with $t$, showing $\mathbb{E}J(\tilde\theta_T) - J(\theta^*) \le
+\frac{R^2 + G^2\sum_t\eta_t^2}{2\sum_t\eta_t}$ for the weighted average
+$\tilde\theta_T = \sum_t\eta_t\theta_t/\sum_t\eta_t$. What does the bound give
+for $\eta_t = \eta_0/\sqrt{t+1}$?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The one-step inequality becomes $2\eta_t(\mathbb{E}J(\theta_t) - J^*) \le D_t
+- D_{t+1} + \eta_t^2G^2$. Summing, $2\sum_t\eta_t(\mathbb{E}J(\theta_t) -
+J^*) \le R^2 + G^2\sum_t\eta_t^2$; divide by $2\sum_t\eta_t$ and apply Jensen
+to the weighted average. For $\eta_t = \eta_0/\sqrt{t+1}$, $\sum_{t<T}\eta_t
+\ge \eta_0\sqrt T$ (each of the $T$ terms is at least $\eta_0/\sqrt T$) and
+$\sum_t\eta_t^2 = \eta_0^2\sum_{t=1}^T 1/t \le \eta_0^2(1 + \ln T)$, so the
+bound is $O(\ln T/\sqrt T)$: without knowing $T$ in advance, one loses only a
+logarithmic factor. This is the reasoning behind the `"invscaling"` schedule.
+:::
+
+::: {#exr-mla1-hinge}
+**SGD as a linear SVM.** `SGDClassifier`'s default loss is `"hinge"`, $\max(0,
+1 - y\,f(x))$ with $y = \pm1$. Its "gradient" at $f(x)y = 1$ does not exist.
+What does SGD use there, and why does the convergence theory still apply?
+(@sec-ch-mla-svm shows that this loss with an L2 penalty is the linear
+support vector machine.)
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The hinge loss is convex and piecewise linear; at the kink it has a
+**subgradient**: any vector $g$ with $\ell(\theta') \ge \ell(\theta) +
+g^\top(\theta' - \theta)$ for all $\theta'$. On the kink, any convex
+combination of the two one-sided gradients ($0$ and $-y\tilde x$) qualifies;
+implementations pick one of them. The proof of @thm-opt-sgd used only the
+inequality $\nabla J(\theta_t)^\top(\theta_t - \theta^*) \ge J(\theta_t) -
+J(\theta^*)$, which holds for subgradients by definition, and the bound on
+$\mathbb{E}\lVert g_t\rVert^2$: the theorem holds verbatim for
+**subgradient** methods on non-differentiable convex losses [@nemirovski2009].
+:::
+
+## Further reading {.unnumbered}
+
+- @bottou2018 — *Optimization Methods for Large-Scale Machine Learning*: the
+  best single survey of SGD and its variants for machine learning (§3–5 for
+  SGD and its analysis, §6 for noise reduction and second-order methods).
+- @nocedal2006, ch. 2–3 and 7 — line searches, step sizes, Newton and
+  quasi-Newton methods (L-BFGS, the default solver of `LogisticRegression`).
+- @nesterov2018, ch. 2 — lower bounds and accelerated methods, for the
+  mathematically inclined.
+- @robbins1951 and @polyak1964 — the origins of stochastic approximation and
+  of momentum; @polyak1992 — averaging.
+- @kingma2015 — Adam (read §2–3); @reddi2018 for the caveat on its proof.
+- @prechelt2012 — early stopping in practice; @yao2007 — its theory.
+- @goodfellow2016, ch. 8 — optimisation for training deep models, the bridge
+  to the neural networks of @sec-ch-mla-nn.
+- scikit-learn user guide, "Stochastic Gradient Descent" — the exact
+  objectives, schedules and stopping rules of `SGDClassifier` and
+  `SGDRegressor` [@pedregosa2011].

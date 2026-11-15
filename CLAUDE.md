@@ -197,6 +197,100 @@ for style, depth and structure**: read one chapter (e.g.
   after the last render, re-read the outputs (e.g. from
   `_freeze/<part>/<chapter>/execute-results/html.json`) and fix the prose.
 
+## Notes for Part IV (Machine learning: models and algorithms, `mlalg/`)
+
+- Status (2026-11-15): theory chapters published; **project chapter still to
+  write** (agreed split: theory first, project in a second session). The part
+  overview `mlalg/index.qmd` has a callout "Status of the project chapter" —
+  remove it and update the parts tables in `index.qmd` and `README.md` when
+  the project chapter is added.
+- Structure: `mlalg/index.qmd` + one chapter per course module (the course's
+  introductory module is folded into the overview): `01-optimization`,
+  `02-parametric`, `03-naive-bayes`, `04-svm`, `05-neural-networks`,
+  `06-knn`, `07-trees-forests`. Chapter ids: `sec-ch-mla-optim`,
+  `sec-ch-mla-parametric`, `sec-ch-mla-nb`, `sec-ch-mla-svm`,
+  `sec-ch-mla-nn`, `sec-ch-mla-knn`, `sec-ch-mla-trees`. Suggested for the
+  project: `mlalg/08-project-fruits.qmd`, id `sec-ch-mla-project`, labels
+  with the prefix `fruit`.
+- Label stems per chapter (theorems, figures, equations, sections): `opt`,
+  `npar`, `nb`, `svm`, `nn`, `knn`, `tree`; exercises
+  `exr-mla<N>-<section>-easy|medium|hard` (Practice) and `exr-mla<N>-<name>`
+  (end of chapter). Check collisions with
+  `grep -rhoE "\{#[a-z]+-[A-Za-z0-9_-]+" --include=*.qmd . | sort | uniq -d`.
+- Every main section has the graded Practice block (Easy/Medium/Hard, Hint and
+  Solution callouts); Hard exercises use wine, breast cancer, digits or
+  synthetic data and point towards the fruit project without solving it.
+- Helper `mlalg/mlalgbook.py`: imports `ml/mlbook.py` (same style and
+  palette), adds `regions()` (decision regions with class colours `COLORS[i]`),
+  `grid()`, `tint()` and `load_fruits()` (reads the pinned raw URL and checks
+  the MD5). Every chapter starts with the hidden cell
+  `import mlalgbook; mlalgbook.setup()`.
+- Widgets: heavy computations are done in hidden Python cells and passed to
+  OJS with `ojs_define(...)` (stored in `_freeze`); light ones (momentum,
+  KDE, universal approximation) are computed in JS. Use `Inputs.radio` for
+  discrete knobs and `type: "ordinal"` in `color:` when the domain is numeric
+  (otherwise Plot draws a continuous legend). Pages using `ojs_define` load
+  require.js and jQuery from cdnjs (added by Quarto, with SRI hashes): in the
+  sandbox this gives a harmless "define is not defined" console error.
+- Data. Theory chapters: data generated in code and scikit-learn's wine,
+  breast cancer, iris and digits (UCI, CC BY 4.0; keys `aeberhard1992`,
+  `wolberg1993`, `fisher1936data`, `alpaydin1998`). **Project data**:
+  `fruits.csv` was provided by the course, licence not declared, no public
+  source found (web searches, 2026-11-15). The author explicitly agreed to
+  an exception to the "public data with a clear licence" rule: a byte-identical
+  copy (MD5 `1f5d3d3ec83265951fb8d4eee0f6d1c6`, SHA-256 `e6e8da80…fed1b`,
+  16 433 bytes) is in `ai-projects` at the repository root next to the
+  notebook, with `fruits_README.md` (origin, "not covered by the MIT
+  licence", structure, known problems) — commit `dec0cb2`; commit `090cac3`
+  changed only the CSV URL in the two notebooks (English and `it/`) to the
+  raw URL pinned at `dec0cb2`. The handbook must **not** contain a copy:
+  the project chapter reads it with `mlalgbook.load_fruits()` (pinned to
+  `dec0cb2`). **Re-rendering the project chapter needs network access** to
+  `raw.githubusercontent.com` (the CSV and the notebook). When the project
+  chapter is published, extend the preface's independence note: the course's
+  data file is used, read from the companion repository, licence undeclared.
+- Known problems of `fruits.csv`, to verify **in code** in the project chapter
+  (as for the houses in Part III): 500 rows, 5 classes × 100, no missing
+  values, no duplicates; 40 values of `Durezza buccia (1-10)` above 10 (24
+  Uva, 15 Banana, 1 Mela; max 13.72); bananas have "diameter" 119.8–299.9 mm
+  and "length" 1.6–4.3 mm (swapped, and the lengths look like cm); lengths of
+  every fruit 1.2–11.1 "mm"; implausibly low weights (apples 31–111 g);
+  bananas are separable by the diameter alone (min 119.8 > max of the others
+  115.4). The course's S3 URL is not reachable from the sandbox: the copy came
+  from the zip the author sent.
+- Notebook review (next session): review the notebook as of `dec0cb2`
+  (identical to `2e2c86d`; it still reads the course's S3 URL), not
+  `090cac3`. Replay it top to bottom **and** in the order of the stored
+  `execution_count`s (the data-loading cell has count 39: the published
+  outputs come from an out-of-order session). Claims to check, from the
+  `ai-projects` README: Yeo–Johnson transform, K = 15 with 92 % test / 94 %
+  train accuracy, 5-fold CV 91.4 % ± 2.4 %, `GridSearchCV` choosing K = 6
+  (0.92). Do not name the course's fictional company.
+- Versions used: Python 3.13, scikit-learn 1.9.1, NumPy 2.5.3, SciPy 1.18.1,
+  pandas 3.0.5, Matplotlib 3.11.2. Pitfalls met with these versions:
+  `MLPClassifier`/`MLPRegressor` take `hidden_layer_sizes=` as a keyword;
+  `QuadraticDiscriminantAnalysis` with singular class covariances needs
+  `solver="eigen", shrinkage=...`; `RadiusNeighborsClassifier(outlier_label=)`
+  must have the dtype of `y`; `scipy.stats.kstest(x, "norm", args=...)` fails —
+  pass a frozen distribution's `cdf`. Print numbers with f-strings (no
+  `np.float64(...)` reprs) and silence warnings whose text contains
+  `site-packages` paths.
+- Render times: re-executing all of Part IV ≈ 4 min (trees chapter ≈ 2 min,
+  SVM and k-NN ≈ 1 min); the full book from `_freeze` ≈ 2 min.
+
+## Notes for Part V and later
+
+- Same pattern as Part IV: one chapter per module, Practice blocks per main
+  section, proofs in deep blocks, widgets via `ojs_define` when the
+  computation is heavy, `mlalgbook.py` (or an analogous helper importing
+  `ml/mlbook.py`) for style.
+- Before writing numbers in the prose, run the chapter alone
+  (`quarto render <file>`), read the outputs from
+  `_freeze/<part>/<chapter>/execute-results/html.json`, then write; the
+  simulations of Part IV contradicted several "expected" claims (e.g. complement
+  naive Bayes on data generated by the multinomial model, early stopping with a
+  tiny validation set), and the text was rewritten to follow the outputs.
+
 ## Pending work on earlier parts
 
 - Add the graded **Practice** blocks (Easy / Medium / Hard with Hint and
