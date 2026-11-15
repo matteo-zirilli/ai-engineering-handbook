@@ -54,6 +54,42 @@ for style, depth and structure**: read one chapter (e.g.
   Intuition · Theory · Worked examples · Practice · "In the project" box
   (`::: {.project-link}`) · Common pitfalls · Summary · Exercises with
   collapsed solutions · Further reading (annotated, with section numbers).
+- **Graded practice per section** (from Part IV on; author's request): at the
+  end of every main section (`##`) where it makes sense — not for purely
+  historical or introductory sections — a `### Practice {.unnumbered}` block
+  with **three exercises: Easy, Medium, Hard**. Easy = apply the idea just
+  seen, often by hand; Medium = implement or vary it in code; Hard = a small
+  open problem combining several ideas, in the direction of the part's final
+  project (without giving away the project's solution). Each exercise is
+  followed by **two separate collapsed callouts**: first a **Hint** (guidance,
+  never the answer), then the **Solution** — complete, with code commented
+  where it helps, **executed** like all code, plus a short explanation of why
+  it works and of the typical mistakes. The end-of-chapter "Exercises" remain,
+  as synthesis problems spanning several sections. Markup (blank lines
+  between blocks are required, otherwise `:::` is not parsed):
+
+  ```markdown
+  ### Practice {.unnumbered}
+
+  ::: {#exr-<chapter>-<topic>-easy}
+  ## Easy — <short title>
+  <statement>
+  :::
+
+  ::: {.callout-note collapse="true"}
+  ## Hint
+  <a nudge, not the answer>
+  :::
+
+  ::: {.callout-tip collapse="true"}
+  ## Solution
+  <explanation + executed, commented code>
+  :::
+  ```
+
+  (then the same for `-medium` and `-hard`). This makes chapters longer and
+  renders slower: for a large part, split the work over two sessions (theory
+  chapters first, then the project chapter).
 - **Bibliography** (`references.bib`): key `firstauthorYEAR`; DOI / arXiv /
   ISBN / URL whenever they exist; a `note` saying how to obtain the source and
   which parts are used (no final period: the CSL adds it). Group entries by
@@ -160,3 +196,13 @@ for style, depth and structure**: read one chapter (e.g.
 - Keep every numeric claim in the text consistent with the executed output:
   after the last render, re-read the outputs (e.g. from
   `_freeze/<part>/<chapter>/execute-results/html.json`) and fix the prose.
+
+## Pending work on earlier parts
+
+- Add the graded **Practice** blocks (Easy / Medium / Hard with Hint and
+  Solution, see the chapter-template rules) to Parts I–III, section by
+  section. It does not change chapter numbering; re-render the affected
+  chapters and re-check every numeric claim afterwards. Agreed with the
+  author, to be done later (not before Part IV).
+- Part order stays as in the master (I, II, III, IV, …); chapters keep the
+  current global numbering. Do not introduce per-part numbering.
