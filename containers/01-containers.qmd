@@ -1,0 +1,2657 @@
+# Containers and orchestration {#sec-ch-ctr-containers}
+
+> *"A virtual machine is taken to be an efficient, isolated duplicate of the
+> real machine."* — Gerald Popek and Robert Goldberg, 1974 [@popek1974]
+
+```{python}
+#| echo: false
+import ctrbook as cb
+cb.setup()
+import numpy as np
+import matplotlib.pyplot as plt
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what a **container** is — a process with a restricted view of the
+  machine, started from an **image** — and how it differs from a virtual
+  machine and from a Python virtual environment;
+- build "a container by hand" from the **kernel building blocks** —
+  namespaces, a root filesystem, control groups, a union filesystem — and
+  **prove** how the CPU is shared among containers by weights and quotas;
+- read an **OCI image**: index, manifest, configuration, layers, digests;
+  **prove** why content addressing with SHA-256 is safe in practice and why
+  deleting a file in a later layer never shrinks an image (nor removes a
+  secret);
+- write **Dockerfiles** that build fast and small: **prove** the prefix
+  property of the layer cache, compute the expected cost of a rebuild and the
+  optimal order of the instructions, and use multi-stage builds;
+- **run** containers correctly: ports, volumes, environment, users, limits,
+  signals and exit codes (why `docker stop` sometimes takes ten seconds, what
+  137 means);
+- **orchestrate** containers with Kubernetes: deployments, services, probes,
+  self-healing, scaling and rolling updates, with the bounds that govern them.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What containers are and what orchestration adds; the foundations of
+containers; in practice, running a container with Docker and orchestrating a
+container with Kubernetes.
+:::
+
+## What a container is, and what orchestration adds {#sec-ctr-what}
+
+### The problem: "it works on my machine"
+
+A program never runs alone. The phone book of Part I needs a Python
+interpreter of the right version and nothing else; the house-price model of
+Part III needs Python, NumPy, pandas and scikit-learn at versions that agree
+with each other; the CRM of Part II needs a C++ standard library compatible
+with the one it was compiled against. @sec-ch-venv solved part of the problem
+for Python: a virtual environment isolates the **Python packages** of a
+project, and pinning them in `requirements.txt` (@sec-requirements) makes
+them reproducible. But a virtual environment does not contain the interpreter
+itself, nor the system libraries the packages load (the C and Fortran
+runtimes behind NumPy and SciPy, OpenSSL behind `https`), nor the operating
+system's configuration. Move the project to another machine and any of these
+can differ.
+
+A **container image** packages *all* of it: a complete root filesystem — the
+interpreter, the libraries, the code, the trained model — plus a little
+metadata (which program to start, which port it listens on). A **container**
+is a running instance of an image: an ordinary process of the host's kernel,
+started with a restricted view of the machine — its own filesystem tree, its
+own process numbers, its own network interfaces — and with limits on the
+resources it can use. The image is to the container what a program file is to
+a process (@sec-processes): a frozen description versus a running thing.
+
+The name comes from shipping containers. Before them every cargo was loaded
+differently; after them, cranes, ships and trucks handle one standard box and
+do not care what is inside. A container image is the standard box of
+software: the same image runs on a laptop, on a build server and on a cluster
+of hundreds of machines, and the tools that move and run it do not care
+whether it holds a web server or a neural network.
+
+::: {#def-ctr-container}
+## Image, container, runtime, engine, registry
+- An **image** is an immutable, content-addressed bundle: an ordered list of
+  filesystem **layers** plus a **configuration** (command, environment,
+  user, exposed ports) (@sec-ctr-images).
+- A **container** is a process tree started from an image, isolated by
+  kernel **namespaces** and limited by **control groups** (@sec-ctr-kernel).
+- A **runtime** creates containers from an unpacked image and a
+  configuration (`runc`, implementing the OCI Runtime Specification
+  [@oci2025runtime]).
+- An **engine** (Docker Engine, containerd) builds, stores, moves and starts
+  images and containers on one machine, calling the runtime.
+- A **registry** stores images and serves them by name and digest (Docker
+  Hub, GitHub Container Registry, a company's private registry).
+:::
+
+### Containers versus virtual machines
+
+A **virtual machine** (VM) emulates a whole computer: a hypervisor gives each
+VM virtual CPUs, memory and devices, and each VM boots its **own kernel**.
+Popek and Goldberg stated in 1974 when an instruction set can be virtualised
+efficiently — every instruction that could reveal or change the machine's
+privileged state must trap to the hypervisor [@popek1974] — and modern CPUs
+add hardware support to meet that condition. A container virtualises at a
+higher level: **all containers share the host's kernel**, which merely shows
+each of them a different view of its objects (files, processes, network).
+Soltesz and colleagues called this *operating-system-based virtualisation*
+and measured its advantage in density and speed [@soltesz2007]; Felter and
+colleagues at IBM found containers within a few percent of native performance
+on CPU, memory, storage and network benchmarks, while VMs paid noticeably on
+I/O-heavy workloads [@felter2015].
+
+| | Virtual machine | Container | Virtual environment (Part I) |
+|---|---|---|---|
+| What is isolated | a whole computer | a process tree's view of one kernel | the Python packages |
+| Kernel | its own | the host's | the host's |
+| Contains | OS, libraries, application | libraries, application (user space only) | Python packages only |
+| Start-up | seconds (boot) | milliseconds to a second (start a process) | instant |
+| Size | gigabytes | megabytes to a gigabyte | megabytes |
+| Isolation strength | strong (hardware boundary) | weaker (shared kernel: a kernel bug affects all) | none |
+| Runs another OS? | yes | only one with the same kernel (Linux images need a Linux kernel) | no |
+
+The last row explains why Docker Desktop on macOS or Windows runs a small
+Linux VM: Linux containers need a Linux kernel. The start-up time is easy to
+measure: starting a container from an image that is already on disk means
+creating the namespaces and cgroups and starting one process.
+
+```{python}
+#| echo: false
+#| output: asis
+import statistics, time
+cb.run(f"docker run --rm {cb.LOCAL['ubuntu']} true")          # warm-up
+_t = []
+for _ in range(15):
+    _s = time.perf_counter(); cb.run(f"docker run --rm {cb.LOCAL['ubuntu']} true"); _t.append(time.perf_counter() - _s)
+startup_ms = 1000 * statistics.median(_t)
+print(cb._fence("$ time docker run --rm ubuntu:24.04 true      # median of 15 runs", ".bash"))
+print(cb._output_block(f"{startup_ms:.0f} ms"))
+```
+
+On the machine that built this book (`{python} cb.machine()`) a container that
+runs `true` and exits takes about `{python} f"{startup_ms:.0f}"` ms from
+command to exit, including the round trips between the `docker` client, the
+engine and the runtime. A VM boot takes seconds.
+
+::: {.deep}
+## History: from `chroot` to the OCI
+Every piece of a container is older than Docker. **1979**: Version 7 Unix
+adds `chroot`, which changes the root directory of a process — the first
+"filesystem jail". **2000**: FreeBSD **jails** extend the idea to processes,
+users and network addresses [@kamp2000]. **2004**: Solaris **Zones**.
+**2002–2013**: Linux gains **namespaces** one at a time — mount (2002), UTS
+and IPC (2006), PID (2008), network (2009), user (completed in 2013) — and
+**control groups** (2007, first proposed as "process containers" by Paul
+Menage and Rohit Seth at Google). **2008**: LXC combines them into a usable
+tool. **2013**: Docker adds what was missing for developers — a simple image
+format built from layers, a build file, and a registry to share images
+[@merkel2014]. **2015**: Docker, CoreOS, Google and others found the **Open
+Container Initiative**, which standardises the image format, the runtime and
+the distribution protocol [@oci2025image; @oci2025runtime]; Kubernetes 1.0 is
+released the same year, distilling a decade of Google's experience with its
+internal cluster managers Borg and Omega [@verma2015; @burns2016].
+:::
+
+### What orchestration adds
+
+One container on one machine is the beginning. A service in production runs
+**many** copies of several containers on **many** machines, and something must
+decide on which machine each copy runs, restart copies that crash, replace
+machines that fail, route requests to healthy copies, add copies when the
+load grows and replace old versions with new ones without interrupting the
+service. **Orchestration** is the automation of these tasks; **Kubernetes** is
+its dominant implementation. Its central idea, studied in @sec-ctr-k8s, is
+**declarative**: you describe the desired state ("three copies of image X,
+reachable under the name `scoring`") and control loops continuously compare it
+with the observed state and act to close the gap.
+
+```{mermaid}
+%%| echo: false
+%%| label: fig-ctr-stack
+%%| fig-cap: "The layers involved in running a container with Docker on one machine (left) and with Kubernetes on a cluster (right). Both end in the same place: a runtime asking the kernel for namespaces and cgroups."
+flowchart TB
+  subgraph one["One machine"]
+    A["docker CLI"] -->|REST API| B["Docker Engine (dockerd)"]
+    B --> C["containerd"]
+    C --> D["runc (OCI runtime)"]
+  end
+  subgraph many["A cluster"]
+    K["kubectl"] -->|REST API| S["API server + etcd"]
+    S --> SC["scheduler, controllers"]
+    S --> KL["kubelet (on each node)"]
+    KL --> C2["containerd"]
+    C2 --> D2["runc"]
+  end
+  D --> L["Linux kernel: namespaces, cgroups, overlayfs"]
+  D2 --> L
+```
+
+::: {.callout-note}
+## How the examples of this chapter run
+Every command, build and manifest in this chapter was **executed** when the
+book was built, by a small helper,
+[`containers/ctrbook.py`](https://github.com/matteo-zirilli/ai-engineering-handbook/blob/main/containers/ctrbook.py),
+which writes the files to a temporary directory, runs them, and replaces
+container IDs, changing digests, temporary paths and durations with
+placeholders such as `<id-1>` (equal values get equal placeholders). The build
+machine could not reach public image registries, so every Dockerfile takes
+its base image as a build argument — `ARG BASE=python:3.12-slim` followed by
+`FROM ${BASE}` — and the book builds with `--build-arg BASE=<a local image>`
+built from the Ubuntu 24.04 archive (with Python 3.12, as in the official
+image); on your machine the default, official image is used and the commands
+are exactly those shown. Measured times depend on the machine: the text uses
+ratios and comparisons, which travel better than absolute numbers.
+:::
+
+## Kernel building blocks {#sec-ctr-kernel}
+
+A container is not a kernel object: Linux has no "container" system call.
+It is a **combination** of four independent mechanisms, each useful on its
+own. This section takes them one at a time and then puts them together by
+hand.
+
+### Namespaces: a private view
+
+A **namespace** wraps a global resource of the kernel so that the processes
+inside it see their own isolated instance of the resource
+[@linuxmanpages2025, namespaces(7)]. Each process belongs to exactly one
+namespace of each type, inherited from its parent unless it asks for new ones
+(the `clone` and `unshare` system calls).
+
+| Namespace | Isolates | Effect inside a container |
+|---|---|---|
+| `mnt` | the list of mount points | its own filesystem tree |
+| `uts` | host name and domain name | its own `hostname` |
+| `ipc` | System V IPC, POSIX message queues | no shared memory with the host |
+| `pid` | process IDs | its first process is PID 1; it cannot see the host's processes |
+| `net` | network interfaces, routes, ports, firewall | its own `eth0`, its own port 8000 |
+| `user` | user and group IDs, capabilities | root inside can be an unprivileged user outside |
+| `cgroup` | the view of the cgroup hierarchy | sees its own cgroup as the root |
+| `time` | the boot and monotonic clocks | rarely used by container engines |
+
+The namespaces of a process are visible as links in `/proc/<pid>/ns`, whose
+targets name the namespace by an inode number: two processes are in the same
+namespace exactly when the numbers agree. Inside a container started by
+Docker the effect is plain:
+
+```{python}
+#| echo: false
+#| output: asis
+cb.sh(f"docker run --rm --hostname box {cb.LOCAL['ubuntu']} sh -c "
+      "'echo \"my PID: $$, hostname: $(hostname)\"; echo \"processes I can see: $(ls /proc | grep -c \"^[0-9]\")\"'",
+      shown="docker run --rm --hostname box ubuntu:24.04 sh -c 'echo \"my PID: $$, hostname: $(hostname)\"; "
+            "echo \"processes I can see: $(ls /proc | grep -c \"^[0-9]\")\"'")
+cb.sh("echo \"host: PID of this shell $$, hostname $(hostname), processes $(ls /proc | grep -c '^[0-9]')\"",
+      shown="echo \"host: PID of this shell $$, hostname $(hostname), processes $(ls /proc | grep -c '^[0-9]')\"")
+```
+
+The shell inside is PID 1 and sees only itself and the few short-lived
+processes of its own command line, while the host sees about a hundred
+processes — among them, under an ordinary PID, the container's shell.
+
+### A root filesystem: `chroot` and `pivot_root`
+
+An image's filesystem is just a directory tree. `docker export` writes the
+filesystem of a container as a tar archive, which we unpack into a directory
+`rootfs/`; `chroot rootfs` then runs a program with `rootfs` as its `/`.
+(Engines use the stronger `pivot_root` in a new mount namespace, which also
+detaches the old root, but the effect on the program is the same.)
+
+### A container by hand
+
+With `unshare` — the command-line face of the system call — we can create new
+namespaces and run a program in them. The flags below ask for new user, PID,
+UTS and mount namespaces, map the current user to root inside, fork so that
+the program becomes PID 1 of the new PID namespace, and mount a fresh `/proc`
+inside the root filesystem:
+
+```{python}
+#| echo: false
+#| output: asis
+d = cb.project("handmade")
+cb.sh(f"mkdir rootfs && docker export $(docker create {cb.LOCAL['ubuntu']} true) | tar -C rootfs -x && ls rootfs",
+      cwd=d, shown="mkdir rootfs && docker export $(docker create ubuntu:24.04 true) | tar -C rootfs -x && ls rootfs")
+cb.quiet("docker container prune -f")
+cb.sh("unshare --user --map-root-user --pid --fork --uts --mount --mount-proc=rootfs/proc \\\n"
+      "    chroot rootfs /bin/sh -c 'hostname box; echo \"PID $$, hostname $(hostname), user $(id -u)\"; "
+      "ls /proc | grep -c \"^[0-9]\"; grep PRETTY /etc/os-release'", cwd=d)
+cb.sh("hostname", cwd=d)
+```
+
+Inside: PID 1, host name `box`, user 0, the Ubuntu 24.04 userland of the
+image and a `/proc` that lists only the container's processes. Outside, the
+host name is unchanged. No daemon, no image format, no Docker: a container is
+these kernel features applied to an ordinary process. What is still missing
+is a limit on resources.
+
+### Control groups: limits and accounting
+
+A **control group** (cgroup) is a set of processes to which the kernel
+applies resource **controllers**: `cpu` (how much CPU time), `memory` (how
+much RAM; beyond the limit the kernel reclaims memory and, failing that, kills
+a process of the group), `pids` (how many processes), `io` (disk bandwidth),
+`cpuset` (which CPUs and memory nodes) [@linuxmanpages2025, cgroups(7)].
+Cgroups form a hierarchy exposed as a filesystem under `/sys/fs/cgroup`;
+moving a process into a group is writing its PID into the group's
+`cgroup.procs` file.
+
+There are two versions. **Version 1** (2007) has one hierarchy per controller
+(`/sys/fs/cgroup/cpu/…`, `/sys/fs/cgroup/memory/…`); **version 2** (2016)
+has a single unified hierarchy with consistent semantics [@heo2015] and is the
+default on current distributions (Ubuntu since 21.10, Fedora since 31, Debian
+since 11) and the one Kubernetes requires for new clusters (its support for
+v1 is in maintenance mode and scheduled for removal). The
+controls that matter for containers:
+
+| Purpose | cgroup v2 file | cgroup v1 file | Docker flag |
+|---|---|---|---|
+| relative CPU weight | `cpu.weight` (1–10 000, default 100) | `cpu.shares` (2–262 144, default 1024) | `--cpu-shares` |
+| CPU cap | `cpu.max` = `"quota period"` (default `max 100000`) | `cpu.cfs_quota_us`, `cpu.cfs_period_us` | `--cpus` |
+| memory cap | `memory.max` | `memory.limit_in_bytes` | `--memory` |
+| CPU set | `cpuset.cpus` | `cpuset.cpus` | `--cpuset-cpus` |
+
+::: {.callout-important}
+## This book was built on cgroup v1
+The build machine uses cgroup **v1**, while almost every current host uses
+v2. The text explains v2; the commands below print whichever files exist, and
+the **numbers measured in this chapter come from v1** — the CPU scheduler
+(CFS, and EEVDF in recent kernels) that enforces weights and quotas is the
+same in both versions, so the ratios carry over.
+:::
+
+The flags of `docker run` translate directly into these files, which the
+container can read from inside:
+
+```{python}
+#| echo: false
+#| output: asis
+_probe = ("for f in cpu.weight cpu.max memory.max cpu/cpu.shares cpu/cpu.cfs_quota_us cpu/cpu.cfs_period_us "
+          "memory/memory.limit_in_bytes; do [ -f /sys/fs/cgroup/$f ] && echo \"$f = $(cat /sys/fs/cgroup/$f)\"; done")
+cb.sh(f"docker run --rm --cpus=0.5 --cpu-shares=512 --memory=64m {cb.LOCAL['ubuntu']} sh -c '{_probe}'",
+      shown=f"docker run --rm --cpus=0.5 --cpu-shares=512 --memory=64m ubuntu:24.04 sh -c '{_probe}'")
+```
+
+`--cpus=0.5` became a quota of 50 000 µs of CPU time per period of
+100 000 µs; `--memory=64m` became a limit of $64 \times 2^{20}$ bytes;
+`--cpu-shares=512` a relative weight. What do weights and quotas guarantee?
+
+::: {#thm-ctr-cpu-share}
+## CPU sharing by weights and quotas
+Consider $m$ groups competing for a CPU capacity of $C$ (in CPUs) during an
+interval of length $t$, and let $A$ be the set of groups that are
+**backlogged** — always have runnable work — during the interval.
+
+(i) If the scheduler is **weighted fair** (for any two groups $i, j$
+backlogged on an interval, the CPU time they receive satisfies $S_i/S_j \ge
+w_i/w_j$) and **work-conserving** (the CPU is never idle while some group has
+work), then each backlogged group receives
+$$
+S_i = \frac{w_i}{\sum_{j \in A} w_j}\, C\, t .
+$$ {#eq-ctr-share}
+(ii) A group with quota $q$ per period $P$ receives at most
+$q\lceil t/P\rceil$ CPU time in any interval of length $t$; in the long run
+its rate is at most $q/P$ CPUs.
+:::
+
+*In one line:* weights matter only under contention and only among the
+groups that want the CPU — idle groups' shares are redistributed to the busy
+ones; quotas are hard caps that apply even on an idle machine.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ctr-cpu-share
+(i) This is the guarantee of **generalised processor sharing** (GPS), the
+idealised fluid model of fair scheduling introduced by Parekh and Gallager for
+network links [@parekh1993]; Linux's CFS and EEVDF schedulers approximate it
+with a bounded lag. For $i, j \in A$, applying the fairness condition in both
+directions gives $S_i/S_j \ge w_i/w_j$ and $S_j/S_i \ge w_j/w_i$, hence $S_i/S_j
+= w_i/w_j$, i.e. $S_i = w_i\,\lambda$ for a common $\lambda$. Groups outside $A$
+have no work at some moments; in the fully idle case they receive nothing,
+and work conservation says the CPU is busy all the time, so $\sum_{i \in A}S_i
+= Ct$. Then $\lambda\sum_{j \in A}w_j = Ct$, which gives @eq-ctr-share.
+(If a non-backlogged group uses some CPU, the same argument applies to the
+remaining capacity: the backlogged groups split it in proportion to their
+weights.)
+
+(ii) The bandwidth controller refills a budget of $q$ every period $P$ and
+throttles the group when the budget is exhausted [@heo2015, "CPU"]; an
+interval of length $t$ intersects at most $\lceil t/P\rceil$ periods, so the
+group runs at most $q\lceil t/P\rceil$. Dividing by $t$ and letting $t \to
+\infty$, $q\lceil t/P\rceil/t \to q/P$. $\blacksquare$
+:::
+
+When both mechanisms apply, the result is **water-filling**: capped groups
+receive their cap, and the capacity they leave is shared by the others in
+proportion to their weights. The widget computes the shares for three
+containers on one CPU.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof cpuW = Inputs.form({
+  a: Inputs.range([1, 10], {value: 2, step: 1, label: "weight of A"}),
+  b: Inputs.range([1, 10], {value: 1, step: 1, label: "weight of B"}),
+  c: Inputs.range([1, 10], {value: 1, step: 1, label: "weight of C"})
+})
+```
+
+```{ojs}
+//| echo: false
+viewof cpuOn = Inputs.checkbox(["A", "B", "C"], {value: ["A", "B"], label: "busy containers"})
+```
+
+```{ojs}
+//| echo: false
+viewof cpuCapA = Inputs.range([0.05, 1], {value: 1, step: 0.05, label: "cap of A (--cpus)"})
+```
+
+```{ojs}
+//| echo: false
+cpuShares = {
+  const w = {A: cpuW.a, B: cpuW.b, C: cpuW.c}, cap = {A: cpuCapA, B: 1, C: 1};
+  let active = cpuOn.slice(), left = 1, out = {A: 0, B: 0, C: 0};
+  // water-filling: give each active group its weighted share; fix those above their cap
+  while (active.length) {
+    const W = active.reduce((s, k) => s + w[k], 0);
+    const over = active.filter(k => left * w[k] / W > cap[k] - out[k] + 1e-12);
+    if (!over.length) { active.forEach(k => out[k] += left * w[k] / W); break; }
+    over.forEach(k => { left -= cap[k] - out[k]; out[k] = cap[k]; });
+    active = active.filter(k => !over.includes(k));
+  }
+  return ["A", "B", "C"].map(k => ({container: k, share: out[k]}));
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-ctr-cpu-widget
+//| fig-cap: "Share of one CPU received by each busy container under weighted fair, work-conserving scheduling (@thm-ctr-cpu-share). Idle containers get nothing and their share is redistributed; a cap on A (a quota) limits it even when the CPU would otherwise be free, and the rest goes to the others in proportion to their weights."
+Plot.plot({
+  height: 200, width: 460, marginLeft: 70, x: {domain: [0, 1], label: "share of the CPU", grid: true},
+  y: {label: null},
+  marks: [
+    Plot.barX(cpuShares, {y: "container", x: "share", fill: "container"}),
+    Plot.text(cpuShares, {y: "container", x: "share", text: d => d.share.toFixed(3), dx: 22})
+  ],
+  color: {domain: ["A", "B", "C"], range: ["#2a78d6", "#eb6834", "#1baf7a"]}
+})
+```
+:::
+
+On cgroup v2, Docker's `--cpu-shares` (a v1 notion) must be converted into a
+`cpu.weight`. Runtimes long used a linear map of the v1 range onto the v2
+range, which turns the v1 default 1024 into a weight of 39 instead of 100;
+since runc 1.3.2 and crun 1.23 they use a map that is quadratic in
+$\log_2(\text{shares})$ and fixes the three points (2, 1), (1024, 100)
+and (262 144, 10 000) [@holder2026]. Neither map preserves ratios
+exactly, as a quick computation shows:
+
+```{python}
+import math
+
+def weight_linear(shares):                     # runtimes before runc 1.3.2
+    return 1 + ((shares - 2) * 9999) // 262142
+
+def weight_quadratic(shares):                  # runc >= 1.3.2, crun >= 1.23
+    L = math.log2(shares)
+    return math.ceil(10 ** (L * L / 612 + 125 * L / 612 - 7 / 34))
+
+for s in (512, 1024, 2048, 4096):
+    print(f"cpu-shares {s:5d} -> weight {weight_linear(s):4d} (linear), {weight_quadratic(s):4d} (quadratic)")
+r = weight_quadratic(2048) / weight_quadratic(1024)
+print(f"2048:1024 becomes {r:.2f}:1 with the quadratic map")
+```
+
+So on a cgroup-v2 host with a current runtime, `--cpu-shares 2048` against
+`1024` yields a ratio of about `{python} f"{weight_quadratic(2048) / weight_quadratic(1024):.2f}"`, not 2. If the exact
+ratio matters, set the weights through the orchestrator's own resource model
+(@sec-ctr-k8s) or read back the `cpu.weight` files.
+
+### Union filesystems: layers without copies
+
+Images are built in **layers** (@sec-ctr-images), and a container must see
+them as one filesystem without copying them. A **union filesystem** — on
+Linux, **overlayfs** — merges a stack of read-only *lower* directories with
+one writable *upper* directory into a single view [@brown2014overlay]. Three
+rules define it:
+
+1. **Lookup**: a name resolves to the entry in the topmost layer that
+   contains it.
+2. **Copy-up**: modifying a file of a lower layer first copies it into the
+   upper layer; the lower layer is never changed.
+3. **Whiteout**: deleting a file that exists in a lower layer creates in the
+   upper layer a **whiteout** — a character device with number 0/0 — that
+   hides the name; the lower file is still there.
+
+```{python}
+#| echo: false
+#| output: asis
+d = cb.project("overlay")
+cb.sh("mkdir lower upper work merged\n"
+      "echo base > lower/a.txt && echo secret > lower/b.txt\n"
+      "mount -t overlay overlay -o lowerdir=lower,upperdir=upper,workdir=work merged\n"
+      "rm merged/b.txt && echo new > merged/c.txt\n"
+      "echo '--- merged:' && ls merged && echo '--- upper:' && ls upper "
+      "&& stat -c '%n is a %F, device number %t/%T' upper/b.txt && echo '--- lower:' && ls lower\n"
+      "umount merged", cwd=d)
+```
+
+The merged view no longer shows `b.txt`, but the lower layer still holds it,
+and the upper layer records its removal as a 0/0 device. Every running
+container has its own upper directory on top of the image's layers: the
+image is shared by all containers started from it, and what a container
+writes disappears with it unless written to a volume (@sec-ctr-run).
+
+### Practice {.unnumbered}
+
+::: {#exr-ctr1-kernel-easy}
+## Easy — which namespaces change?
+Print the targets of `/proc/self/ns/{user,pid,uts,mnt,net,ipc,cgroup}` on
+the host and inside `unshare --user --map-root-user --pid --fork --uts
+--mount-proc`. Predict first which ones will differ, then check.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`unshare` creates exactly the namespaces it is asked for; `--mount-proc`
+needs a new mount namespace and asks for one implicitly. With `--fork`, the
+child is the first process of the new PID namespace.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+_ns = "for n in user pid uts mnt net ipc cgroup; do echo \"$n $(readlink /proc/self/ns/$n)\"; done"
+cb.sh(_ns, shown="for n in user pid uts mnt net ipc cgroup; do echo \"$n $(readlink /proc/self/ns/$n)\"; done   # host")
+cb.sh(f"unshare --user --map-root-user --pid --fork --uts --mount-proc sh -c '{_ns}'")
+```
+`user`, `pid`, `uts` and `mnt` change; `net`, `ipc` and `cgroup` keep the
+host's inode numbers because nobody asked for new ones — this "container"
+shares the host's network, so a server it started would be reachable on the
+host's ports. Docker asks for all of them (and, by default, not for a user
+namespace — see @sec-ctr-run). The usual slip is to compare the *names* of
+the links (`pid:`) rather than the numbers in brackets.
+:::
+
+::: {#exr-ctr1-kernel-medium}
+## Medium — a container by hand, in Python
+Write a Python function `container(rootfs, command, hostname, memory)` that
+runs `command` in new user, PID, UTS and mount namespaces, chrooted into
+`rootfs`, inside a fresh memory cgroup limited to `memory` bytes (support both
+cgroup v1 and v2). Show that the command runs as PID 1 with the given host
+name, and that a program allocating more than the limit is killed.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Create the cgroup directory, write the limit (`memory.max` on v2,
+`memory/…/memory.limit_in_bytes` on v1), then start `unshare … chroot …` with
+`subprocess.run(..., preexec_fn=...)` where the function writes
+`os.getpid()` into the group's `cgroup.procs`: children inherit the cgroup.
+A process killed by `SIGKILL` has `returncode == -9` in Python.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import os, subprocess, uuid
+from pathlib import Path
+
+def container(rootfs, command, hostname="box", memory=None):
+    """Run `command` (a shell string) in a hand-made container; return (returncode, output)."""
+    cg = None
+    if memory is not None:
+        v2 = Path("/sys/fs/cgroup/cgroup.controllers").exists()
+        cg = Path("/sys/fs/cgroup" if v2 else "/sys/fs/cgroup/memory") / f"handmade-{uuid.uuid4().hex[:8]}"
+        cg.mkdir()
+        (cg / ("memory.max" if v2 else "memory.limit_in_bytes")).write_text(str(memory))
+        if v2:
+            (cg / "memory.swap.max").write_text("0")              # no escape into swap
+    def enter_cgroup():                                           # runs in the child, before exec
+        if cg is not None:
+            (cg / "cgroup.procs").write_text(str(os.getpid()))
+    script = f"hostname {hostname}; {command}"
+    proc = subprocess.run(["unshare", "--user", "--map-root-user", "--pid", "--fork", "--uts", "--mount",
+                           f"--mount-proc={rootfs}/proc", "chroot", str(rootfs), "/bin/sh", "-c", script],
+                          capture_output=True, text=True, preexec_fn=enter_cgroup)
+    if cg is not None:
+        cg.rmdir()                                                # empty again: the processes have exited
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+rootfs = cb.WORK / "handmade" / "rootfs"                          # unpacked from the image above
+print(container(rootfs, 'echo "PID $$ on $(hostname)"', hostname="lab"))
+fill = ("(s=$(head -c {n} /dev/zero | tr '\\0' x); echo held ${{#s}} bytes in a shell variable); "
+        "echo exit status of the allocating subshell: $?")
+print(container(rootfs, fill.format(n=10_000_000), memory=64 * 2**20))       # 10 MB: fits
+print(container(rootfs, fill.format(n=150_000_000), memory=64 * 2**20))      # 150 MB: does not
+```
+The first call prints PID 1 and the chosen host name. A shell variable of
+10 MB fits in the 64 MiB limit; one of 150 MB does not, and the kernel's OOM
+killer terminates the subshell that holds it with `SIGKILL` — signal 9, which
+the parent shell reports as $128 + 9 = 137$ (@sec-ctr-run). (Without the
+subshell the victim would be a process that `unshare` waits for, and the
+error would surface in a less readable way.) The function is, in miniature, what a
+container runtime does — runc additionally uses `pivot_root`, drops
+capabilities, applies seccomp filters and sets up the network. Typical
+mistakes: writing the PID of the *parent* into `cgroup.procs` (then the
+Jupyter kernel itself gets the limit), and forgetting that `rmdir` of a
+cgroup fails while processes are still in it.
+:::
+
+::: {#exr-ctr1-kernel-hard}
+## Hard — measure the CPU shares
+Pin two CPU-bound containers to the same CPU (`--cpuset-cpus=0`), give them
+`--cpu-shares` in ratio 2:1, and measure the work each does in the same time
+window; compare with @eq-ctr-share. Then cap the heavier one with `--cpus=0.25`
+and measure again; compare with water-filling. Finally, run one container
+alone with `--cpus=0.5`: what fraction of the uncapped work does it do?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+"Work" can be the number of iterations of a busy loop. Start both
+containers with `-d`, give them a common start time in the future (so that
+the container start-up does not bias the window), and read the counts with
+`docker logs`. Work done is proportional to CPU time received.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import time
+
+d = cb.project("cpushare")
+cb.write(d, "burn.py", '''
+    import sys, time
+    start, T = float(sys.argv[1]), float(sys.argv[2])
+    while time.time() < start:            # wait for the common start
+        time.sleep(0.001)
+    n, end = 0, start + T
+    while time.time() < end:              # busy loop: count iterations
+        for _ in range(1000):
+            n += 1
+    print(n)
+''')
+
+def burn(specs, T=5.0, cpuset="0"):
+    """Run one container per spec (extra docker flags) on the same CPU; return the work counts."""
+    start = time.time() + 3
+    names = []
+    for k, flags in enumerate(specs):
+        name = f"burn{k}"
+        cb.run(f"docker rm -f {name} >/dev/null 2>&1; docker run -d --name {name} --cpuset-cpus={cpuset} {flags} "
+               f"-v {d}/burn.py:/burn.py:ro {cb.LOCAL['python']} python /burn.py {start} {T}")
+        names.append(name)
+    cb.run("docker wait " + " ".join(names))
+    out = [int(cb.run(f"docker logs {n}").stdout) for n in names]
+    cb.run("docker rm " + " ".join(names))
+    return out
+
+alone = burn([""])[0]
+a, b = burn(["--cpu-shares=2048", "--cpu-shares=1024"])
+print(f"weights 2:1   -> shares {a / (a + b):.3f} and {b / (a + b):.3f} (formula 0.667, 0.333); "
+      f"total {(a + b) / alone:.3f} of one CPU")
+a, b = burn(["--cpu-shares=2048 --cpus=0.25", "--cpu-shares=1024"])
+print(f"A capped 0.25 -> shares {a / alone:.3f} and {b / alone:.3f} of one CPU (water-filling: 0.25, 0.75)")
+half = burn(["--cpus=0.5"], cpuset="1")[0]
+alone1 = burn([""], cpuset="1")[0]
+print(f"alone, --cpus=0.5 -> {half / alone1:.3f} of the uncapped work")
+capped_a, capped_b, half_ratio = a / alone, b / alone, half / alone1
+```
+The shares follow the weights closely and the total is about one CPU: the
+scheduler is work-conserving. With the cap, the heavier container drops to
+about a quarter of the CPU (`{python} f"{capped_a:.2f}"`) even though its
+weight is larger, and the lighter one receives most of the rest
+(`{python} f"{capped_b:.2f}"` against the 0.75 of water-filling). Alone, the
+capped container does about half the work of an uncapped one
+(`{python} f"{half_ratio:.2f}"` here) although the CPU is otherwise idle:
+quotas are not work-conserving. Deviations of several percent, which change
+from run to run, come from the scheduler's granularity, from the bandwidth
+controller's accounting periods (a throttled container can overrun a period
+slightly and then wait longer), and from the baseline and the capped runs not
+seeing exactly the same machine — on a virtual machine the physical CPU is
+shared with other tenants. These numbers are from cgroup v1 on a virtual machine; on a v2 host
+with a current runtime, remember that `--cpu-shares 2048:1024` becomes a
+weight ratio of about 1.74. Mistakes to avoid: measuring from container start
+(start-up takes a sizeable fraction of a second and differs between the two),
+and running on different CPUs, where there is no contention at all.
+:::
+
+## Images, layers and digests {#sec-ctr-images}
+
+### The OCI image format
+
+An image is not a disk image: it is a small set of JSON documents and tar
+archives, all stored as **blobs** named by the SHA-256 hash of their content.
+The **OCI Image Format Specification** [@oci2025image] defines four kinds of
+document:
+
+- a **layer** is a tar archive (usually gzip-compressed) of the files that a
+  build step added, changed or deleted (deletions as whiteouts,
+  @sec-ctr-kernel);
+- the **configuration** is a JSON object with the command to run, the
+  environment, the user, the working directory, the history of the build
+  and the list `rootfs.diff_ids` — the digests of the *uncompressed* layers;
+- the **manifest** lists the configuration and the layers by digest, size and
+  media type;
+- the **index** lists manifests, for instance one per CPU architecture
+  (`linux/amd64`, `linux/arm64`) of the same image.
+
+A **digest** is the string `sha256:` followed by the 64 hexadecimal digits of
+the SHA-256 hash of the blob's bytes [@nist2015]. Documents refer to each
+other only by digest, so the structure is a directed acyclic graph of hashes
+— a **Merkle DAG**, after Ralph Merkle's hash trees [@merkle1987]. To see it,
+we build a tiny image — three lines, each explained in @sec-ctr-build; here
+it is enough that each line that changes files adds a layer — and save it in
+the OCI layout with `docker save`:
+
+```{python}
+#| echo: false
+#| output: asis
+cb.reset_ids()
+d = cb.project("tiny")
+cb.show(d, "Dockerfile", """
+    ARG BASE=ubuntu:24.04
+    FROM ${BASE}
+    COPY greeting.txt /greeting.txt
+    RUN echo "built in a container" > /built.txt
+    CMD ["cat", "/greeting.txt", "/built.txt"]
+""")
+cb.write(d, "greeting.txt", "hello from a layer\n")
+cb.build(d, "local/tiny:1", args={"BASE": cb.LOCAL["ubuntu"]}, table=False, extra="--provenance=false")
+cb.sh("docker run --rm local/tiny:1", shown="docker run --rm local/tiny:1")
+cb.sh("mkdir oci && docker save local/tiny:1 | tar -C oci -x && ls oci && ls oci/blobs/sha256 | wc -l", cwd=d)
+```
+
+The layout has an `index.json`, an `oci-layout` marker and a directory of
+blobs. A few lines of Python follow the graph from the index to the layers:
+
+```{python}
+import gzip, hashlib, json
+from pathlib import Path
+
+oci = cb.WORK / "tiny" / "oci"
+
+def blob(digest):                              # "sha256:abc..." -> oci/blobs/sha256/abc...
+    return oci / "blobs" / digest.replace(":", "/")
+
+doc = json.loads((oci / "index.json").read_text())
+while "manifests" in doc:                      # an index may point to another index
+    print(doc["mediaType"].rsplit(".", 2)[-2], "->", len(doc["manifests"]), "entry")
+    doc = json.loads(blob(doc["manifests"][0]["digest"]).read_text())
+manifest = doc
+config = json.loads(blob(manifest["config"]["digest"]).read_text())
+print("manifest -> config of", manifest["config"]["size"], "bytes and", len(manifest["layers"]), "layers")
+print("config: Cmd =", config["config"]["Cmd"], "| architecture =", config["architecture"])
+for layer, diff_id in zip(manifest["layers"], config["rootfs"]["diff_ids"]):
+    raw = blob(layer["digest"]).read_bytes()
+    print(f"  layer: {len(raw):>10,} bytes compressed, {len(gzip.decompress(raw)):>11,} bytes as tar")
+
+ok = all(hashlib.sha256(p.read_bytes()).hexdigest() == p.name for p in (oci / "blobs" / "sha256").iterdir())
+print("every blob is named by the SHA-256 of its content:", ok)
+```
+
+The last line is the essence of **content addressing**: a name is not chosen,
+it is computed from the bytes. Two consequences follow, and both rest on one
+property of SHA-256.
+
+::: {#thm-ctr-collision}
+## Collision bound for content addressing
+Model a hash with $b$-bit outputs as a function whose values on distinct
+inputs are independent and uniform on $\{0, 1\}^b$. Among $n$ distinct
+blobs, the probability that two of them get the same digest is at most
+$$
+\binom n2 2^{-b} = \frac{n(n-1)}{2^{b+1}} .
+$$ {#eq-ctr-birthday}
+For $b = 256$ and even $n = 2^{64} \approx 1.8 \times 10^{19}$ blobs it is
+below $2^{-129} \approx 1.5 \times 10^{-39}$.
+:::
+
+*In one line:* with 256-bit digests, an accidental collision is so unlikely
+that "same digest" can be treated as "same bytes" — the bound grows only
+with the *square* of the number of objects, the birthday effect, and $2^{256}$
+absorbs any conceivable square.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ctr-collision
+For a pair $\{i, j\}$ of distinct blobs, $P(h_i = h_j) = \sum_v P(h_i =
+v)P(h_j = v) = 2^b \cdot 2^{-2b} = 2^{-b}$. A collision is the union of the
+$\binom n2$ events "$h_i = h_j$", so by the union bound (Boole's inequality)
+its probability is at most $\binom n2 2^{-b}$. For $n = 2^{64}$:
+$\binom n2 2^{-256} < 2^{128}\cdot 2^{-1}\cdot 2^{-256} = 2^{-129}$.
+The bound is nearly tight while it is small: the classical birthday
+computation gives $1 - \prod_{k<n}(1 - k2^{-b}) \approx 1 - e^{-n^2/2^{b+1}}$,
+so collisions become likely only around $n \approx 2^{b/2} = 2^{128}$.
+$\blacksquare$
+:::
+
+The model of the theorem is an idealisation: SHA-256 is a deterministic
+function, specified in FIPS 180-4 [@nist2015], and what makes it safe is that
+no one knows how to find two inputs with the same output faster than the
+generic $\approx 2^{128}$ attempts of the birthday attack — the property
+called **collision resistance**. The older SHA-1 lost it in practice in 2017
+(the first public collision), which is why the OCI specification requires
+SHA-256 or SHA-512 [@oci2025image, "Descriptors"].
+
+::: {#prp-ctr-merkle}
+## The top digest commits to everything
+If no two distinct blobs reachable from an image share a digest, then two
+images with the same manifest digest have the same configuration and the same
+layers, byte for byte.
+:::
+
+*In one line:* checking one 64-digit digest checks the whole image, because a
+change in any byte of any layer changes the layer's digest, hence the bytes
+of the manifest that lists it, hence the manifest's digest.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ctr-merkle
+By induction on the depth of the DAG. A blob with no children (a layer, a
+configuration) is determined by its digest because distinct blobs have
+distinct digests. A manifest is a blob, so equal digests mean equal manifest
+bytes, hence equal lists of child digests, and by the induction hypothesis
+equal children. The same argument applies to an index. $\blacksquare$
+:::
+
+This is what makes **pulling by digest** safe: `docker pull
+python:3.12-slim@sha256:…` either receives exactly the image whose digest was
+written down, or fails. Tags behave differently.
+
+### Tags are mutable, digests are not
+
+A **tag** (`local/app:v1`, `python:3.12-slim`) is a *name* that points to a
+digest, and a name can be moved. Rebuilding with a change and reusing the tag
+moves it silently:
+
+```{python}
+#| echo: false
+#| output: asis
+cb.reset_ids()
+id_before = cb.image_id("local/tiny:1")
+cb.write(d, "greeting.txt", "hello again, from a new layer\n")
+cb.build(d, "local/tiny:1", args={"BASE": cb.LOCAL["ubuntu"]}, table=False, extra="--provenance=false")
+id_after = cb.image_id("local/tiny:1")
+print(cb._output_block(cb.mask(f"before the rebuild local/tiny:1 -> {id_before}\nafter  the rebuild local/tiny:1 -> {id_after}")))
+```
+
+Anyone who deployed "`local/tiny:1`" yesterday and deploys it again today gets
+a different image, with no error and no warning. Tags are for people;
+**deployments should refer to digests** (or to tags that a process guarantees
+never to move, such as a version that is published once).
+
+### Layers add up
+
+The union-filesystem rules of @sec-ctr-kernel have a direct consequence for
+the size of an image.
+
+::: {#prp-ctr-size}
+## An image's size is the sum of its layers; deleting never shrinks it
+The content of an image is the ordered list of its layers, and its size is the
+sum of the layers' sizes. A step that deletes a file present in an earlier
+layer adds a layer containing a whiteout; the earlier layer, and every byte of
+the deleted file, remain part of the image and are downloaded by everyone who
+pulls it.
+:::
+
+*In one line:* layers are append-only — a later step can hide a file, never
+remove it.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ctr-size
+By the OCI specification an image is its manifest, which lists *all* its
+layers; layers are immutable blobs identified by their digests
+(@prp-ctr-merkle), so no later step can change the bytes of an earlier one. A
+deletion in step $k$ is recorded in layer $k$ as a whiteout entry
+[@oci2025image, "Image Layer Filesystem Changeset"], which only changes how
+the merged view resolves the name. Hence the set of stored bytes after step
+$k$ contains those after step $k - 1$, and the size, the sum over the listed
+layers, cannot decrease. $\blacksquare$
+:::
+
+```{python}
+#| echo: false
+#| output: asis
+d = cb.project("bigfile")
+cb.show(d, "Dockerfile", """
+    ARG BASE=ubuntu:24.04
+    FROM ${BASE}
+    RUN head -c 50000000 /dev/urandom > /big.bin
+    RUN rm /big.bin
+""")
+cb.build(d, "local/bigfile:1", args={"BASE": cb.LOCAL["ubuntu"]}, table=False)
+_L = cb.layers("local/bigfile:1")
+print("\n| Layer created by | Uncompressed size |\n|---|---:|")
+for _l in _L:
+    print(f"| `{cb._short(_l['created_by'], 55)}` | {_l['size'] / 1e6:,.1f} MB |")
+print(f"| **total** | **{sum(_l['size'] for _l in _L) / 1e6:,.1f} MB** |\n")
+```
+
+The 50 MB of random bytes (incompressible, so they cost 50 MB of download too)
+are in the image for ever, although no container will ever see them. The
+remedy is to create and delete temporary files **in the same step** (`RUN
+download && use && rm`), or to build in one stage and copy only the result
+into another (@sec-ctr-build). The same mechanism makes **secrets** copied into
+an image and deleted later recoverable by anyone who can pull it
+(@exr-ctr1-images-hard).
+
+### Reproducible images
+
+An image is **reproducible** if building the same sources twice gives the same
+digest. It is the strongest form of "pinning": a third party can rebuild the
+image and check, by comparing one digest, that it was built from the claimed
+sources. By default two builds of the same Dockerfile differ:
+
+```{python}
+#| echo: false
+#| output: asis
+cb.reset_ids()
+d = cb.project("repro")
+cb.show(d, "Dockerfile", """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    COPY app.py /app/app.py
+    CMD ["python", "/app/app.py"]
+""")
+cb.write(d, "app.py", 'print("same sources, same image?")\n')
+for _k in (1, 2):
+    cb.build(d, f"local/repro:{_k}", extra="--no-cache", table=False, show_cmd=False)
+print(cb._fence("$ docker build --no-cache -t local/repro:1 .   # and again, -t local/repro:2", ".bash"))
+print(cb._output_block(cb.mask(f"local/repro:1 {cb.image_id('local/repro:1')}\nlocal/repro:2 {cb.image_id('local/repro:2')}")))
+```
+
+The file contents are identical; what differs is **time**: the files' modification
+times inside the layer, the `created` dates in the configuration and its
+history, and the provenance attestation that BuildKit attaches by default. The
+reproducible-builds project standardised a remedy, the environment variable
+`SOURCE_DATE_EPOCH`, a fixed timestamp that tools use instead of the clock
+[@reproduciblebuilds2017]; BuildKit honours it for the image metadata and can
+rewrite the timestamps of the files in the layers:
+
+```{python}
+#| echo: false
+#| output: asis
+for _k in (3, 4):
+    cb.build(d, f"local/repro:{_k}", table=False, show_cmd=False,
+             extra=f"--no-cache --provenance=false --build-arg SOURCE_DATE_EPOCH=0 "
+                   f"--output type=image,name=local/repro:{_k},rewrite-timestamp=true")
+print(cb._fence("$ docker build --no-cache --provenance=false --build-arg SOURCE_DATE_EPOCH=0 \\\n"
+                "    --output type=image,name=local/repro:3,rewrite-timestamp=true .      # and again, :4", ".bash"))
+print(cb._output_block(cb.mask(f"local/repro:3 {cb.image_id('local/repro:3')}\nlocal/repro:4 {cb.image_id('local/repro:4')}")))
+```
+
+Same placeholder, same digest. Real images need more care, because every
+input must be pinned: the **base image by digest** (`FROM
+python:3.12-slim@sha256:…`), the **packages by version and hash** (`pip
+install --require-hashes -r requirements.txt`, @sec-requirements), and every
+step must be deterministic — no unpinned `apt-get install`, no downloads of
+"latest", no random seeds left free, no compilation of `.pyc` files that embed
+timestamps (`pip install --no-compile`, or `PYTHONDONTWRITEBYTECODE`).
+@exr-ctr1-reproducible applies this to the model image.
+
+### Practice {.unnumbered}
+
+::: {#exr-ctr1-images-easy}
+## Easy — find a layer by its hash
+Take the layer of `local/tiny:1` that contains `greeting.txt`. Compute by hand
+(with `sha256sum` or `hashlib`) the digest of the compressed blob and of the
+uncompressed tar, and find each in the image: the first among the blobs and
+the manifest, the second in the configuration's `diff_ids`. Then use
+@eq-ctr-birthday to bound the probability of a collision among $10^{12}$
+blobs — more than all the images ever pushed to public registries.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The layers are listed in the manifest in build order; the configuration's
+`history` says which step produced each (entries with `empty_layer` produce
+none). `gzip.decompress` gives the tar bytes.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+oci = cb.WORK / "tiny" / "oci"
+cb.run("rm -rf oci && mkdir oci && docker save local/tiny:1 | tar -C oci -x", cwd="tiny")   # the rebuilt image
+doc = json.loads((oci / "index.json").read_text())
+while "manifests" in doc:
+    doc = json.loads(blob(doc["manifests"][0]["digest"]).read_text())
+config = json.loads(blob(doc["config"]["digest"]).read_text())
+steps = [h.get("created_by", "(base image)") for h in config["history"] if not h.get("empty_layer")]
+k = next(i for i, s in enumerate(steps) if "greeting" in s)        # the COPY step
+raw = blob(doc["layers"][k]["digest"]).read_bytes()
+compressed = "sha256:" + hashlib.sha256(raw).hexdigest()
+uncompressed = "sha256:" + hashlib.sha256(gzip.decompress(raw)).hexdigest()
+print("step:", steps[k])
+print("compressed digest listed in the manifest:   ", compressed == doc["layers"][k]["digest"])
+print("uncompressed digest listed in the diff_ids: ", uncompressed == config["rootfs"]["diff_ids"][k])
+n = 10 ** 12
+print(f"collision bound for 1e12 blobs: {n * (n - 1) / 2 ** 257:.1e}")
+```
+The two digests differ because they hash different bytes: the manifest refers
+to what travels and is stored (compressed), the configuration to what is
+unpacked (so that recompressing a layer with another tool does not change the
+image's identity as seen by the runtime). The bound is about $4 \times
+10^{-54}$: the probability of an accidental collision is not a practical
+concern; a deliberate one would require breaking SHA-256. A frequent mistake
+is to hash the file *inside* the layer instead of the layer's tar.
+:::
+
+::: {#exr-ctr1-images-medium}
+## Medium — an inspector for the OCI layout
+Write `inspect_oci(path)` that walks an OCI layout (the output of `docker
+save`, unpacked) from `index.json` to the layers and prints, for each layer,
+the step that created it, its compressed and uncompressed sizes, the number
+of files it adds and the whiteouts it contains (as the paths they delete).
+Run it on `local/bigfile:1`.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`tarfile.open(fileobj=io.BytesIO(data))` reads a tar from memory. In the OCI
+layer format a whiteout for `dir/name` is a file named `dir/.wh.name`;
+`.wh..wh..opq` marks an "opaque" directory whose lower contents are hidden.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import io, tarfile
+
+def inspect_oci(path):
+    path = Path(path)
+    def blob(dg):
+        return path / "blobs" / dg.replace(":", "/")
+    doc = json.loads((path / "index.json").read_text())
+    while "manifests" in doc:                                   # index -> (index ->) manifest
+        doc = json.loads(blob(doc["manifests"][0]["digest"]).read_text())
+    config = json.loads(blob(doc["config"]["digest"]).read_text())
+    steps = [h.get("created_by", "(base)") for h in config["history"] if not h.get("empty_layer")]
+    print(f"{'step':<42} {'compressed':>11} {'tar':>12} {'files':>7}  whiteouts")
+    for step, layer in zip(steps, doc["layers"]):
+        raw = blob(layer["digest"]).read_bytes()
+        data = gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            members = tar.getmembers()
+        wh = [m.name.replace(".wh.", "") for m in members if Path(m.name).name.startswith(".wh.")]
+        files = sum(m.isfile() for m in members) - len(wh)          # whiteouts are stored as empty files
+        label = step.replace("/bin/sh -c ", "")[:42]
+        print(f"{label:<42} {len(raw):>11,} {len(data):>12,} {files:>7}  {wh}")
+
+cb.run("rm -rf oci && mkdir oci && docker save local/bigfile:1 | tar -C oci -x", cwd="bigfile")
+inspect_oci(cb.WORK / "bigfile" / "oci")
+```
+The third layer adds one file of 50 MB; the fourth adds no file and one
+whiteout, `big.bin`. The compressed size of the random file is about its
+real size — random bytes do not compress — while the base layer shrinks by
+half. The inspector does in thirty lines what tools such as `dive` or `crane`
+do; the typical slip is to assume that every layer is gzip-compressed
+(uncompressed and zstd layers are allowed: check the media type or the magic
+bytes).
+:::
+
+::: {#exr-ctr1-images-hard}
+## Hard — a secret that will not go away
+A Dockerfile copies a file with an API token into the image, uses it in a
+`RUN` step and deletes it with `RUN rm`. Show that the token can be recovered
+from the image with nothing but `docker save` and Python. Then fix the
+Dockerfile twice — with a multi-stage build and with a BuildKit secret mount
+(`RUN --mount=type=secret,...`) — and verify, by scanning every layer, that
+the token has gone.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Scan the decompressed bytes of every layer for the token. With a secret mount
+the file is visible only during the `RUN` step, at `/run/secrets/<id>`, and
+is never written to a layer; build with `--secret id=token,src=token.env`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| output: asis
+TOKEN = "TOKEN=sk-demo-0123456789abcdef"
+
+def layers_containing(tag, needle):
+    """Indices of the layers of `tag` whose tar contains `needle`."""
+    out = cb.WORK / f"scan-{tag.replace('/', '_').replace(':', '_')}"
+    cb.run(f"rm -rf {out} && mkdir {out} && docker save {tag} | tar -C {out} -x")
+    def blob(dg):
+        return out / "blobs" / dg.replace(":", "/")
+    doc = json.loads((out / "index.json").read_text())
+    while "manifests" in doc:
+        doc = json.loads(blob(doc["manifests"][0]["digest"]).read_text())
+    hits = []
+    for i, layer in enumerate(doc["layers"]):
+        raw = blob(layer["digest"]).read_bytes()
+        if needle.encode() in (gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw):
+            hits.append(i)
+    return hits
+
+d = cb.project("secret")
+cb.write(d, "token.env", TOKEN + "\n")
+cb.files(d, {"Dockerfile.leaky": """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    COPY token.env /tmp/token.env
+    RUN . /tmp/token.env && echo "using a token of ${#TOKEN} characters" && rm /tmp/token.env
+""", "Dockerfile.multistage": """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE} AS fetch
+    COPY token.env /tmp/token.env
+    RUN . /tmp/token.env && echo "a result obtained with the token" > /result.txt
+    FROM ${BASE}
+    COPY --from=fetch /result.txt /result.txt
+""", "Dockerfile.secret": """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    RUN --mount=type=secret,id=token . /run/secrets/token && echo "a result obtained with the token" > /result.txt
+"""})
+cb.build(d, "local/secret:leaky", dockerfile="Dockerfile.leaky", table=False)
+cb.build(d, "local/secret:multistage", dockerfile="Dockerfile.multistage", table=False)
+cb.build(d, "local/secret:mount", dockerfile="Dockerfile.secret", table=False, extra="--secret id=token,src=token.env")
+print("\n| Image | Layers containing the token |\n|---|---|")
+for tag in ("local/secret:leaky", "local/secret:multistage", "local/secret:mount"):
+    print(f"| `{tag}` | {layers_containing(tag, TOKEN) or 'none'} |")
+```
+In the leaky image the `COPY` layer still holds the token in clear text,
+although the file is absent from every container (@prp-ctr-size): anyone who
+can pull the image can read it. In the multi-stage build the token exists only
+in the first stage, which is not part of the final image; with the secret
+mount it is never written to any layer. The scan is the verification that
+matters — "the file is not there when I run the container" proves nothing. In
+a real project add a check like `layers_containing` to the CI pipeline, keep
+secrets out of the build context with `.dockerignore`, and **rotate** any
+secret that was ever pushed in an image: deleting the tag does not delete
+copies already pulled. Note also that `ARG` and `ENV` values are stored in
+the image configuration — passing a secret as a build argument leaks it too.
+:::
+
+## Building images {#sec-ctr-build}
+
+### The running example: a model in a container
+
+From here on the examples serve a small **model in production**: a
+classifier of the three wine cultivars of the wine data
+[@aeberhard1992], a scikit-learn pipeline — standardisation and logistic
+regression, scaler inside the pipeline as @sec-leakage requires — trained
+when the image is built, saved with `joblib`, and served over HTTP. The
+server uses only the standard library; Part VI replaces it with a proper API
+framework. The pinned requirements and the two programs:
+
+```{python}
+#| echo: false
+#| output: asis
+d = cb.scoring("scoring", show_files=("requirements.txt", "train.py", "serve.py"))
+```
+
+`joblib.dump` writes the fitted pipeline to a file (a pickle, with efficient
+storage of NumPy arrays) and `joblib.load` reads it back: the model is trained
+once and loaded by every container that serves it. A pickle can execute code
+when loaded, so load only files you produced — here, files produced at build
+time inside the image.
+
+### Anatomy of a Dockerfile
+
+A **Dockerfile** is a list of instructions executed in order, each on top of
+the result of the previous one [@docker2026, "Dockerfile reference"]:
+
+```{python}
+#| echo: false
+#| output: asis
+cb.show(d, "Dockerfile")
+```
+
+| Instruction | Effect | Creates a layer? |
+|---|---|---|
+| `ARG BASE=…` | a build-time variable with a default; overridable with `--build-arg` | no |
+| `FROM image` | the base image: its layers become the first layers | (inherits) |
+| `WORKDIR /app` | the directory for the following instructions and for the container | yes (empty) |
+| `COPY src dst` | copies files from the **build context** into the image | yes |
+| `RUN command` | runs a command in a temporary container; the changes become a layer | yes |
+| `ENV`, `USER`, `EXPOSE`, `CMD`, `ENTRYPOINT` | set fields of the configuration | no |
+
+`CMD ["python", "serve.py"]` is the **exec form**, a JSON array run directly;
+`CMD python serve.py` is the **shell form**, run as `/bin/sh -c "python
+serve.py"` — a difference that matters for signals (@sec-ctr-run). `EXPOSE`
+only documents the port; publishing it is a decision taken at `docker run`.
+
+The **build context** is the directory given to `docker build` (here `.`):
+`COPY` can only read from it, and the builder receives from it the files the
+`COPY` instructions need. A `.dockerignore` file lists paths to leave out —
+data sets, virtual environments, `.git`, secrets — so that a `COPY . .` can
+never bring them into the image (@exr-ctr1-build-medium).
+
+```{python}
+#| echo: false
+#| output: asis
+secs_cold, _ = cb.build(d, "local/scoring:1", extra="--no-cache")
+```
+
+The first build, from scratch (`--no-cache`), ran every step
+(`{python} f"{secs_cold:.0f}"` s here, almost all of it installing the
+packages). Building again, without changes, takes a
+fraction of a second, because of the **layer cache**:
+
+```{python}
+#| echo: false
+#| output: asis
+secs_warm, _ = cb.build(d, "local/scoring:1")
+```
+
+### The layer cache
+
+Before executing an instruction, the builder computes a **cache key** from the
+key of the previous step, the instruction's text and, for `COPY`, a checksum
+of the copied files; if a layer with that key exists, it is reused
+[@docker2026, "Build cache"]. Formally, with $k_0$ the base image's digest and
+$H$ a hash function,
+$$
+k_i = H\big(k_{i-1},\ \text{instruction}_i,\ \text{inputs}_i\big),\qquad i = 1, \dots, m .
+$$ {#eq-ctr-cache-key}
+Change one character of `serve.py` and rebuild:
+
+```{python}
+#| echo: false
+#| output: asis
+(d / "serve.py").write_text((d / "serve.py").read_text().replace("keep the logs quiet", "silence the access log"))
+secs_code, _ = cb.build(d, "local/scoring:1")
+```
+
+Only the last `COPY` ran again (`{python} f"{secs_code:.1f}"` s). Change the
+requirements instead, and everything after them runs again — including the
+training, whose inputs did not change.
+
+::: {#thm-ctr-prefix}
+## Prefix property of the layer cache
+With cache keys defined by @eq-ctr-cache-key, step $i$ is taken from the cache
+only if none of the steps $1, \dots, i$ (nor the base image) has changed since
+a build that stored its key. Consequently, if the first changed step is $j$,
+then exactly the steps $j, j + 1, \dots, m$ are executed.
+:::
+
+*In one line:* the cache is a chain — break one link and every link after it
+must be rebuilt, however unchanged it is itself.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ctr-prefix
+By induction on $i$, $k_i$ is a function of $(k_0, \text{instruction}_1,
+\text{inputs}_1, \dots, \text{instruction}_i, \text{inputs}_i)$. If any of
+these changed, then — barring a collision of $H$, negligible by
+@thm-ctr-collision — $k_i$ is a value never stored before, and step $i$ must
+run. Conversely, if none changed, $k_i$ equals a stored key and the stored
+layer is reused. If $j$ is the first changed step, the inputs of steps $< j$
+are unchanged, so they are reused, and every $k_i$ with $i \ge j$ depends on
+the changed step, so they all run. $\blacksquare$
+:::
+
+The prefix property turns the order of the instructions into an
+optimisation problem. Suppose that between two builds step $i$ changes with
+probability $p_i$, independently of the others, and costs $c_i$ seconds to
+execute.
+
+::: {#thm-ctr-cost}
+## Expected cost of a rebuild, and the optimal order
+(i) The expected time of a rebuild is
+$$
+\mathbb E[C] = \sum_{i=1}^m c_i\Big[1 - \prod_{j \le i}(1 - p_j)\Big] .
+$$ {#eq-ctr-cost}
+(ii) If the steps can be put in any order (no step needs the result of
+another), the expected cost is minimised by sorting them by increasing
+$$
+r_i = \frac{p_i}{(1 - p_i)\,c_i} ,
+$$ {#eq-ctr-order}
+with steps that always change ($p_i = 1$) last: expensive, rarely changing
+steps first; cheap, often changing steps last.
+:::
+
+*In one line:* each step pays its cost with the probability that something
+up to it changed; and an exchange argument shows that the best order puts the
+"stable and expensive" steps early.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ctr-cost
+(i) By @thm-ctr-prefix, step $i$ runs if and only if at least one of the
+steps $1, \dots, i$ changed. By independence, the probability that none
+changed is $\prod_{j \le i}(1 - p_j)$. With $X_i$ the indicator that step $i$
+runs, $C = \sum_ic_iX_i$, and linearity of expectation gives @eq-ctr-cost.
+
+(ii) **Exchange argument.** Take an order and two adjacent steps $a, b$ at
+positions $i, i + 1$; let $Q = \prod_{j < i}(1 - p_j)$ and $q = 1 - p$.
+Swapping them changes only the terms of positions $i$ and $i + 1$:
+$$
+\underbrace{c_a(1 - Qq_a) + c_b(1 - Qq_aq_b)}_{a\text{ first}} -
+\underbrace{\big[c_b(1 - Qq_b) + c_a(1 - Qq_aq_b)\big]}_{b\text{ first}}
+= Q\,\big(c_bq_b\,p_a - c_aq_a\,p_b\big),
+$$
+so putting $a$ first is at least as good if and only if $c_bq_bp_a \le
+c_aq_ap_b$, that is $r_a \le r_b$ (when $q_a, q_b > 0$; a step with $q = 0$
+should come after any step with $q > 0$, since then the difference has the
+sign of $-c_aq_ap_b \le 0$ with $a$ the step with $q_a > 0$). Any order that is
+not sorted by $r$ has an adjacent pair out of order; swapping it does not
+increase the cost. Repeating the swap (bubble sort) reaches the sorted order
+in finitely many steps without ever increasing the cost, so the sorted order
+is optimal. $\blacksquare$
+:::
+
+The criterion is a ratio, and its consequences match the folklore of
+Dockerfiles: install dependencies (expensive, rarely changed) before copying
+the code (cheap, changed at every commit); copy `requirements.txt` alone
+before `pip install`, rather than the whole project. The widget compares two
+orders of the steps of the scoring image.
+
+```{python}
+#| echo: false
+_step_costs = {"install packages": max(secs_cold - 2, 1.0), "train the model": 1.5, "copy the code": 0.2}
+ojs_define(ctrCosts=_step_costs)
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof ctrP = Inputs.form({
+  deps: Inputs.range([0, 1], {value: 0.05, step: 0.01, label: "P(requirements change)"}),
+  train: Inputs.range([0, 1], {value: 0.10, step: 0.01, label: "P(training code changes)"}),
+  code: Inputs.range([0, 1], {value: 0.80, step: 0.01, label: "P(server code changes)"})
+})
+```
+
+```{ojs}
+//| echo: false
+ctrOrders = {
+  const steps = {deps: ["install packages", ctrCosts["install packages"], ctrP.deps],
+                 train: ["train the model", ctrCosts["train the model"], ctrP.train],
+                 code: ["copy the code", ctrCosts["copy the code"], ctrP.code]};
+  const cost = order => { let none = 1, total = 0, rows = [];
+    for (const k of order) { const [name, c, p] = steps[k]; none *= (1 - p);
+      rows.push({step: name, cost: c, prob: 1 - none}); total += c * (1 - none); }
+    return {rows, total}; };
+  const good = cost(["deps", "train", "code"]), bad = cost(["code", "train", "deps"]);
+  return [...good.rows.map(r => ({...r, order: `deps → train → code (E[C] = ${good.total.toFixed(1)} s)`})),
+          ...bad.rows.map(r => ({...r, order: `code → train → deps (E[C] = ${bad.total.toFixed(1)} s)`}))];
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-ctr-cache-widget
+//| fig-cap: "Probability that each step of the scoring image is rebuilt (@eq-ctr-cost), for the recommended order and the reverse one; the legend gives the expected rebuild time E[C]. Step costs were measured on the build machine; the change probabilities are yours to set."
+Plot.plot({
+  height: 240, width: 560, marginLeft: 120, x: {domain: [0, 1], label: "P(step is rebuilt)", grid: true},
+  fy: {label: null}, y: {label: null},
+  color: {legend: true},
+  marks: [Plot.barX(ctrOrders, {y: "step", x: "prob", fill: "order", fy: "order"})]
+})
+```
+:::
+
+### Multi-stage builds
+
+A **multi-stage** Dockerfile has several `FROM` instructions; each starts a
+stage, and `COPY --from=<stage>` copies files from an earlier stage. Only the
+last stage becomes the image. The classic use is to **compile in a full
+toolchain and ship only the result**. A C++ program linked statically
+(`-static` copies the C and C++ libraries into the executable, @sec-toolchain)
+needs nothing at all at run time, so its final stage can start `FROM
+scratch`, the empty image:
+
+```{python}
+#| echo: false
+#| output: asis
+d = cb.project("cpp-static")
+cb.files(d, {"hello.cpp": """
+    #include <iostream>
+    #include <string>
+
+    int main(int argc, char** argv) {
+        std::string who = argc > 1 ? argv[1] : "world";
+        std::cout << "hello, " << who << ", from a static binary\\n";
+    }
+""", "Dockerfile": """
+    ARG BUILDER=gcc:13
+    FROM ${BUILDER} AS build
+    WORKDIR /src
+    COPY hello.cpp .
+    RUN g++ -std=c++20 -O2 -static -o hello hello.cpp
+
+    FROM scratch
+    COPY --from=build /src/hello /hello
+    ENTRYPOINT ["/hello"]
+"""})
+cb.build(d, "local/hello-static:1", table=False)
+cb.sh("docker run --rm local/hello-static:1 container")
+_static = sum(l["size"] for l in cb.layers("local/hello-static:1"))
+_builder = sum(l["size"] for l in cb.layers(cb.LOCAL["gcc"]))
+print(cb._output_block(f"final image: {_static / 1e6:.1f} MB    build stage's base image: {_builder / 1e6:.0f} MB"))
+```
+
+The final image holds one file of about `{python} f"{_static / 1e6:.1f}"` MB; the
+compiler image it was built in is more than a hundred times larger and is
+not shipped. For Python the gain is smaller — the interpreter and the
+libraries are needed at run time — but a build stage still keeps compilers,
+test tools, caches and training data out of the final image
+(@exr-ctr1-build-hard). A second use, seen in @exr-ctr1-images-hard, is to
+keep **secrets** out of the final image; BuildKit's secret mounts
+(`RUN --mount=type=secret`) do it without a second stage.
+
+### Practice {.unnumbered}
+
+::: {#exr-ctr1-build-easy}
+## Easy — predict the rebuild
+Two orders of the scoring Dockerfile are proposed: (A) the one above —
+requirements, `pip install`, `train.py`, training, server code; (B) `COPY . .`
+first, then `pip install`, then training. For each order, which steps are
+rebuilt when (1) `serve.py` changes, (2) `requirements.txt` changes, (3)
+nothing changes but the build machine's cache was emptied? Answer by hand
+with @thm-ctr-prefix, then check (1) for order B by building it.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+In order B the `COPY . .` step's inputs include *every* file of the context,
+so any change to any file changes its key.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(1) A: only `COPY serve.py score.py`. B: everything after the base image —
+`COPY . .` changed, so the installation (about
+`{python} f"{secs_cold:.0f}"` s) and the training run again for a one-line change.
+(2) A and B: everything from the copy of the requirements on. (3) Both:
+everything; the cache helps only if it is there (CI machines often start
+empty — export and import the cache, e.g. `--cache-from`/`--cache-to`).
+```{python}
+#| output: asis
+d = cb.scoring("order-b", dockerfile="""
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    WORKDIR /app
+    COPY . .
+    RUN pip install --no-cache-dir -r requirements.txt
+    RUN python train.py
+    CMD ["python", "serve.py"]
+""", show_files=("Dockerfile",))
+cb.build(d, "local/scoring:b", show_cmd=False, table=False)                 # fill the cache
+(d / "serve.py").write_text((d / "serve.py").read_text() + "# a comment\n")
+cb.build(d, "local/scoring:b")
+```
+Order B re-installs scikit-learn because a comment changed in the server.
+The usual mistake is believing that Docker "knows" that `pip install` does not
+read `serve.py`: the cache key cannot know what a command reads, only what was
+copied before it.
+:::
+
+::: {#exr-ctr1-build-medium}
+## Medium — measure the order and the context
+Measure the rebuild time after a change of `serve.py` for orders A and B
+(three repetitions each). Then put a 200 MB file `data/raw.bin` in the build
+context and measure how the size of the context sent to the builder and the
+build time change with and without a `.dockerignore` that excludes `data/`.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`docker build --progress=plain` prints a line `transferring context: … MB`
+for the context. Use random bytes for the data file, so that compression in
+transit cannot hide its size.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import re, time, statistics
+
+def rebuild_after_edit(d, tag, n=3):
+    """Median time of n rebuilds, each after a one-line edit of serve.py."""
+    times = []
+    for k in range(n):
+        (d / "serve.py").write_text((d / "serve.py").read_text() + f"# edit {k} {time.time()}\n")
+        secs, _ = cb.build(d, tag, show_cmd=False, table=False)   # docker build with the local base image
+        times.append(secs)
+    return statistics.median(times)
+
+dA = cb.scoring("medium-a"); cb.build(dA, "local/scoring:ma", show_cmd=False, table=False)
+dB = cb.WORK / "order-b"
+print(f"rebuild after editing serve.py: order A {rebuild_after_edit(dA, 'local/scoring:ma'):.1f} s, "
+      f"order B {rebuild_after_edit(dB, 'local/scoring:b'):.1f} s (median of 3)")
+
+def context_size(d):
+    """Build once and read from BuildKit's log how many MB of context were transferred."""
+    secs, _ = cb.build(d, "local/scoring:ctx", show_cmd=False, table=False)
+    sizes = re.findall(r"load build context\n#\d+ transferring context: ([\d.]+)(kB|MB|GB|B)", cb.LAST_BUILD_LOG)
+    val, unit = sizes[-1]
+    return float(val) * {"B": 1e-6, "kB": 1e-3, "MB": 1, "GB": 1e3}[unit], secs
+
+for d_, label in ((dA, "order A (COPY of named files)"), (dB, "order B (COPY . .)")):
+    (d_ / "data").mkdir(exist_ok=True)
+    (d_ / "data" / "raw.bin").write_bytes(np.random.default_rng(0).bytes(200_000_000))
+    (d_ / ".dockerignore").unlink(missing_ok=True)
+    image_mb = lambda: sum(l["size"] for l in cb.layers("local/scoring:ctx")) / 1e6
+    big, t_big = context_size(d_); size_big = image_mb()
+    (d_ / ".dockerignore").write_text("data/\n.git/\n__pycache__/\n*.env\n")
+    small, t_small = context_size(d_); size_small = image_mb()
+    print(f"{label}: context {big:7.2f} MB without .dockerignore, {1000 * small:5.1f} kB with it; "
+          f"image {size_big:.0f} MB without it, {size_small:.0f} MB with it")
+```
+Order A rebuilds in well under a second, order B in the time of a full
+installation. The context measurement holds a surprise: with order A the
+200 MB file never travels, with or without `.dockerignore`, because BuildKit
+transfers only the paths that the `COPY` instructions name. With `COPY . .`
+everything travels **and ends up in the image** — 200 MB of data shipped to
+every server that pulls it — unless `.dockerignore` excludes it. So the
+ignore file matters exactly when the Dockerfile copies whole directories,
+which is also when it protects against copying secrets, `.git` and
+virtual environments into the image. Mistake to avoid: timing a single
+build — the first one after an edit may include unrelated work, such as
+garbage collection of the cache.
+:::
+
+::: {#exr-ctr1-build-hard}
+## Hard — the optimal order for the scoring image
+For the scoring image, take as steps (1) installing the packages, (2) copying
+and running the training, (3) copying the server code, with the costs measured
+above and change probabilities per commit $p = (0.05, 0.10, 0.80)$. (a) Compute
+@eq-ctr-cost for all six orders and check that @eq-ctr-order picks the best.
+(b) Verify the formula by simulating 10 000 commits. (c) Check one prediction
+with real builds. (d) Reduce the image's size with a multi-stage build that
+installs the packages into a virtual environment in a first stage, trains the
+model there, and copies only the environment, the model and the server into
+the final stage; measure the gain.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For (b), draw for each commit which steps changed, rebuild from the first
+changed step with the cost of every step from there on, and average. For
+(d), install the packages into a directory of their own in the build stage
+(`pip install --target=/deps`), delete what serving does not need — the test
+suites that NumPy, SciPy and scikit-learn ship, `__pycache__` directories —
+and copy only that directory into the final stage, with `ENV
+PYTHONPATH=/deps`. A virtual environment (@sec-venv-internals) would also
+work, but it carries its own copy of `pip`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from itertools import permutations
+
+names = ["install", "train", "code"]
+c = np.array([max(secs_cold - 2, 1.0), 1.5, 0.2])         # seconds; install measured above
+p = np.array([0.05, 0.10, 0.80])
+
+def expected_cost(order):
+    none = np.cumprod(1 - p[list(order)])
+    return float(np.sum(c[list(order)] * (1 - none)))
+
+costs = {o: expected_cost(o) for o in permutations(range(3))}
+for o, v in sorted(costs.items(), key=lambda kv: kv[1]):
+    print(" -> ".join(names[i] for i in o), f"E[C] = {v:5.2f} s")
+r = p / ((1 - p) * c)
+print("order by increasing r:", " -> ".join(names[i] for i in np.argsort(r)))
+
+rng = np.random.default_rng(0)
+changed = rng.random((10_000, 3)) < p                       # which steps change, per commit
+def simulate(order):
+    ch = changed[:, list(order)]
+    first = np.where(ch.any(1), ch.argmax(1), 3)              # first changed position (3 = none)
+    cc = c[list(order)]
+    return float(np.mean([cc[f:].sum() for f in first]))
+for o in [(0, 1, 2), (2, 1, 0)]:
+    print(" -> ".join(names[i] for i in o), f"formula {costs[o]:.2f} s, simulation {simulate(o):.2f} s")
+```
+The sorted order (install, train, code) is the best of the six, and the
+simulation agrees with the formula within sampling error. With these numbers
+the reverse order costs many times more per commit: over a day of commits the
+difference is minutes of waiting, multiplied by every developer and by CI.
+(c) was checked by @exr-ctr1-build-medium: a code change rebuilds almost
+nothing in order A and everything in order B. (d):
+```{python}
+#| output: asis
+d = cb.scoring("multistage", dockerfile="""
+    ARG BASE=python:3.12-slim
+    FROM ${BASE} AS build
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir --target=/deps -r requirements.txt \\
+     && find /deps \\( -name tests -o -name __pycache__ \\) -type d -prune -exec rm -rf {} +
+    ENV PYTHONPATH=/deps
+    COPY train.py .
+    RUN python train.py
+
+    FROM ${BASE}
+    COPY --from=build /deps /deps
+    ENV PYTHONPATH=/deps
+    WORKDIR /app
+    COPY --from=build /app/model.joblib /app/model.json ./
+    COPY serve.py score.py ./
+    EXPOSE 8000
+    CMD ["python", "serve.py"]
+""", show_files=("Dockerfile",))
+cb.build(d, "local/scoring:multi", table=False)
+single = sum(l["size"] for l in cb.layers("local/scoring:1"))
+multi = sum(l["size"] for l in cb.layers("local/scoring:multi"))
+base = sum(l["size"] for l in cb.layers(cb.LOCAL["python"]))
+print(cb._output_block(f"single stage: {single / 1e6:.0f} MB, multi-stage: {multi / 1e6:.0f} MB "
+                       f"(base image {base / 1e6:.0f} MB; added on top: {(single - base) / 1e6:.0f} MB vs {(multi - base) / 1e6:.0f} MB)"))
+cb.sh("docker run --rm local/scoring:multi python -c \"import sklearn, json; print(sklearn.__version__, json.load(open('model.json')))\"")
+```
+What the build adds on top of the base shrinks by about a quarter: the test
+suites of the numerical libraries and the bytecode caches stay in the build
+stage, and so do the training script and anything used to train. The image as
+a whole shrinks less, because the base and the compiled libraries dominate it;
+the larger wins come from slimmer bases (a `slim` or "distroless" base
+instead of a full distribution) and, for compiled programs, from `FROM
+scratch`. A first attempt that copied a virtual environment between the
+stages made the image *larger* on this machine — the environment brings its
+own `pip` — a reminder to measure rather than assume. Mistakes to avoid:
+copying packages between stages whose Python versions differ (compiled
+extensions are built for one version — both stages use the same `BASE`
+here), and forgetting that the model file is in the build stage's working
+directory.
+:::
+
+## Running containers {#sec-ctr-run}
+
+### Life cycle
+
+`docker run` is two operations: **create** (prepare the writable layer, the
+namespaces and the cgroup) and **start** (start the process). A container is
+then *running* until its main process exits, when it becomes *exited*; it
+keeps its writable layer and its logs until it is **removed** (`docker rm`,
+or automatically with `--rm`). `docker stop` asks the process to terminate,
+`docker kill` forces it, and a **restart policy** (`--restart
+on-failure`, `unless-stopped`) makes the engine start it again when it exits.
+
+```{mermaid}
+%%| echo: false
+%%| label: fig-ctr-lifecycle
+%%| fig-cap: "States of a container and the commands that move between them. The main process defines the container: when it exits, the container stops."
+stateDiagram-v2
+  [*] --> created: docker create
+  created --> running: docker start
+  running --> exited: main process ends / docker stop / docker kill
+  running --> paused: docker pause
+  paused --> running: docker unpause
+  exited --> running: docker start / restart policy
+  exited --> [*]: docker rm
+```
+
+### Ports, environment and volumes
+
+A container has its own network namespace, so a server listening on port 8000
+inside is unreachable from the host until the port is **published**: `-p
+8080:8000` asks the engine to forward the host's port 8080 to the container's
+8000. Configuration enters through **environment variables** (`-e
+PORT=9000`), which keeps one image valid for every environment — development,
+test, production — as the twelve-factor methodology recommends
+[@wiggins2011]. Here is the scoring service in action:
+
+```{python}
+#| echo: false
+#| output: asis
+cb.reset_ids()
+cb.run("docker rm -f scoring1 >/dev/null 2>&1")
+cb.sh("docker run -d --name scoring1 -p 8080:8000 local/scoring:1")
+time.sleep(3)
+cb.sh("curl -s localhost:8080/version")
+_wine = "[13.2, 1.78, 2.14, 11.2, 100, 2.65, 2.76, 0.26, 1.28, 4.38, 1.05, 3.4, 1050]"
+cb.sh(f"curl -s -X POST localhost:8080/predict -d '{{\"features\": [{_wine}]}}'")
+cb.sh("docker logs scoring1")
+```
+
+The files a container writes go to its writable layer and disappear with the
+container. Data that must outlive it go to a **volume**: a **named volume**
+(`-v models:/data`, a directory managed by the engine) or a **bind mount**
+(`-v /host/path:/data`, a directory of the host). Volumes bypass the union
+filesystem, so they are also faster for heavy I/O. Adding `:ro` makes a mount
+read-only.
+
+```{python}
+#| echo: false
+#| output: asis
+cb.run("docker volume rm -f notes >/dev/null 2>&1")
+_u = cb.LOCAL["ubuntu"]
+cb.sh(f"docker run --rm {_u} sh -c 'echo first > /note.txt' && docker run --rm {_u} cat /note.txt",
+      shown="docker run --rm ubuntu:24.04 sh -c 'echo first > /note.txt' && docker run --rm ubuntu:24.04 cat /note.txt")
+cb.sh(f"docker run --rm -v notes:/data {_u} sh -c 'echo kept > /data/note.txt' && docker run --rm -v notes:/data {_u} cat /data/note.txt",
+      shown="docker run --rm -v notes:/data ubuntu:24.04 sh -c 'echo kept > /data/note.txt' && "
+            "docker run --rm -v notes:/data ubuntu:24.04 cat /data/note.txt")
+```
+
+### Users and privileges
+
+Unless told otherwise, the process in a container runs as **root**, and
+without a user namespace (Docker does not create one by default) that is the
+host's root, restricted by the other namespaces, by a reduced set of
+**capabilities** and by a seccomp filter of forbidden system calls — strong
+restrictions, but a kernel vulnerability or a careless bind mount (`-v
+/:/host`) turns them into full control of the host. Defence in depth means
+removing what is not needed: a non-root user (`USER` in the Dockerfile or
+`--user`), a read-only root filesystem (`--read-only`, with a `--tmpfs /tmp`
+if the program needs scratch space), `--cap-drop ALL`,
+`--security-opt no-new-privileges`, and limits on memory, CPU and processes
+so that one container cannot starve the others (@thm-ctr-cpu-share). Rootless
+Docker and Podman go further and run the whole engine as an ordinary user,
+with root inside mapped to an unprivileged user outside.
+
+### Signals, PID 1 and stopping
+
+`docker stop` sends `SIGTERM` to the container's main process, waits (10
+seconds by default, `-t` to change it) and then sends `SIGKILL`. A
+well-behaved program catches `SIGTERM`, finishes the requests in progress,
+closes files and exits — the *graceful shutdown* that orchestrators rely on
+at every update. Part II showed how processes end and how signals work
+(@sec-terminating, @sec-exit-status); containers add one twist.
+
+::: {#prp-ctr-pid1}
+## PID 1 ignores signals it does not handle
+In a PID namespace, the kernel delivers to the namespace's first process
+(PID 1) only the signals for which it has installed a handler; signals whose
+action would be the default — such as termination by `SIGTERM` — are
+discarded. (`SIGKILL` and `SIGSTOP` sent from an ancestor namespace are the
+exception.) [@linuxmanpages2025, pid_namespaces(7)]
+:::
+
+*In one line:* a program that relies on the default action of `SIGTERM`
+dies when run normally but **ignores** `docker stop` when it is PID 1, and is
+killed only after the timeout.
+
+This is the kernel's protection of `init`: on a normal system, PID 1 must not
+be killed by accident. The consequences for containers:
+
+- **Shell form** (`CMD python serve.py`) runs `/bin/sh -c "python serve.py"`:
+  the shell is PID 1, has no handler, and does not forward the signal to
+  Python. Use the **exec form** (`CMD ["python", "serve.py"]`), so that the
+  program itself is PID 1, or `exec` in wrapper scripts.
+- A program that is PID 1 must **handle `SIGTERM`** explicitly (the scoring
+  server does, with `signal.signal`), or run under a tiny init process that
+  forwards signals and reaps zombie processes: `docker run --init` adds one
+  (`tini`).
+
+```{python}
+#| echo: false
+#| output: asis
+_s = time.perf_counter(); cb.run("docker stop scoring1"); stop_s = time.perf_counter() - _s
+cb.sh("docker inspect -f 'status {{.State.Status}}, exit code {{.State.ExitCode}}' scoring1",
+      shown="docker stop scoring1 && docker inspect -f 'status {{.State.Status}}, exit code {{.State.ExitCode}}' scoring1")
+print(f"\n`docker stop` returned after {stop_s:.2f} s.\n")
+cb.run("docker rm scoring1")
+```
+
+The scoring server handles `SIGTERM` and exits with status 0 well within the
+timeout; @exr-ctr1-run-medium measures what happens otherwise.
+
+### Exit codes
+
+When the main process ends, the container's **exit code** is its exit
+status, with the shell convention of Part II for deaths by signal: $128 + n$
+for signal $n$ (@sec-exit-status, [@posix2024]). The codes met most often:
+
+| Code | Meaning |
+|---|---|
+| 0 | normal termination |
+| 1, 2, … | errors reported by the program itself |
+| 125 | the `docker run` command itself failed (bad option) |
+| 126 | the command could not be executed (permissions) |
+| 127 | the command was not found |
+| 137 = 128 + 9 | killed by `SIGKILL`: `docker kill`, the end of a `docker stop` timeout, or the **OOM killer** (@sec-ctr-kernel) |
+| 143 = 128 + 15 | terminated by `SIGTERM` (the program did not catch it) |
+
+::: {#prp-ctr-137}
+## 137 does not prove a kill
+An exit code of $128 + n$ is compatible both with death by signal $n$ and with
+a normal exit with status $128 + n$.
+:::
+
+*In one line:* exit codes form one byte, and the convention shares it between
+two meanings — to know whether the kernel's OOM killer intervened, ask the
+engine, not the number.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ctr-137
+`exit(c)` delivers $c \bmod 256$ to the parent (@prp-exit-status), so any
+value in $0, \dots, 255$, including $128 + n$ for $n \le 127$, can be a
+normal exit status. A container whose command is `sh -c 'exit 137'` ends
+normally with 137:
+```{python}
+#| echo: false
+#| output: asis
+cb.reset_ids()
+cb.run("docker rm -f fake137 >/dev/null 2>&1")
+cb.sh(f"docker run --name fake137 {cb.LOCAL['ubuntu']} sh -c 'exit 137'; "
+      "docker inspect -f 'exit code {{.State.ExitCode}}, OOMKilled {{.State.OOMKilled}}' fake137",
+      shown="docker run --name fake137 ubuntu:24.04 sh -c 'exit 137'; "
+            "docker inspect -f 'exit code {{.State.ExitCode}}, OOMKilled {{.State.OOMKilled}}' fake137", status=False)
+cb.run("docker rm fake137")
+```
+The map from "how the process ended" to the code is therefore not injective,
+and the code alone cannot identify the cause. $\blacksquare$
+:::
+
+Docker records the cause separately: `State.OOMKilled` is true when the
+memory controller killed the process, and Kubernetes reports the reason
+`OOMKilled` in the pod's status. Read those, not the number.
+
+### Practice {.unnumbered}
+
+::: {#exr-ctr1-run-easy}
+## Easy — read the exit codes
+Classify the exit codes 0, 1, 2, 126, 127, 130, 137, 139 and 143 of a
+container: normal end, error reported by the program, failure to start, or
+death by a signal — and in that case which signal, and a plausible cause.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Subtract 128 from the codes above 128 and look up the signal number (`kill
+-l`, or Python's `signal.Signals`).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import signal
+for code in (0, 1, 2, 126, 127, 130, 137, 139, 143):
+    if code > 128:
+        sig = signal.Signals(code - 128)
+        print(f"{code}: signal {code - 128} ({sig.name})")
+    else:
+        print(f"{code}: " + {0: "normal end", 1: "error reported by the program", 2: "error (often: wrong usage)",
+                             126: "command found but not executable", 127: "command not found"}[code])
+```
+130 is `SIGINT` (Ctrl-C in an interactive container), 137 `SIGKILL`
+(`docker kill`, a stop timeout, or the OOM killer — check `OOMKilled`), 139
+`SIGSEGV` (a segmentation fault, as in Part II's out-of-bounds accesses), 143
+`SIGTERM` not caught. Two cautions: a program may exit with any of these
+numbers on purpose (@prp-ctr-137), and the 128 offset is a convention of
+shells and engines — Python's `subprocess` reports a death by signal as a
+negative `returncode` instead (@sec-exit-status).
+:::
+
+::: {#exr-ctr1-run-medium}
+## Medium — the ten-second stop
+Write a Python program that prints a line and then sleeps in a loop, without
+any signal handling. Measure how long `docker stop` takes and which exit code
+results when it runs (a) with the exec form, (b) with the shell form. Then fix
+it in two ways — (c) with `--init`, (d) with a `SIGTERM` handler — and measure
+again.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Run each variant with `docker run -d`, wait a second so that the program is
+running, then time `docker stop`. @prp-ctr-pid1 predicts (a) and (b).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+d = cb.project("pid1")
+cb.write(d, "sleeper.py", '''
+    import time
+    print("working", flush=True)
+    while True:
+        time.sleep(1)
+''')
+cb.write(d, "polite.py", '''
+    import signal, sys, time
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # finish cleanly on SIGTERM
+    print("working", flush=True)
+    while True:
+        time.sleep(1)
+''')
+variants = {
+    "(a) exec form, no handler":  "python /w/sleeper.py",
+    "(b) shell form, no handler": "sh -c 'python /w/sleeper.py'",
+    "(c) --init, no handler":     "--init python /w/sleeper.py",
+    "(d) exec form, handler":     "python /w/polite.py",
+}
+img = cb.LOCAL["python"]
+for label, cmd in variants.items():
+    flags, cmd = ("--init", cmd[7:]) if cmd.startswith("--init") else ("", cmd)
+    cb.run(f"docker rm -f stopme >/dev/null 2>&1; docker run -d --name stopme {flags} -v {d}:/w:ro {img} {cmd}")
+    time.sleep(1.5)
+    s = time.perf_counter(); cb.run("docker stop stopme"); t = time.perf_counter() - s
+    code = cb.run("docker inspect -f '{{.State.ExitCode}}' stopme").stdout.strip()
+    print(f"{label:28s} docker stop took {t:5.2f} s, exit code {code}")
+cb.quiet("docker rm -f stopme")
+```
+(a) and (b) ignore `SIGTERM` (Python, or the shell, is PID 1 without a
+handler for it), so `docker stop` waits the full timeout and then kills: 137.
+With `--init`, `tini` is PID 1, forwards `SIGTERM` to Python, which is not
+PID 1 and dies by the default action: fast, and 143. With the handler, Python
+exits normally: fast, and 0 — the best outcome, because the program decides
+what "cleanly" means. The ten seconds are not only a nuisance: during an
+update, an orchestrator waits for them for every replica, and a process
+killed by `SIGKILL` cannot flush buffers or finish requests. Mistake to
+avoid: testing the handler with `python app.py` in a terminal, where the
+program is not PID 1 and dies by default — the bug appears only in the
+container.
+:::
+
+::: {#exr-ctr1-run-hard}
+## Hard — a locked-down batch scorer
+Run the scoring image as a **batch job**: score a CSV of wine measurements
+mounted read-only from the host and write the predictions to a second mount,
+as a non-root user (UID 10001), with a read-only root filesystem and a memory
+limit of 128 MiB. Then feed it a file of one million rows: what happens, how
+do you know, and how would you fix the program rather than the limit?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use `--user 10001 --read-only --tmpfs /tmp --memory 128m --memory-swap 128m`
+and two `-v host:container[:ro]` mounts. The output directory on the host
+must be writable by UID 10001. `score.py` reads the whole file into Python
+lists: estimate their size (a Python float is 24 bytes, plus 8 bytes per list
+slot).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from sklearn.datasets import load_wine
+import csv, os
+
+d = cb.project("batch")
+(d / "in").mkdir(); (d / "out").mkdir()
+os.chown(d / "out", 10001, 10001)                     # the container's user must be able to write
+Xw = load_wine().data
+with open(d / "in" / "wines.csv", "w", newline="") as f:
+    csv.writer(f).writerows(Xw.round(4).tolist())
+
+def score(extra=""):
+    cmd = (f"docker run --rm --user 10001 --read-only --tmpfs /tmp --memory 128m --memory-swap 128m "
+           f"-v {d}/in:/data/in:ro -v {d}/out:/data/out --name batch {extra} local/scoring:1 python score.py")
+    p = cb.run(cmd)
+    return p.returncode, cb.mask(p.stdout + p.stderr).strip()[-300:]
+
+print(score())
+print("first predictions:", (d / "out" / "wines.csv").read_text().split()[:10])
+
+big = np.tile(Xw, (1_000_000 // len(Xw) + 1, 1))[:1_000_000]
+with open(d / "in" / "wines.csv", "w", newline="") as f:
+    csv.writer(f).writerows(big.round(4).tolist())
+print(f"input file: {(d / 'in' / 'wines.csv').stat().st_size / 1e6:.0f} MB")
+cb.run("docker rm -f batch-oom >/dev/null 2>&1")
+p = cb.run(f"docker run --user 10001 --read-only --tmpfs /tmp --memory 128m --memory-swap 128m "
+           f"-v {d}/in:/data/in:ro -v {d}/out:/data/out --name batch-oom local/scoring:1 python score.py")
+state = cb.run("docker inspect -f '{{.State.ExitCode}} {{.State.OOMKilled}}' batch-oom").stdout.split()
+print(f"one million rows: exit code {state[0]}, OOMKilled {state[1]}")
+cb.quiet("docker rm batch-oom")
+```
+The small file is scored without any write outside the output mount: the
+container cannot modify its own filesystem, cannot read anything of the host
+but its input, and its process is not root. The large file kills it: exit
+code 137 with `OOMKilled` true — the kernel's memory controller, not a bug
+in Python's error handling, ended it, which is why there is no traceback.
+The cause is the design of `score.py`: one million rows of 13 numbers as
+Python lists take about $10^6 \times 13 \times (24 + 8) \approx 420$ MB,
+far more than the limit, before scikit-learn even sees them. The fix is to
+**stream**: read and predict in chunks of, say, 10 000 rows, so that memory
+is bounded by the chunk size whatever the file size:
+```{python}
+cb.write(d, "score_stream.py", '''
+    import csv, itertools, os
+    from pathlib import Path
+    import joblib, numpy as np
+    model = joblib.load("/app/model.joblib")
+    src, dst = Path("/data/in"), Path("/data/out")
+    for path in sorted(src.glob("*.csv")):
+        n = 0
+        with path.open() as fin, (dst / path.name).open("w", newline="") as fout:
+            rows, out = csv.reader(fin), csv.writer(fout)
+            while chunk := list(itertools.islice(rows, 10_000)):       # at most 10 000 rows in memory
+                X = np.asarray(chunk, dtype=float)
+                out.writerows([[int(p)] for p in model.predict(X)])
+                n += len(chunk)
+        print(f"{path.name}: {n} rows scored")
+''')
+p = cb.run(f"docker run --rm --user 10001 --read-only --tmpfs /tmp --memory 128m --memory-swap 128m "
+           f"-v {d}/in:/data/in:ro -v {d}/out:/data/out -v {d}/score_stream.py:/app/score_stream.py:ro "
+           f"local/scoring:1 python score_stream.py")
+print(p.returncode, p.stdout.strip())
+```
+Same container, same limit, one million rows scored. Raising the limit would
+only move the failure to the next, larger file. Typical mistakes: a host
+output directory owned by root (the non-root user gets `PermissionError`),
+forgetting `--memory-swap` (with swap the process slows down instead of being
+killed, which hides the problem), and reading the 137 as "the program
+crashed".
+:::
+
+## Orchestrating with Kubernetes {#sec-ctr-k8s}
+
+### Desired state and control loops
+
+Kubernetes manages a **cluster**: a set of machines (*nodes*) and a
+**control plane** — an API server that stores every object in a key–value
+database (etcd), a **scheduler** that assigns new pods to nodes, and
+**controllers** that run control loops [@burns2016; @kubernetes2026]. On
+every node a **kubelet** asks the container runtime to run the containers
+assigned to it (@fig-ctr-stack). The user never says "start this container on
+that machine"; they submit **objects** that describe a desired state:
+
+| Object | Describes |
+|---|---|
+| **Pod** | one or more containers that run together on one node, share a network namespace (one IP address) and possibly volumes; the unit of scheduling |
+| **ReplicaSet** | "keep $R$ pods matching this label selector and this template running" |
+| **Deployment** | a ReplicaSet plus a **rollout** strategy for replacing it with a new one |
+| **Service** | a stable name and virtual IP that load-balances over the ready pods matching a selector |
+| **ConfigMap**, **Secret** | configuration and credentials injected as environment variables or files |
+
+Each controller is a **reconciliation loop**: observe the actual state, compare
+it with the desired one, act to reduce the difference, repeat. The loop does
+not remember *how* the gap appeared — a crash, a deleted pod, a lost node, a
+changed manifest are all the same to it — which is what makes the system
+robust: there is one mechanism for every failure.
+
+### A deployment of the scoring service
+
+```{python}
+#| echo: false
+cb.ensure_k3s()
+k8s_version = json.loads(cb.kube_run("version -o json").stdout)["serverVersion"]["gitVersion"].split("+")[0]
+```
+
+The cluster used here is a single-node **k3s** [@k3s2026], a compact
+Kubernetes distribution, running Kubernetes `{python} k8s_version` on the
+build machine. With no registry reachable, the image is copied
+directly into the node's container store; in a real cluster the image would be
+pushed to a registry and pulled by each node.
+
+```{python}
+#| echo: false
+#| output: asis
+cb.kube_run("delete deployment scoring --ignore-not-found --wait=true")
+cb.kube_run("delete service scoring --ignore-not-found")
+cb.load_image("local/scoring:1")
+d = cb.project("k8s")
+cb.show(d, "scoring.yaml", """
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: scoring
+    spec:
+      replicas: 3
+      selector:
+        matchLabels: {app: scoring}
+      strategy:
+        type: RollingUpdate
+        rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+      template:
+        metadata:
+          labels: {app: scoring}
+        spec:
+          containers:
+          - name: web
+            image: local/scoring:1
+            imagePullPolicy: Never          # loaded into the node: no registry in this book
+            ports: [{containerPort: 8000}]
+            env: [{name: STARTUP_DELAY, value: "3"}]
+            readinessProbe:                 # receive traffic only once /health answers
+              httpGet: {path: /health, port: 8000}
+              periodSeconds: 1
+            resources:
+              requests: {cpu: 250m, memory: 128Mi}
+              limits: {cpu: 500m, memory: 256Mi}
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: scoring
+    spec:
+      type: NodePort
+      selector: {app: scoring}
+      ports: [{port: 80, targetPort: 8000, nodePort: 30080}]
+""")
+cb.kube("apply -f scoring.yaml", cwd=d)
+cb.kube("rollout status deployment/scoring --timeout=120s")
+_cols = "-o custom-columns=POD:.metadata.name,READY:.status.containerStatuses[0].ready,PHASE:.status.phase"
+cb.kube(f"get pods -l app=scoring {_cols}")
+```
+
+The `STARTUP_DELAY` variable makes each server wait three seconds before
+loading the model — a stand-in for a large model that takes time to load —
+and the **readiness probe** keeps a pod out of the Service until its
+`/health` answers. Requests to the node's port 30080 are spread over the
+ready pods:
+
+```{python}
+#| echo: false
+#| output: asis
+time.sleep(2)
+cb.sh("for i in 1 2 3 4 5 6; do curl -s localhost:30080/health; echo; done | sort | uniq -c")
+```
+
+The `resources` of the manifest are cgroup settings in disguise
+(@sec-ctr-kernel): **requests** are what the scheduler reserves on a node and
+become the CPU weight; **limits** become the quota and the memory cap.
+
+```{python}
+#| echo: false
+#| output: asis
+cb.kube(f"exec deploy/scoring -- sh -c '{_probe}'")
+```
+
+A CPU limit of `500m` (half a CPU) is a quota of 50 000 µs per 100 000 µs;
+the memory limit is $256 \times 2^{20}$ bytes; the CPU request of `250m` became
+the v1 share $256 = 250 \times 1024/1000$ (on v2, a weight).
+
+**Self-healing.** Delete a pod, as a crash or the loss of a node would:
+
+```{python}
+#| echo: false
+#| output: asis
+_victim = cb.kube_run("get pods -l app=scoring -o jsonpath='{.items[0].metadata.name}'").stdout.strip()
+cb.kube(f"delete pod {_victim} --wait=false", shown="kubectl delete pod <one of the three> --wait=false")
+time.sleep(1)
+cb.kube(f"get pods -l app=scoring {_cols}")
+cb.kube_run("rollout status deployment/scoring --timeout=120s")
+time.sleep(2)
+cb.kube(f"get pods -l app=scoring {_cols}")
+```
+
+The ReplicaSet controller saw two pods where three were desired and created a
+third, which joined the Service once ready. **Scaling** is a change of the
+desired number (`kubectl scale deployment/scoring --replicas=5`), and a
+**HorizontalPodAutoscaler** changes it automatically from a measured metric.
+
+### Rolling updates
+
+A new version of the model is a new image. Changing the Deployment's template
+starts a **rolling update**: a new ReplicaSet is created and scaled up while
+the old one is scaled down, within two bounds — **maxSurge** (how many pods
+above the desired number may exist) and **maxUnavailable** (how many below it
+may be unready). Percentages are converted to numbers by rounding the surge up
+and the unavailability down [@kubernetes2026, "Deployments"].
+
+```{python}
+#| echo: false
+#| output: asis
+d2 = cb.scoring("scoring-v2", version="2")
+cb.build(d2, "local/scoring:2", table=False, show_cmd=False)
+cb.load_image("local/scoring:2")
+_s = time.perf_counter()
+cb.kube("set image deployment/scoring web=local/scoring:2")
+cb.kube("rollout status deployment/scoring --timeout=180s", filter_fn=lambda l: "successfully" in l)
+rollout_s = time.perf_counter() - _s
+for _ in range(30):                                   # kube-proxy updates its rules a moment later
+    if '"version": "2"' in cb.run("curl -s localhost:30080/version").stdout:
+        break
+    time.sleep(0.5)
+cb.sh("curl -s localhost:30080/version")
+```
+
+With three replicas, `maxSurge: 1` and `maxUnavailable: 0`, the controller
+can only add one new pod at a time and must wait until it is ready before
+removing an old one. The update took `{python} f"{rollout_s:.0f}"` s here; the next
+result explains why it cannot take much less.
+
+::: {#prp-ctr-rollout}
+## Bounds of a rolling update
+Let $R$ be the desired number of replicas, $s$ the surge and $u$ the
+unavailability allowed (after rounding), with $s + u \ge 1$. During a rolling
+update, at every moment (i) at most $R + s$ pods exist and (ii) at least $R -
+u$ pods are ready. Consequently (iii) at most $s + u$ pods are starting at
+any moment, and if every new pod needs a time $T$ from creation to
+readiness, the update takes at least $\lceil R/(s + u)\rceil\, T$.
+:::
+
+*In one line:* the update proceeds in waves of at most $s + u$ pods, so its
+duration is at least the number of waves times the start-up time — a slow
+model load makes every deployment slow.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ctr-rollout
+(i) and (ii) are the invariants the Deployment controller maintains: it
+scales the new ReplicaSet up only while the total stays $\le R + s$, and the
+old one down only while the ready pods stay $\ge R - u$ [@kubernetes2026,
+"Deployments"]. (iii) A pod that is starting exists but is not ready, so
+their number is at most (pods existing) $-$ (pods ready) $\le (R + s) - (R -
+u) = s + u$. All $R$ new pods must go through a starting period of length $T$;
+in any time window of length $T$ at most $s + u$ pods can *complete* their
+start (each must have been starting during the whole window, and at most $s +
+u$ start in parallel). Covering $R$ completions needs at least $\lceil R/(s +
+u)\rceil$ windows. $\blacksquare$
+:::
+
+Here $R = 3$, $s = 1$, $u = 0$ and $T \approx 3$–4 s (the delay, the model load
+and the probe period), so at least $3 \times T \approx 9$–12 s, consistent with
+the measured `{python} f"{rollout_s:.0f}"` s, which also includes the scheduling and the
+termination of the old pods. Raising $u$ speeds the update up at the cost of
+capacity; raising $s$ speeds it up at the cost of extra resources.
+
+### Autoscaling and scheduling
+
+The **HorizontalPodAutoscaler** periodically sets the number of replicas from
+a metric $m$ (for instance the average CPU utilisation of the pods, relative to
+their request) and a target $t$:
+$$
+R' = \left\lceil R\,\frac{m}{t}\right\rceil ,
+$$ {#eq-ctr-hpa}
+and does nothing when $m/t$ is within a tolerance (by default 0.1) of 1
+[@kubernetes2026, "Horizontal Pod Autoscaling"].
+
+::: {#prp-ctr-hpa}
+## The proportional rule reaches its fixed point in one step
+Suppose the total load $L$ is spread evenly, so that with $R$ replicas the
+per-pod metric is $m = L/R$. Then from any $R$ the rule @eq-ctr-hpa gives
+$R' = \lceil L/t\rceil$, and $R^* = \lceil L/t\rceil$ is a fixed point: once
+there, the rule keeps it.
+:::
+
+*In one line:* the replicas times the per-pod load is the total load, so the
+rule computes directly how many pods the load needs at the target
+utilisation.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ctr-hpa
+$R\,m/t = R\,(L/R)/t = L/t$, independent of $R$, so $R' = \lceil L/t\rceil$.
+Applying the rule at $R^*$ gives $\lceil L/t\rceil = R^*$ again. (The
+tolerance only adds states where the rule does not move; real loads are not
+perfectly even and change over time, which is why the controller also limits
+how fast it scales and waits five minutes before scaling down.)
+$\blacksquare$
+:::
+
+Finally, the **scheduler** places each new pod on a node whose free
+allocatable resources cover the pod's **requests**, choosing among the
+feasible nodes by a score (spreading, packing, affinity). Choosing placements
+that use the fewest nodes is bin packing, an NP-hard problem [@garey1979], so
+the scheduler uses greedy rules pod by pod rather than an optimum.
+
+### Practice {.unnumbered}
+
+::: {#exr-ctr1-k8s-easy}
+## Easy — rollout and autoscaling by hand
+(a) A Deployment has 10 replicas and the default `maxSurge: 25%`,
+`maxUnavailable: 25%`. How many pods can exist at most during an update, how
+many must stay ready, and how many waves does the update need at least? (b)
+With 4 replicas, `maxSurge: 1`, `maxUnavailable: 0`, and pods that need 20 s
+to load the model, what is the minimum duration of an update? (c) Four pods
+run at an average CPU utilisation of 90 % with a target of 60 %: how many does
+the autoscaler ask for? If the load stays the same, what happens at the next
+evaluation?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Round the surge up and the unavailability down; then apply
+@prp-ctr-rollout and @eq-ctr-hpa. For the second evaluation, the per-pod
+utilisation is the total load divided by the new number of pods.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) $s = \lceil 2.5\rceil = 3$, $u = \lfloor 2.5\rfloor = 2$: at most 13 pods,
+at least 8 ready, at least $\lceil 10/5\rceil = 2$ waves. (b) $\lceil
+4/1\rceil \times 20 = 80$ s at least. (c) $\lceil 4 \times 90/60\rceil = 6$;
+the total load is $4 \times 90 = 360$ "percent-pods", so with 6 pods each runs
+at 60 %, $m/t = 1$, and the autoscaler stays at 6 (@prp-ctr-hpa).
+```{python}
+import math
+R, s, u = 10, math.ceil(0.25 * 10), math.floor(0.25 * 10)
+print(f"(a) at most {R + s} pods, at least {R - u} ready, at least {math.ceil(R / (s + u))} waves")
+print(f"(b) at least {math.ceil(4 / 1) * 20} s")
+R1 = math.ceil(4 * 90 / 60); m1 = 4 * 90 / R1
+print(f"(c) {R1} pods; then utilisation {m1:.0f}% -> {math.ceil(R1 * m1 / 60)} pods")
+```
+The common slip in (a) is rounding both percentages the same way; the
+asymmetry is deliberate, so that the update always makes progress ($s + u
+\ge 1$) and never breaks availability more than allowed.
+:::
+
+::: {#exr-ctr1-k8s-medium}
+## Medium — a reconciliation loop of your own
+Write a minimal controller in Python on top of Docker: given a desired state
+`{"app": "scoring", "image": "local/scoring:1", "replicas": 3}`, each
+iteration lists the running containers labelled `app=scoring`, starts or
+removes containers to match the desired number, and logs its actions. Run a
+few iterations, kill one container by hand between two of them, then change
+the desired number of replicas.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`docker run -d --label app=scoring ...` and `docker ps -q --filter
+label=app=scoring` give you a selector; exited containers should be removed
+(`docker ps -aq --filter status=exited`). The controller must be idempotent:
+running an iteration twice on the same state does nothing the second time.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def observe(app):
+    """IDs of the running and of the dead containers of an app."""
+    running = cb.run(f"docker ps -q --filter label=app={app}").stdout.split()
+    dead = cb.run(f"docker ps -aq --filter label=app={app} --filter status=exited").stdout.split()
+    return running, dead
+
+def reconcile(desired):
+    app, image, want = desired["app"], desired["image"], desired["replicas"]
+    running, dead = observe(app)
+    actions = []
+    for cid in dead:                                           # clean up what died
+        cb.run(f"docker rm {cid}"); actions.append("removed a dead container")
+    for _ in range(want - len(running)):                      # too few: start
+        cb.run(f"docker run -d --label app={app} {image}"); actions.append("started a container")
+    for cid in running[want:]:                                # too many: stop the extra ones
+        cb.run(f"docker rm -f {cid}"); actions.append("removed a surplus container")
+    return actions or ["nothing to do"]
+
+desired = {"app": "scoring", "image": "local/scoring:1", "replicas": 3}
+cb.run("docker rm -f $(docker ps -aq --filter label=app=scoring) 2>/dev/null")
+for step in range(6):
+    if step == 2:                                             # a "crash": kill one container
+        victim = observe("scoring")[0][0]
+        cb.run(f"docker kill {victim}"); print("   ** killed one container by hand")
+    if step == 4:
+        desired["replicas"] = 2;  print("   ** desired replicas changed to 2")
+    print(f"iteration {step}: {', '.join(reconcile(desired))}; running now: {len(observe('scoring')[0])}")
+    time.sleep(1)
+cb.quiet("docker rm -f $(docker ps -aq --filter label=app=scoring) 2>/dev/null")
+```
+The controller does not know *why* the state differs from the desired one —
+it compares and acts — and an iteration on a converged state does nothing
+(idempotence), so running it periodically is safe. Real controllers add what
+this one lacks: they watch the API instead of polling, act on a cache of the
+state, use the generation number to avoid acting twice on the same change,
+and handle partial failures (a container that cannot start would make this
+loop start one at every iteration — Kubernetes backs off exponentially, the
+`CrashLoopBackOff` state). A classic mistake is a loop that is not idempotent,
+e.g. "start one container per iteration while fewer than 3 exist" without
+re-observing: two fast iterations overshoot.
+:::
+
+::: {#exr-ctr1-k8s-hard}
+## Hard — an update without a dropped request
+While a client sends a steady stream of prediction requests to the Service,
+roll the Deployment from version 1 to version 2 and count the failed requests.
+Do it twice: (a) with the readiness probe and `maxUnavailable: 0` as above;
+(b) without the readiness probe. Explain the difference, and what else can
+still drop requests when a pod is terminated.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Run the client in a thread: new connection per request, short timeout, record
+successes and failures until the rollout finishes. Without a readiness
+probe, a pod counts as ready as soon as its container has started — before
+the server listens. Removing a pod from the Service and sending it `SIGTERM`
+happen in parallel.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import http.client, threading
+
+BODY = json.dumps({"features": [[13.2, 1.78, 2.14, 11.2, 100, 2.65, 2.76, 0.26, 1.28, 4.38, 1.05, 3.4, 1050]]})
+
+def client(stop, results):
+    while not stop.is_set():
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", 30080, timeout=2)
+            c.request("POST", "/predict", BODY, {"Content-Type": "application/json"})
+            ok = c.getresponse().status == 200
+            c.close()
+        except OSError:
+            ok = False
+        results.append(ok)
+        time.sleep(0.02)
+
+def rollout(to_image, probe):
+    patch = [{"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": to_image}]
+    if not probe:
+        patch.append({"op": "remove", "path": "/spec/template/spec/containers/0/readinessProbe"})
+    stop, results = threading.Event(), []
+    t = threading.Thread(target=client, args=(stop, results)); t.start()
+    time.sleep(2)                                               # steady state before the update
+    cb.kube_run(f"patch deployment scoring --type=json -p '{json.dumps(patch)}'")
+    cb.kube_run("rollout status deployment/scoring --timeout=180s")
+    time.sleep(2)
+    stop.set(); t.join()
+    return len(results), results.count(False)
+
+cb.kube_run("rollout status deployment/scoring --timeout=120s")         # currently version 2, with probe
+n_a, bad_a = rollout("local/scoring:1", probe=True)
+print(f"(a) with readiness probe:    {n_a} requests, {bad_a} failed")
+n_b, bad_b = rollout("local/scoring:2", probe=False)
+print(f"(b) without readiness probe: {n_b} requests, {bad_b} failed")
+```
+With the probe, the new pods receive traffic only once they answer, and with
+`maxUnavailable: 0` the old ones are removed only after that: only
+`{python} f"{100 * bad_a / n_a:.1f}"` % of the requests failed. Without the
+probe, each new pod is declared ready the moment its container starts, the
+Service sends it requests while the server is still loading, and the
+connections are refused — a burst of failures at every wave, here
+`{python} f"{100 * bad_b / n_b:.0f}"` % of the requests (fewer requests were
+sent, because each failed one waited for its timeout). The residual failures that can remain even with the
+probe come from termination: the endpoints controller removes the pod from
+the Service *while* the pod receives `SIGTERM`, and for a short time some
+nodes may still route to it. The standard remedies are a `preStop` hook that
+sleeps a few seconds before the signal, and a server that, on `SIGTERM`,
+stops accepting new connections but finishes the ones in progress. Mistakes to
+avoid: measuring with a single client request per second (too coarse to see
+the burst), and using a liveness probe for what a readiness probe should do —
+a failing liveness probe *restarts* the container, which makes a slow start
+slower.
+:::
+
+```{python}
+#| echo: false
+cb.quiet("k3s kubectl delete deployment scoring --wait=true", env=cb.K8S_ENV)
+cb.quiet("k3s kubectl delete service scoring", env=cb.K8S_ENV)
+```
+
+::: {.project-link}
+**In the projects.** This course has no final project, so the techniques of
+the chapter are best tried on the projects of the earlier parts:
+
+- **The phone book of Part I** (@sec-ch-project-phonebook) keeps its contacts
+  in a JSON file. In a container that file must live on a **volume**, or every
+  `docker rm` would lose the contacts; and since the program is interactive,
+  it needs `-it`. With the project's modules in the build context and a
+  two-line `run.py` that calls `main(sys.argv[1])`:
+  ```dockerfile
+  ARG BASE=python:3.12-slim
+  FROM ${BASE}
+  WORKDIR /app
+  COPY . .
+  USER 10001
+  CMD ["python", "run.py", "/data/phonebook.json"]
+  ```
+  `docker run -it -v phonebook-data:/data phonebook` — and the atomic writes
+  of @sec-atomic-writes keep working, because the temporary file and the
+  target are on the same volume.
+- **The CRM of Part II** (@sec-ch-project-crm) is a CMake project: a
+  multi-stage build compiles it with the full toolchain and ships only the
+  executable, linked statically, on an empty base, with its data folder on a
+  volume:
+  ```dockerfile
+  ARG BUILDER=gcc:13
+  FROM ${BUILDER} AS build
+  RUN apt-get update && apt-get install -y --no-install-recommends cmake ninja-build
+  WORKDIR /src
+  COPY . .
+  RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS=-static \
+   && cmake --build build && ./build/crm_tests
+  FROM scratch
+  COPY --from=build /src/build/crm /crm
+  ENTRYPOINT ["/crm", "/data"]
+  ```
+  Running the tests in the build stage means that an image is produced only
+  if they pass.
+- **The $k$-NN classifier of Part IV** (@sec-ch-mla-project) is served exactly
+  like the wine model of this chapter: train in the build, `joblib.dump` the
+  pipeline, load it in the server. Part VI gives it a proper API.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **`latest` and other moving tags** in `FROM` or in deployments: the image
+  changes under your feet. Pin versions, and digests for production.
+- **Copying the whole project before installing dependencies**: every code
+  change reinstalls everything (@thm-ctr-prefix).
+- **Deleting in a later step what an earlier step added** — files, caches,
+  secrets: the bytes stay in the image (@prp-ctr-size).
+- **Secrets in the image**: in `COPY`, `ARG` or `ENV`. Use secret mounts at
+  build time and secrets injected at run time.
+- **Shell-form `CMD` and PID 1 without a `SIGTERM` handler**: ten-second stops,
+  killed requests (@prp-ctr-pid1).
+- **Data in the writable layer**: lost with the container. Use volumes.
+- **Running as root** with a writable root filesystem and all capabilities.
+- **No memory limit**, or a limit that only hides a design that loads
+  everything into memory (@exr-ctr1-run-hard).
+- **Reading 137 as "crashed"**: check `OOMKilled` (@prp-ctr-137).
+- **No readiness probe**: traffic reaches pods that are still starting.
+- **Assuming `--cpu-shares` ratios survive on cgroup v2**: the conversion is
+  not proportional.
+:::
+
+## Summary
+
+- A container is a process with a private view of the kernel's resources
+  (**namespaces**), a root filesystem from an image (**`chroot`/`pivot_root`**
+  over a **union filesystem**) and resource limits (**cgroups**); it shares the
+  host's kernel, unlike a VM.
+- Under contention, weighted fair, work-conserving scheduling gives each busy
+  group $w_i/\sum_{A}w_j$ of the CPU; a quota caps a group at $q/P$ CPUs even
+  on an idle machine.
+- An OCI image is a Merkle DAG of SHA-256-addressed blobs; collisions are
+  negligible (at most $\binom n2 2^{-256}$), so one digest identifies the whole
+  image. Tags move; digests do not.
+- Layers only add: deleting hides, never removes. Reproducible images need
+  fixed timestamps and pinned inputs.
+- The build cache has the prefix property; the expected rebuild cost is
+  $\sum c_i[1 - \prod_{j \le i}(1 - p_j)]$ and is minimised by sorting steps
+  by $p_i/((1 - p_i)c_i)$. Multi-stage builds ship only what is needed.
+- PID 1 ignores unhandled signals; use the exec form, a `SIGTERM` handler or
+  `--init`. Exit codes $128 + n$ mean "signal $n$" by convention only.
+- Kubernetes reconciles desired and actual state with control loops;
+  Deployments roll out in waves of at most $s + u$ pods, so they take at least
+  $\lceil R/(s + u)\rceil T$; the autoscaler's proportional rule jumps to
+  $\lceil L/t\rceil$ replicas.
+
+## Exercises
+
+::: {#exr-ctr1-reproducible}
+**A reproducible batch scorer.** Write a Dockerfile for the batch scorer of
+@exr-ctr1-run-hard (with the streaming `score_stream.py`) such that two
+builds from scratch (`--no-cache`) give the **same image digest**. Prove it by
+building twice, then use the image to score the wine data and compare the
+predictions with those of the model trained on the host.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| output: asis
+cb.reset_ids()
+d = cb.scoring("reproducible", dockerfile="""
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    ARG SOURCE_DATE_EPOCH
+    ENV PYTHONDONTWRITEBYTECODE=1
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir --no-compile -r requirements.txt
+    COPY train.py .
+    RUN python train.py
+    COPY score_stream.py .
+    USER 10001
+    CMD ["python", "score_stream.py"]
+""", show_files=("Dockerfile",))
+(d / "score_stream.py").write_text((cb.WORK / "batch" / "score_stream.py").read_text())
+ids = []
+for k in (1, 2):
+    cb.build(d, f"local/batch:{k}", table=False, show_cmd=False,
+             extra=f"--no-cache --provenance=false --build-arg SOURCE_DATE_EPOCH=0 "
+                   f"--output type=image,name=local/batch:{k},rewrite-timestamp=true")
+    ids.append(cb.image_id(f"local/batch:{k}"))
+print(cb._output_block(cb.mask(f"build 1: {ids[0]}\nbuild 2: {ids[1]}\nidentical: {ids[0] == ids[1]}")))
+```
+```{python}
+db = cb.WORK / "batch"
+with open(db / "in" / "wines.csv", "w", newline="") as f:
+    csv.writer(f).writerows(Xw.round(4).tolist())
+p = cb.run(f"docker run --rm --read-only --memory 128m -v {db}/in:/data/in:ro -v {db}/out:/data/out local/batch:1")
+print(p.stdout.strip())
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+host = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)).fit(*load_wine(return_X_y=True))
+container_pred = np.loadtxt(db / "out" / "wines.csv", dtype=int)
+host_pred = host.predict(np.loadtxt(db / "in" / "wines.csv", delimiter=","))
+print("predictions identical to the model trained on the host:", np.array_equal(container_pred, host_pred))
+```
+Three ingredients make the digest repeatable: pinned inputs (the base image
+is fixed here; the packages are pinned by version — add `--require-hashes` for
+protection against a changed file on the index), deterministic steps (the
+training uses a deterministic solver on fixed data; `--no-compile` and
+`PYTHONDONTWRITEBYTECODE` avoid `.pyc` files with timestamps), and fixed
+metadata (`SOURCE_DATE_EPOCH`, rewritten file timestamps, no provenance
+attestation with build times). The predictions coincide with the host's
+because the versions are the same — the point of pinning. On another machine,
+the same digest is obtained only from the same base image digest: pin it in
+`FROM`.
+:::
+
+::: {#exr-ctr1-pod}
+**From `docker run` to a Pod.** Translate `docker run -d -p 8080:8000 -e
+STARTUP_DELAY=0 --memory 256m --cpus 0.5 --user 10001 --read-only --tmpfs /tmp
+local/scoring:1` into a Pod manifest (with a Service for the port), apply it,
+and verify from inside the pod the user, the read-only root filesystem and the
+cgroup limits.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| output: asis
+d = cb.project("pod")
+cb.show(d, "pod.yaml", """
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: scoring-pod
+      labels: {app: scoring-pod}
+    spec:
+      securityContext: {runAsUser: 10001, runAsNonRoot: true}           # --user 10001
+      containers:
+      - name: web
+        image: local/scoring:1
+        imagePullPolicy: Never
+        env: [{name: STARTUP_DELAY, value: "0"}]                          # -e
+        ports: [{containerPort: 8000}]
+        securityContext: {readOnlyRootFilesystem: true}                   # --read-only
+        resources:
+          limits: {memory: 256Mi, cpu: 500m}                              # --memory, --cpus
+        volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {medium: Memory}}]                  # --tmpfs /tmp
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata: {name: scoring-pod}
+    spec:
+      type: NodePort
+      selector: {app: scoring-pod}
+      ports: [{port: 80, targetPort: 8000, nodePort: 30081}]              # -p (on the node)
+""")
+cb.kube_run("delete -f pod.yaml --ignore-not-found --wait=true", cwd=d)
+cb.load_image("local/scoring:1")                     # make sure the node has the image (no registry here)
+cb.kube("apply -f pod.yaml", cwd=d)
+for _ in range(120):                                  # wait until the pod is scheduled and ready
+    if cb.kube_run("get pod scoring-pod -o jsonpath={.status.containerStatuses[0].ready}").stdout == "true":
+        break
+    time.sleep(1)
+cb.kube("exec scoring-pod -- sh -c 'id -u; touch /app/x 2>&1 | head -1; touch /tmp/ok && echo /tmp is writable'")
+cb.kube(f"exec scoring-pod -- sh -c '{_probe}'")
+time.sleep(1)
+cb.sh("curl -s localhost:30081/version")
+cb.kube_run("delete -f pod.yaml --wait=true", cwd=d)
+```
+Every flag has a field: `-e` → `env`, `--user` → `securityContext.runAsUser`,
+`--read-only` → `readOnlyRootFilesystem`, `--tmpfs` → an `emptyDir` volume in
+memory, `--memory` and `--cpus` → `resources.limits` (which become the same
+cgroup files as with Docker), `-p` → a Service. The differences are as
+instructive: there is no `-d` (pods always run in the background), there is no
+`--rm` (the pod's life cycle is the controller's business), and a bare Pod,
+unlike a Deployment, is not recreated if deleted — in practice one always uses
+a Deployment (or a Job, for batch work such as @exr-ctr1-reproducible).
+:::
+
+## Further reading {.unnumbered}
+
+- @kerrisk2010, ch. 20–22, 26 and 28 — signals, process termination, process
+  creation; the man pages namespaces(7), pid_namespaces(7), user_namespaces(7)
+  and cgroups(7) by the same author [@linuxmanpages2025] are the reference for
+  @sec-ctr-kernel.
+- @heo2015 — the cgroup v2 design and interface: "Weights", "Limits", the CPU
+  and memory controllers.
+- @parekh1993 — generalised processor sharing, the model behind
+  @thm-ctr-cpu-share.
+- @popek1974, @soltesz2007 and @felter2015 — virtual machines versus
+  operating-system virtualisation, in theory and in measurements.
+- @oci2025image and @oci2025runtime — the image format (manifest, index,
+  layers, descriptors) and the runtime specification; @nist2015 for SHA-256;
+  @merkle1987 for hash trees.
+- @docker2026 — Dockerfile reference, build cache, multi-stage builds, build
+  secrets; @reproduciblebuilds2017 — `SOURCE_DATE_EPOCH`.
+- @verma2015 and @burns2016 — Borg and the lessons that shaped Kubernetes;
+  @kubernetes2026 — concepts: Pods, Deployments, Services, probes, resource
+  management, autoscaling.
+- @merkel2014 — Docker as presented to developers in its first year.

@@ -1,0 +1,2484 @@
+# APIs, HTTP and REST {#sec-ch-api-rest}
+
+> *"REST is a hybrid style derived from several of the network-based
+> architectural styles…"* — Roy T. Fielding, 2000 [@fielding2000, §5.1]
+
+```{python}
+#| echo: false
+import apibook as ab
+ab.setup()
+import json, math, sys, time
+import numpy as np
+import matplotlib.pyplot as plt
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what an **API** is and how a **web API** works on top of **HTTP**:
+  URLs, request and response messages, headers, status codes, JSON — down to
+  the bytes on the wire, by writing a client and a server with sockets;
+- use the HTTP **methods** according to their semantics, **prove** what
+  safety and **idempotence** guarantee, when retries are safe ("at least once
+  plus idempotent = exactly once", with its hypotheses), and how
+  **exponential backoff with jitter** avoids retry storms;
+- apply the **REST** constraints — resources, representations,
+  statelessness, caching, hypermedia — and use HTTP **caching** and
+  **conditional requests** (ETags), with the proofs that the cache's age is
+  never underestimated and that `If-Match` prevents lost updates;
+- design, implement, validate and document **endpoints** with FastAPI,
+  Pydantic, JSON Schema and OpenAPI, with correct status codes, standard
+  error documents and **pagination** that is correct under concurrent
+  inserts;
+- reason about an API **in production**: Little's law, tail latency under
+  fan-out, rate limiting with a token bucket, and the basics of
+  authentication, HTTPS, CORS and request signing.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What an API is; the HTTP methods; REST as an architectural style for APIs;
+what an endpoint is.
+:::
+
+## What an API is, and HTTP from the ground up {#sec-api-http}
+
+### Interfaces between programs
+
+An **API** — application programming interface — is a **contract** between
+two pieces of software: what one may ask of the other, in which form, and
+what it will get back. Part I used APIs from the first chapter: the functions
+of a module are its API (@sec-ch-functions), and their documented behaviour
+is the contract. Part II used the operating system's API, the system calls
+(@sec-ch-cpp-python). A **web API** is a contract between programs that talk
+over a network: a *client* sends a **request** to a *server*, which performs
+it and returns a **response**. The two sides may be written in different
+languages, run on different machines and be developed by different teams;
+what keeps them compatible is the contract alone. That is the reason for most
+of this chapter: a good web API is one whose contract is explicit, uniform
+and hard to misuse.
+
+Nearly all web APIs speak **HTTP**, the protocol of the Web. Its semantics —
+methods, status codes, headers, caching — are defined in RFC 9110
+[@rfc9110], independently of how messages travel: HTTP/1.1 as text over a TCP
+connection [@rfc9112], HTTP/2 and HTTP/3 as binary frames over TCP and QUIC.
+The semantics are what an API designer works with; the HTTP/1.1 text format
+is what we look at to see them.
+
+### Addresses: URLs
+
+A request is addressed to a **URL**, whose syntax is defined by RFC 3986
+[@rfc3986]:
+
+```{python}
+from urllib.parse import urlsplit, parse_qs, quote
+
+url = "https://api.example.com:8443/v1/wines/42?fields=alcohol,colour&lang=en#notes"
+parts = urlsplit(url)
+for name in ("scheme", "hostname", "port", "path", "query", "fragment"):
+    print(f"{name:9s} {getattr(parts, name)!r}")
+print("query parameters:", parse_qs(parts.query))
+print("percent-encoding:", quote("rosé & co"), "<- reserved and non-ASCII characters escaped")
+```
+
+The **scheme** selects the protocol (`https` = HTTP over TLS, @sec-api-production);
+**host** and **port** locate the server; the **path** identifies a resource
+on it; the **query** carries parameters; the **fragment** never leaves the
+client. Characters that would be ambiguous — spaces, `&`, `?`, non-ASCII
+letters — are **percent-encoded** as the bytes of their UTF-8 encoding.
+
+### Messages
+
+An HTTP/1.1 message is text: a start line, header fields `Name: value` (one
+per line, names case-insensitive), an empty line, and an optional body whose
+length the headers announce (`Content-Length`, or chunked encoding)
+[@rfc9112, §2–6]. To see real messages, here is a small server built with the
+standard library, and a client that speaks to it through a raw TCP socket —
+no HTTP library at all:
+
+```{python}
+ab.write("hello_server.py", '''
+    """A tiny JSON server with the standard library: GET /hello?name=..., POST /echo."""
+    import json, sys
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlsplit, parse_qs
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        def send_json(self, code, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def do_GET(self):
+            url = urlsplit(self.path)
+            if url.path == "/hello":
+                name = parse_qs(url.query).get("name", ["world"])[0]
+                self.send_json(200, {"greeting": f"hello, {name}"})
+            else:
+                self.send_json(404, {"error": "no such resource"})
+        def do_POST(self):
+            if self.path != "/echo":
+                return self.send_json(404, {"error": "no such resource"})
+            data = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            try:
+                self.send_json(200, {"you_sent": json.loads(data)})
+            except json.JSONDecodeError:
+                self.send_json(400, {"error": "body is not JSON"})
+        def log_message(self, *args):
+            pass
+
+    ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+''')
+HELLO = [sys.executable, "hello_server.py", "{port}"]
+```
+
+```{python}
+import socket
+
+def raw_exchange(port, request: bytes) -> bytes:
+    """Send bytes on a TCP connection and read the reply until the server closes it."""
+    with socket.create_connection(("127.0.0.1", port)) as s:
+        s.sendall(request)
+        reply = b""
+        while chunk := s.recv(4096):
+            reply += chunk
+    return reply
+
+with ab.server("", cmd=HELLO) as base:
+    port = int(base.rsplit(":", 1)[1])
+    request = (b"GET /hello?name=Ada HTTP/1.1\r\n"
+               b"Host: 127.0.0.1\r\n"
+               b"Accept: application/json\r\n"
+               b"Connection: close\r\n"
+               b"\r\n")
+    reply = raw_exchange(port, request)
+print(request.decode().replace("\r\n", "\n"))
+print(ab.mask(reply.decode()).replace("\r\n", "\n"))
+```
+
+The request line says **what** to do (`GET`), **to what** (`/hello?name=Ada`)
+and in which protocol version; the `Host` header names the server (one IP
+address may host many sites); `Accept` says which representation the client
+prefers. The response's **status line** carries a three-digit **status
+code** and a reason phrase; its headers describe the body (`Content-Type`,
+`Content-Length`) and the server. `Connection: close` asked the server to
+close the connection after the response; by default HTTP/1.1 keeps it open
+for further requests, which is why the length of the body must be stated —
+otherwise the client could not know where one response ends.
+
+An HTTP library does all of this for us. The standard choice in this chapter
+is **httpx** [@christie2026], a client with the same interface for
+synchronous and asynchronous code:
+
+```{python}
+import httpx
+
+with ab.server("", cmd=HELLO) as base:
+    r = httpx.get(f"{base}/hello", params={"name": "Ada"})
+    print(r.status_code, r.headers["content-type"], r.json())
+    r = httpx.post(f"{base}/echo", json={"wine": 42, "scores": [0.1, 0.9]})
+    print(r.status_code, r.json())
+    print(httpx.post(f"{base}/echo", content=b"not json").status_code,
+          httpx.get(f"{base}/nothing-here").status_code)
+```
+
+### Status codes and representations
+
+Status codes are grouped by their first digit [@rfc9110, §15]:
+
+| Class | Meaning | Codes an API uses most |
+|---|---|---|
+| 1xx | informational | 100 Continue |
+| 2xx | **success** | 200 OK, 201 Created, 202 Accepted, 204 No Content |
+| 3xx | **redirection** | 301/308 moved permanently, 302/307 temporarily, 304 Not Modified |
+| 4xx | **client error** — retrying the same request will not help | 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, 405 Method Not Allowed, 409 Conflict, 412 Precondition Failed, 415 Unsupported Media Type, 422 Unprocessable Content, 429 Too Many Requests |
+| 5xx | **server error** — the request may succeed later | 500 Internal Server Error, 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout |
+
+The distinction between 4xx and 5xx is the first thing a client looks at: a
+4xx says "fix your request", a 5xx (and 429) says "maybe try again later" —
+the basis of retry policies (@sec-api-methods).
+
+A resource can have several **representations**: the same wine as JSON, as
+CSV, in English or Italian. The client states its preferences with `Accept`
+and `Accept-Language`, the server chooses and says what it chose with
+`Content-Type` — **content negotiation**. For APIs the representation is
+almost always **JSON** [@rfc8259]: objects, arrays, strings, numbers, `true`,
+`false`, `null`. Two caveats matter for numerical data: JSON has no `NaN` or
+infinity (Python's `json.dumps(float("nan"))` writes `NaN`, which strict
+parsers reject — use `allow_nan=False`), and many clients parse numbers as
+64-bit floats, so integers beyond $2^{53}$ lose precision (send large IDs as
+strings).
+
+### Practice {.unnumbered}
+
+::: {#exr-api1-http-easy}
+## Easy — a request by hand
+Write by hand the bytes of an HTTP/1.1 request that sends the JSON object
+`{"name": "rosé"}` with `POST` to `/echo` on `127.0.0.1`, closing the
+connection afterwards. What is the `Content-Length`? Then classify the status
+codes 200, 201, 204, 301, 304, 400, 401, 403, 404, 409, 422, 429, 500, 502
+and 503: success, redirection, client error or server error — and which of
+them justify an automatic retry?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`Content-Length` counts **bytes** of the body, not characters: `é` is two
+bytes in UTF-8. Lines end with CRLF (`\r\n`) and the headers end with an
+empty line.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The body `{"name": "rosé"}` has 16 characters and 17 bytes.
+```{python}
+from http import HTTPStatus
+
+body = json.dumps({"name": "rosé"}, ensure_ascii=False).encode()
+request = (b"POST /echo HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+           + f"Content-Length: {len(body)}\r\n".encode() + b"Connection: close\r\n\r\n" + body)
+print(f"{len(body.decode())} characters, {len(body)} bytes")
+with ab.server("", cmd=HELLO) as base:
+    print(raw_exchange(int(base.rsplit(':', 1)[1]), request).decode().split("\r\n\r\n")[1])
+
+kind = {2: "success", 3: "redirection", 4: "client error", 5: "server error"}
+for code in (200, 201, 204, 301, 304, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503):
+    retry = code in (429, 502, 503, 504) or (code == 500)
+    print(f"{code} {HTTPStatus(code).phrase:24s} {kind[code // 100]:13s} {'retry may help' if retry else ''}")
+```
+Retrying makes sense for 429 (after the delay in `Retry-After`), 502, 503
+and 504 (transient failures of the server or of a gateway), and — with care,
+only for idempotent requests — for 500 and for connections that broke
+without a response. A 4xx other than 429 will fail identically every time.
+The classic mistake is `Content-Length: len(text)` in characters: with
+non-ASCII text the server waits for bytes that never come, or truncates the
+body.
+:::
+
+::: {#exr-api1-http-medium}
+## Medium — a client on sockets
+Write `http_get(host, port, path)` with the `socket` module only: send a
+`GET` with `Connection: close`, then parse the status line, the headers (into
+a dictionary with lower-case keys) and the body, using `Content-Length`.
+Test it against `python -m http.server` serving a directory with a JSON file,
+and compare the result with httpx.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Split the reply at the first `\r\n\r\n`: before it, the status line and the
+headers; after it, the body. A real client reads exactly `Content-Length`
+bytes rather than waiting for the connection to close.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def http_get(host, port, path):
+    with socket.create_connection((host, port), timeout=5) as s:
+        s.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+        data = b""
+        while b"\r\n\r\n" not in data:                         # read until the end of the headers
+            data += s.recv(4096)
+        head, body = data.split(b"\r\n\r\n", 1)
+        lines = head.decode("iso-8859-1").split("\r\n")
+        version, code, reason = lines[0].split(" ", 2)
+        headers = {}
+        for line in lines[1:]:
+            name, value = line.split(":", 1)
+            headers[name.strip().lower()] = value.strip()      # field names are case-insensitive
+        length = int(headers.get("content-length", 0))
+        while len(body) < length:                              # read exactly the announced body
+            body += s.recv(4096)
+    return int(code), headers, body[:length]
+
+(ab.WORK / "static").mkdir(exist_ok=True)
+(ab.WORK / "static" / "wine.json").write_text(json.dumps({"id": 42, "alcohol": 13.2}))
+cmd = [sys.executable, "-m", "http.server", "{port}", "--bind", "127.0.0.1", "--directory", str(ab.WORK / "static")]
+with ab.server("", cmd=cmd) as base:
+    port = int(base.rsplit(":", 1)[1])
+    code, headers, body = http_get("127.0.0.1", port, "/wine.json")
+    print(code, headers["content-type"], headers["content-length"], json.loads(body))
+    print(http_get("127.0.0.1", port, "/missing.json")[0])
+    r = httpx.get(f"{base}/wine.json")
+    print("httpx agrees:", (r.status_code, r.json()) == (code, json.loads(body)))
+```
+The two subtle points are the framing — the body ends after
+`Content-Length` bytes, not when `recv` happens to return — and decoding the
+header block as ISO-8859-1, the historical charset of HTTP header fields,
+not UTF-8. A real client also handles chunked transfer encoding, redirects,
+keep-alive, timeouts and TLS: reasons to use a library.
+:::
+
+::: {#exr-api1-http-hard}
+## Hard — a server from scratch
+Write a minimal HTTP/1.1 server with `socket` only: one thread per
+connection, `GET /hello?name=...` and `POST /echo` with a JSON body (read
+with `Content-Length`), and correct errors — 400 for a malformed request or
+invalid JSON, 404 for an unknown path, 405 for a wrong method, 411 when a
+`POST` has no `Content-Length`. Test it with `curl` and with httpx.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`socket.create_server(("127.0.0.1", port))`, then `accept()` in a loop and a
+`threading.Thread` per connection. Read up to the blank line, parse, read the
+body, write the response with `Content-Length` and `Connection: close`, close
+the socket. A `405` response should include an `Allow` header.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+ab.write("tiny_http.py", '''
+    import json, socket, sys, threading
+    from urllib.parse import urlsplit, parse_qs
+
+    REASONS = {200: "OK", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed", 411: "Length Required"}
+
+    def respond(conn, code, obj, extra=""):
+        body = json.dumps(obj).encode()
+        head = (f"HTTP/1.1 {code} {REASONS[code]}\\r\\nContent-Type: application/json\\r\\n"
+                f"Content-Length: {len(body)}\\r\\n{extra}Connection: close\\r\\n\\r\\n")
+        conn.sendall(head.encode() + body)
+
+    def handle(conn):
+        with conn:
+            data = b""
+            while b"\\r\\n\\r\\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            head, body = data.split(b"\\r\\n\\r\\n", 1)
+            try:
+                lines = head.decode("iso-8859-1").split("\\r\\n")
+                method, target, version = lines[0].split(" ")
+                headers = {k.strip().lower(): v.strip() for k, v in (l.split(":", 1) for l in lines[1:])}
+            except ValueError:
+                return respond(conn, 400, {"error": "malformed request"})
+            url = urlsplit(target)
+            routes = {"/hello": "GET", "/echo": "POST"}
+            if url.path not in routes:
+                return respond(conn, 404, {"error": "no such resource"})
+            if method != routes[url.path]:
+                return respond(conn, 405, {"error": "method not allowed"}, f"Allow: {routes[url.path]}\\r\\n")
+            if method == "GET":
+                name = parse_qs(url.query).get("name", ["world"])[0]
+                return respond(conn, 200, {"greeting": f"hello, {name}"})
+            if "content-length" not in headers:
+                return respond(conn, 411, {"error": "Content-Length required"})
+            n = int(headers["content-length"])
+            while len(body) < n:
+                body += conn.recv(4096)
+            try:
+                return respond(conn, 200, {"you_sent": json.loads(body[:n])})
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return respond(conn, 400, {"error": "body is not JSON"})
+
+    srv = socket.create_server(("127.0.0.1", int(sys.argv[1])))
+    while True:
+        conn, _ = srv.accept()
+        threading.Thread(target=handle, args=(conn,), daemon=True).start()
+''')
+import subprocess
+with ab.server("", cmd=[sys.executable, "tiny_http.py", "{port}"]) as base:
+    for args in (["-s", f"{base}/hello?name=curl"],
+                 ["-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"a": [1, 2]}', f"{base}/echo"],
+                 ["-s", "-i", "-X", "DELETE", f"{base}/hello"]):
+        out = subprocess.run(["curl", *args], capture_output=True, text=True).stdout
+        print("curl", " ".join(a for a in args if a not in ("-s",)).replace(base, ""), "->",
+              ab.mask(out).replace("\r\n", " | ").strip())
+    print(httpx.post(f"{base}/echo", content=b"{bad").status_code,
+          httpx.get(f"{base}/nope").status_code,
+          httpx.post(f"{base}/echo", json={"k": "v"}).json())
+    with socket.create_connection(("127.0.0.1", int(base.rsplit(":", 1)[1]))) as s:   # POST without length
+        s.sendall(b"POST /echo HTTP/1.1\r\nHost: x\r\n\r\n")
+        print(s.recv(200).split(b"\r\n")[0].decode())
+```
+Seventy lines handle the cases that matter for an API: routing by path, then
+by method (405 with `Allow`), framing by `Content-Length` (411 when it is
+missing), and validation (400). What is missing is as instructive: no
+keep-alive or pipelining, no chunked bodies, no limits on header or body size
+(a client announcing `Content-Length: 10000000000` would make the thread wait
+for ever — real servers cap sizes and use timeouts), no TLS. This is why one
+writes the application with a framework (@sec-api-endpoints) and leaves the
+protocol to a battle-tested server such as uvicorn.
+:::
+
+## HTTP methods: safety, idempotence and retries {#sec-api-methods}
+
+### The methods and their semantics
+
+The **method** of a request says what the client wants done with the target
+resource. RFC 9110 defines the semantics of each, and two properties that
+clients, proxies and caches rely on [@rfc9110, §9.2]:
+
+- a method is **safe** if the client does not request any change of state
+  on the server — it is essentially read-only (the server may still log the
+  request);
+- a method is **idempotent** if the intended effect on the server of several
+  identical requests is the same as that of one.
+
+| Method | Purpose | Safe | Idempotent | Typical success |
+|---|---|:---:|:---:|---|
+| `GET` | read a representation of the resource | ✓ | ✓ | 200 |
+| `HEAD` | as `GET`, headers only | ✓ | ✓ | 200 |
+| `OPTIONS` | which methods/options the resource supports | ✓ | ✓ | 200, 204 |
+| `PUT` | create or **replace** the resource with the representation sent | | ✓ | 200, 201, 204 |
+| `DELETE` | remove the resource | | ✓ | 200, 204 |
+| `POST` | let the resource **process** the representation (often: create a new subordinate resource) | | | 201 + `Location`, 200, 202 |
+| `PATCH` | apply a set of **changes** to the resource [@rfc5789] | | | 200, 204 |
+
+Idempotence is about *effect*, not about the *response*: a second `DELETE`
+of the same resource typically returns 404, but the state — resource absent
+— is the same as after the first. `PATCH` is not idempotent in general
+(`{"op": "add", "path": "/stock", "value": 1}` adds every time), although a
+particular patch may be.
+
+::: {#def-api-idempotent}
+## Idempotent operation
+Let $S$ be the set of states of the server. An operation with effect $f : S
+\to S$ is **idempotent** if $f \circ f = f$, i.e. $f(f(s)) = f(s)$ for every
+state $s$. It is **safe** if $f$ is the identity.
+:::
+
+::: {#prp-api-idempotent-power}
+## Repeating an idempotent request
+If $f$ is idempotent, then $f^n = f$ for every $n \ge 1$. The composition of
+two idempotent operations, however, is not idempotent in general.
+:::
+
+*In one line:* one idempotent request can be repeated any number of times,
+but a *sequence* of idempotent requests cannot be replayed as a block.
+
+::: {.deep kind="proof"}
+## Proof of @prp-api-idempotent-power
+By induction: $f^1 = f$; if $f^n = f$ then $f^{n+1} = f \circ f^n = f
+\circ f = f$. For the second claim take states $(a, b)$ of two integer
+resources, $f$: "`PUT` $a := b$" and $g$: "`PUT` $b := a + 1$". Both are
+idempotent ($f$ leaves $a = b$, and applying it again changes nothing; $g$
+sets $b$ from the unchanged $a$). But $h = g \circ f$ maps $(0, 0) \mapsto (0,
+1)$ and then $(0, 1) \mapsto (1, 2)$: $h \circ h \ne h$. $\blacksquare$
+:::
+
+### Retries
+
+Networks lose messages, servers restart, gateways time out. A client that
+gets no response — or a 502, 503, 504 — cannot tell whether the request was
+**not performed** or **performed but the response was lost**. The standard
+answer is to retry.
+
+::: {#thm-api-retry}
+## Success with retries
+If each attempt succeeds independently with probability $p$, then at least one
+of $n$ attempts succeeds with probability
+$$
+1 - (1 - p)^n ,
+$$ {#eq-api-retry}
+and $n \ge \log\varepsilon/\log(1 - p)$ attempts make the probability of
+total failure at most $\varepsilon$.
+:::
+
+*In one line:* independent failures multiply — three attempts at 90 % each
+fail together only once in a thousand.
+
+::: {.deep kind="proof"}
+## Proof of @thm-api-retry
+All $n$ attempts fail with probability $\prod_{k=1}^n(1 - p) = (1 - p)^n$ by
+independence; the complement is @eq-api-retry. $(1 - p)^n \le \varepsilon$
+if and only if $n\log(1 - p) \le \log\varepsilon$; dividing by $\log(1 - p) <
+0$ reverses the inequality. $\blacksquare$
+:::
+
+The hypothesis of **independence** is the weak point. Failures are
+correlated in time: a server that is down at one instant is probably down a
+moment later, and retrying immediately mostly measures the same outage. If
+the outage lasts $D$ seconds, attempts spaced by much less than $D$ are not
+independent at all; spacing them out — **backoff** — is what makes the formula
+approximately true. And retries have a cost: every failed attempt is load on a
+server that may be failing *because* of load.
+
+Retrying is safe only if repeating the request is harmless.
+
+::: {#thm-api-exactly-once}
+## At least once + idempotent = exactly-once effect
+Suppose that (H1) the server applies the effect $f$ of a request at least once
+and finitely many times — the client retries until it gets a response, and
+duplicates may reach the server; (H2) $f$ is idempotent; (H3) no other
+operation changes the affected state between the first and the last
+application of $f$. Then the final state is $f(s)$, as if the request had been
+applied exactly once.
+:::
+
+*In one line:* idempotence turns "at least once", which networks can
+guarantee, into "exactly once", which they cannot — provided duplicates do
+not interleave with other writes.
+
+::: {.deep kind="proof"}
+## Proof of @thm-api-exactly-once
+By (H1) the request is applied $k \ge 1$ times; by (H3) these applications
+are consecutive in the sequence of operations on the state, which therefore
+goes from $s$ to $f^k(s)$; by (H2) and @prp-api-idempotent-power, $f^k(s) =
+f(s)$. $\blacksquare$
+
+Hypothesis (H3) is not a formality. A `PUT x = 1` delayed in the network,
+followed by a `PUT x = 2` from another client and then by the duplicate of
+the first, ends with $x = 1$: each operation is idempotent, yet the outcome
+is not that of any order in which each was applied once. Conditional
+requests (`If-Match`, @sec-api-rest) or idempotency keys with a bounded
+validity close this gap.
+:::
+
+`POST` is not idempotent: retrying "create an order" may create two. The
+standard remedy is an **idempotency key**: the client generates a unique
+value for each *logical* operation and sends it in a header
+(`Idempotency-Key: 8e03978e-…`, an IETF draft standardising a widespread
+practice [@jena2025]); the server records the key with the response and, when
+the key comes again, returns the recorded response without acting again. The
+effect of a request becomes a function of the pair (state, store of keys),
+and it is idempotent: the first application acts and records, the next ones
+find the record. @exr-api1-methods-medium demonstrates it.
+
+### Backoff and jitter
+
+When many clients fail at the same moment — the server restarted, a
+network partition healed — and all retry after the same delay, they arrive
+together again, overload the server again, fail again: a **thundering herd**.
+Two ideas break the cycle [@brooker2015]:
+
+- **exponential backoff**: wait longer after each failure, $w_k = \min(C,
+  b\,2^k)$ before the retry $k = 0, 1, 2, \dots$ ($b$ the base delay, $C$ a
+  cap), so that the offered load decreases geometrically;
+- **jitter**: wait a *random* time — **full jitter** draws the wait uniformly
+  in $[0, w_k]$, **equal jitter** waits $w_k/2$ plus a uniform draw in $[0,
+  w_k/2]$ — so that clients desynchronise.
+
+::: {#prp-api-jitter}
+## Expected waits and the spread of the herd
+(i) The expected wait before retry $k$ is $w_k$ without jitter, $w_k/2$ with
+full jitter and $3w_k/4$ with equal jitter; the expected time until retry $n$
+is the sum of the expected waits.
+(ii) If $N$ clients fail at the same instant, without jitter all their first
+retries arrive at the same instant $w_0$; with full jitter they are
+independent and uniform on $[0, w_0]$, so the expected number arriving in any
+window of length $\delta \le w_0$ is $N\delta/w_0$.
+:::
+
+*In one line:* jitter costs at most a constant factor in waiting (it even
+halves the mean wait) and turns a spike of $N$ simultaneous requests into a
+flow of $N/w_0$ requests per second.
+
+::: {.deep kind="proof"}
+## Proof of @prp-api-jitter
+(i) The mean of a uniform variable on $[a, a + \ell]$ is $a + \ell/2$:
+$w_k/2$ for $[0, w_k]$ and $w_k/2 + w_k/4 = 3w_k/4$ for $[w_k/2, w_k]$.
+The time until retry $n$ is a sum of waits (plus response times), and the
+expectation of a sum is the sum of the expectations. (ii) Each arrival time
+$U_i$ is uniform on $[0, w_0]$, so $P(U_i \in [t, t + \delta]) = \delta/w_0$
+for a window inside $[0, w_0]$; the number of arrivals in the window is a sum
+of $N$ indicators, with expectation $N\delta/w_0$. $\blacksquare$
+:::
+
+The widget simulates 200 clients that fail together at time 0 against a
+server that can serve 10 requests per 100 ms; each failed request retries
+with the chosen policy.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof boPolicy = Inputs.radio(["no backoff", "exponential, no jitter", "exponential, full jitter", "exponential, equal jitter"],
+                               {value: "exponential, no jitter", label: "retry policy"})
+```
+
+```{ojs}
+//| echo: false
+boSim = {
+  // 200 clients, capacity 10 requests per 100 ms slot, base 100 ms, cap 6.4 s, 12 attempts at most
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const N = 200, cap = 10, slot = 100, base = 100, maxw = 6400, horizon = 12000;
+  let pending = Array.from({length: N}, () => ({t: 0, k: 0}));
+  const load = new Map(); let calls = 0, done = 0, lastDone = 0;
+  while (pending.length) {
+    pending.sort((a, b) => a.t - b.t);
+    const bins = new Map(); const next = [];
+    for (const c of pending) {
+      if (c.t > horizon) continue;
+      const s = Math.floor(c.t / slot); bins.set(s, (bins.get(s) || 0) + 1); calls++;
+      load.set(s, (load.get(s) || 0) + 1);
+      if (bins.get(s) <= cap) { done++; lastDone = Math.max(lastDone, c.t); continue; }
+      if (c.k >= 11) continue;
+      const w = boPolicy === "no backoff" ? slot : Math.min(maxw, base * 2 ** c.k);
+      const wait = boPolicy.includes("full") ? rnd() * w : boPolicy.includes("equal") ? w / 2 + rnd() * w / 2 : w;
+      next.push({t: c.t + Math.max(wait, 1), k: c.k + 1});
+    }
+    pending = next;
+  }
+  const rows = [...load.entries()].map(([s, n]) => ({t: s * slot / 1000, n}));
+  return {rows, calls, done, lastDone};
+}
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">${boSim.done} of 200 clients served; ${boSim.calls} requests sent in total; last success at ${(boSim.lastDone / 1000).toFixed(1)} s</p>`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-api-backoff-widget
+//| fig-cap: "Requests per 100 ms slot sent by 200 clients that fail together at time 0, against a server that serves 10 per slot (dashed line). Without jitter the retries come in synchronised spikes that the server rejects almost entirely; with jitter the same clients spread out and are served with far fewer requests (@prp-api-jitter)."
+Plot.plot({
+  height: 260, width: 600, x: {label: "time (s)", domain: [0, 12]}, y: {label: "requests per 100 ms", grid: true},
+  marks: [Plot.rectY(boSim.rows, {x1: d => d.t, x2: d => d.t + 0.1, y: "n", fill: "#2a78d6"}),
+          Plot.ruleY([10], {stroke: "#eb6834", strokeDasharray: "4,3"})]
+})
+```
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-api1-methods-easy}
+## Easy — which requests may be retried?
+For each request say whether it is safe, idempotent, both or neither, and
+whether a client may retry it blindly after a timeout: (a) `GET
+/wines?colour=red`; (b) `PUT /wines/42` with a full representation; (c)
+`DELETE /wines/42`; (d) `POST /wines` with a new wine; (e) `PATCH /stock/42`
+with `{"delta": -1}`; (f) `PATCH /wines/42` with `{"alcohol": 13.5}`. Then
+show with @prp-api-idempotent-power why the two-request sequence "(b) then
+(f)" cannot be replayed as a unit in general, even though each request is
+idempotent.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Write each effect as a function on the state. A patch that *sets* a field is
+idempotent; one that *adds* is not.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) safe and idempotent: retry. (b) idempotent: retry. (c) idempotent:
+retry (expect 404 on a repetition). (d) neither: retry only with an
+idempotency key. (e) not idempotent (each application subtracts one): no
+blind retry. (f) idempotent (it sets a value): retry. For the sequence:
+replaying "(b) then (f)" as a block is safe here only because (b) replaces
+the whole resource and (f) sets a field of it — the composition happens to be
+idempotent; in general it is not, as the proof of @prp-api-idempotent-power
+shows, and interleavings with other clients (H3) break even this case:
+```{python}
+state = {"alcohol": 12.0}
+put_b = lambda s: {"alcohol": 13.0}                     # replace the resource
+patch_f = lambda s: {**s, "alcohol": 13.5}             # set a field
+other = lambda s: {**s, "alcohol": s["alcohol"] + 1}  # another client's non-idempotent update
+once = patch_f(put_b(state))
+print("once:", once, "| twice in a row:", patch_f(put_b(once)))
+print("with another update in between, then a duplicate of (b):", put_b(other(once)))
+```
+The duplicate of (b) arriving late erases the other client's update — the
+"lost update" that @sec-api-rest prevents with `If-Match`.
+:::
+
+::: {#exr-api1-methods-medium}
+## Medium — duplicates and idempotency keys
+Build a FastAPI service with `POST /orders` that creates an order with a new
+ID. Write an httpx client that retries on transport errors, and connect it
+through an `httpx.MockTransport` that forwards each request to the service but
+**loses the response** of the first two attempts. Count the orders created.
+Then add support for an `Idempotency-Key` header on the server and send one
+key per logical order from the client; count again.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The mock transport's handler receives an `httpx.Request`: forward it with a
+`TestClient` (which talks to the app in-process), then raise
+`httpx.ReadTimeout` if the response is to be "lost" — the server has acted,
+the client does not know. On the server, keep a dictionary key → response.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from fastapi import FastAPI, Header
+from fastapi.testclient import TestClient
+import itertools, uuid
+
+def make_app():
+    app = FastAPI()
+    app.state.orders, app.state.seen = {}, {}
+    ids = itertools.count(1)
+
+    @app.post("/orders", status_code=201)
+    def create(order: dict, idempotency_key: str | None = Header(default=None)):
+        if idempotency_key in app.state.seen:                    # a retry: replay the recorded answer
+            return app.state.seen[idempotency_key]
+        oid = next(ids)
+        app.state.orders[oid] = order
+        result = {"id": oid, **order}
+        if idempotency_key is not None:
+            app.state.seen[idempotency_key] = result
+        return result
+    return app
+
+def lossy(app, lose=2):
+    inner, lost = TestClient(app), [0]
+    def handler(request: httpx.Request):
+        r = inner.request(request.method, str(request.url.path), content=request.content, headers=request.headers)
+        if lost[0] < lose:                                        # the server acted, the reply is lost
+            lost[0] += 1
+            raise httpx.ReadTimeout("response lost", request=request)
+        return httpx.Response(r.status_code, content=r.content, headers=r.headers)
+    return httpx.MockTransport(handler)
+
+def post_with_retries(client, body, key=None, attempts=5):
+    headers = {"Idempotency-Key": key} if key else {}
+    for k in range(attempts):
+        try:
+            return client.post("http://api/orders", json=body, headers=headers)
+        except httpx.TransportError:
+            continue
+    raise RuntimeError("gave up")
+
+for use_key in (False, True):
+    app = make_app()
+    with httpx.Client(transport=lossy(app)) as client:
+        r = post_with_retries(client, {"wine": 42, "bottles": 6}, key=str(uuid.uuid4()) if use_key else None)
+    print(f"idempotency key: {use_key!s:5}  -> response {r.status_code} {r.json()}, orders stored: {len(app.state.orders)}")
+```
+Without a key the client sees one successful response but the server holds
+three orders — the two "lost" attempts were executed. With the key, the second
+and third attempts find the recorded result and return it: one order, and the
+same response the first attempt would have returned. In production the store
+of keys must be shared by all replicas (a database, not a dictionary), have an
+expiry, and be updated **atomically** with the effect — otherwise two
+concurrent retries can both miss the key. Mistake to avoid: generating a new
+key at each *attempt* instead of each *logical operation*, which makes the
+key useless.
+:::
+
+::: {#exr-api1-methods-hard}
+## Hard — a thundering herd
+Simulate $N = 500$ clients whose requests all fail at time 0, against a server
+that can serve $C = 20$ requests per 100 ms slot (requests beyond the
+capacity of a slot fail). Compare four policies — immediate retry, exponential
+backoff without jitter, with full jitter, with equal jitter (base 100 ms, cap
+6.4 s) — on the time until all clients are served, the total number of
+requests and the peak load. Check @prp-api-jitter(ii) on the first round.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+An event-driven simulation is enough: keep the time of each client's next
+attempt, process slot by slot, serve the first $C$ attempts of each slot
+(in random order among those of the slot) and reschedule the others with
+their policy.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def herd(policy, N=500, C=20, slot=0.1, base=0.1, cap=6.4, seed=0, horizon=120):
+    rng = np.random.default_rng(seed)
+    t = np.zeros(N); k = np.zeros(N, dtype=int); served = np.zeros(N, dtype=bool)
+    calls, peak, finish, first_round = 0, 0, 0.0, None         # peak: largest slot load after time 0
+    while not served.all():
+        s = np.floor(t[~served].min() / slot)                  # next slot with attempts
+        if s * slot > horizon:
+            break
+        idx = np.where(~served & (np.floor(t / slot) == s))[0]
+        rng.shuffle(idx)
+        calls += len(idx); peak = max(peak, len(idx) if s > 0 else 0)
+        ok, fail = idx[:C], idx[C:]
+        served[ok] = True; finish = (s + 1) * slot
+        w = np.minimum(cap, base * 2.0 ** k[fail]) if policy != "immediate" else np.full(len(fail), slot)
+        if policy == "full jitter":
+            w = rng.uniform(0, w)
+        elif policy == "equal jitter":
+            w = w / 2 + rng.uniform(0, w / 2)
+        if first_round is None and policy == "full jitter":
+            first_round = s * slot + w                         # arrival times of the first retries
+        t[fail] = s * slot + np.maximum(w, 1e-9) + 1e-9
+        k[fail] += 1
+    return finish, calls, peak, first_round
+
+for pol in ("immediate", "no jitter", "full jitter", "equal jitter"):
+    finish, calls, peak, fr = herd(pol)
+    print(f"{pol:13s}: all served after {finish:5.1f} s, {calls:5d} requests ({calls / 500:.1f} per client), "
+          f"largest retry burst {peak} in one slot")
+fr = herd("full jitter")[3]
+counts = np.histogram(fr, bins=np.arange(0, 0.1 + 1e-9, 0.01))[0]
+print(f"first retries with full jitter: mean {counts.mean():.1f} per 10 ms window (formula {480 * 0.01 / 0.1:.0f})")
+```
+Immediate retries finish first — the server works at full capacity from the
+first slot, 25 slots for 500 clients — but every client sends about 13
+requests, twelve of them rejected: in this model a rejection is free, while a
+real server spends resources on each one, so the useful work slows down
+exactly when the server is overloaded. Backoff without jitter is the worst of
+both worlds: the clients stay synchronised, each retry wave hits a single slot
+that can serve only 20 of them, and the doubling delays stretch the recovery
+to almost two minutes with as many requests as before. Full and equal jitter
+spread the waves over time: everyone is served within a few seconds with
+about five requests per client, less than half as many. Full jitter also
+cuts the largest burst; equal jitter, whose first retries fall in a window
+($[w_0/2, w_0]$) narrower than one slot of this server, still sends one large
+burst early on — the reason Brooker's simulations favour full jitter. The first-round histogram
+agrees with $N\delta/w_0$ for the 480 clients that failed at time 0.
+Brooker's simulations reach the same conclusion and recommend full jitter
+[@brooker2015]. In the direction of production: client libraries should cap
+the number of retries and the total time (a *retry budget*), retry only 429,
+502–504 and broken connections, honour `Retry-After`, and retry only
+idempotent requests or requests with an idempotency key. Mistake to avoid:
+adding jitter but resetting the exponent after every failure, which keeps
+clients near the base delay.
+:::
+
+## REST: an architectural style for APIs {#sec-api-rest}
+
+### Fielding's constraints
+
+**REST** — *representational state transfer* — is not a protocol or a
+format. It is the **architectural style** that Roy Fielding, one of the
+authors of the HTTP/1.1 specification, extracted from the design of the Web
+in his doctoral dissertation [@fielding2000, ch. 5]: a set of
+**constraints** on how the components of a distributed system interact, each
+chosen for the properties it brings — scalability, simplicity, evolvability,
+reliability — at a stated cost.
+
+| Constraint | What it requires | What it buys | What it costs |
+|---|---|---|---|
+| client–server | user interface separated from data and logic | the two sides evolve independently | — |
+| **stateless** | each request carries everything needed to understand it; no session state on the server | any server replica can answer any request; failures are easy to recover; requests can be inspected in isolation | repeated data in every request |
+| **cache** | responses say whether and for how long they may be reused | fewer requests, lower latency, less load | stale data, if the labels are wrong |
+| **uniform interface** | resources identified by URIs; manipulated through representations; self-descriptive messages; hypermedia drives the application state | one generic interface for all resources: generic clients, proxies, caches | a standard form is less efficient than a custom one |
+| layered system | each component sees only the next layer | proxies, gateways, load balancers, caches can be inserted | latency of the extra hops |
+| code on demand (optional) | servers may send code to run on the client | extensible clients | visibility |
+
+The central notion is the **resource**: any information that can be named —
+a wine, the list of red wines, today's prediction for a batch, the current
+version of a model. A resource is identified by a **URI** and manipulated
+through **representations** of its state (a JSON document, a CSV file)
+exchanged with the uniform methods of @sec-api-methods. The client does not
+call "functions on the server"; it **transfers representations of resource
+state**, which is where the name comes from.
+
+Many APIs called "REST" satisfy only part of this — typically
+resources-plus-methods with JSON, without hypermedia. That pragmatic subset
+(level 2 of Richardson's maturity model [@fowler2010]) captures most of the
+benefits for machine-to-machine APIs: uniform methods with known semantics,
+status codes, caching, statelessness. The opposite style is **RPC over HTTP**
+— `POST /getWine`, `POST /deleteWine` — which uses HTTP as a mere tunnel and
+loses everything HTTP knows about safety, idempotence and caching.
+
+**Hypermedia** — "the engine of application state" — means that responses
+contain the links to the next possible actions, so that clients follow links
+instead of building URLs from out-of-band knowledge. In HTTP APIs this is
+done in the body (`"next": "/wines?after=42"`) or with the `Link` header
+[@rfc8288], which carries typed links:
+
+```http
+Link: <https://api.example.com/v1/wines?after=42&limit=20>; rel="next",
+      <https://api.example.com/v1/wines?limit=20>; rel="first"
+```
+
+### Caching
+
+A **cache** stores responses and reuses them for later equivalent requests:
+the browser's cache, a company proxy, a content-delivery network. The server
+controls it with headers [@rfc9111]: `Cache-Control: max-age=600` (fresh for
+600 seconds), `no-cache` (reuse only after checking with the server),
+`no-store` (never store — for sensitive data), `private` (only the user's
+own cache), plus `Date`, `Age` and the validators of the next subsection. A
+stored response is **fresh** while its age is below its **freshness
+lifetime** (`max-age`), and a cache serves fresh responses without contacting
+the origin.
+
+The difficulty is the **age**: the cache must estimate how long ago the
+origin produced the response, although the clocks of the machines disagree
+and the response may have waited in other caches. RFC 9111 specifies the
+computation [@rfc9111, §4.2.3], with the request sent at `request_time` and
+the response received at `response_time`, both by the cache's clock:
+$$
+\begin{aligned}
+\text{apparent\_age} &= \max(0,\ \text{response\_time} - \text{date\_value}),\\
+\text{corrected\_age\_value} &= \text{age\_value} + (\text{response\_time} - \text{request\_time}),\\
+\text{corrected\_initial\_age} &= \max(\text{apparent\_age},\ \text{corrected\_age\_value}),\\
+\text{current\_age} &= \text{corrected\_initial\_age} + (\text{now} - \text{response\_time}),
+\end{aligned}
+$$ {#eq-api-age}
+where `date_value` is the `Date` header (the origin's clock) and `age_value`
+the `Age` header (0 if absent).
+
+::: {#thm-api-age}
+## The computed age never underestimates the true age
+Suppose that the origin generated the response at time $t_0$ and either its
+`Date` header is accurate with respect to the cache's clock, or every cache
+on the path reports in `Age` an upper bound of the time elapsed since $t_0$
+when it forwarded the response. Then $\text{current\_age} \ge \text{now} -
+t_0$: a response the cache judges fresh is never older than its freshness
+lifetime claims.
+:::
+
+*In one line:* the two estimates guard against two different failures — a
+wrong clock at the origin and time spent in other caches — and taking their
+maximum, plus the whole round trip, errs only on the side of caution.
+
+::: {.deep kind="proof"}
+## Proof of @thm-api-age
+It suffices to show $\text{corrected\_initial\_age} \ge \text{response\_time}
+- t_0$ (the true age on arrival), since adding $\text{now} - \text{response\_time}$
+to both sides gives the claim. If the `Date` is accurate, $\text{date\_value}
+= t_0$ and $\text{apparent\_age} \ge \text{response\_time} - t_0$. Otherwise,
+let $t_s$ be the time the last cache on the path sent the response; by
+assumption $\text{age\_value} \ge t_s - t_0$ (with no intermediate cache,
+$\text{age\_value} = 0$ and $t_s = t_0$). The response was sent after the
+request was made, $t_s \ge \text{request\_time}$, so
+$\text{corrected\_age\_value} \ge (t_s - t_0) + (\text{response\_time} - t_s) =
+\text{response\_time} - t_0$. In both cases the maximum is at least the true
+age. The price of the guarantee is that the whole round trip is counted, as
+if the response had been produced at the moment of the request.
+$\blacksquare$
+:::
+
+```{python}
+from email.utils import parsedate_to_datetime
+
+def current_age(headers, request_time, response_time, now):
+    """Age in seconds per RFC 9111 §4.2.3 (times: seconds by the cache's clock)."""
+    date_value = parsedate_to_datetime(headers["Date"]).timestamp()
+    age_value = int(headers.get("Age", 0))
+    apparent_age = max(0, response_time - date_value)
+    corrected_age_value = age_value + (response_time - request_time)
+    corrected_initial_age = max(apparent_age, corrected_age_value)
+    return corrected_initial_age + (now - response_time)
+
+def freshness_lifetime(headers):
+    for directive in headers.get("Cache-Control", "").split(","):
+        name, _, value = directive.strip().partition("=")
+        if name == "max-age":
+            return int(value)
+    return 0
+
+t0 = parsedate_to_datetime("Mon, 16 Nov 2026 10:00:00 GMT").timestamp()
+h = {"Date": "Mon, 16 Nov 2026 10:00:00 GMT", "Age": "30", "Cache-Control": "public, max-age=120"}
+age = current_age(h, request_time=t0 + 5, response_time=t0 + 7, now=t0 + 70)
+print(f"current age {age:.0f} s, lifetime {freshness_lifetime(h)} s, fresh: {age < freshness_lifetime(h)}")
+```
+
+Here the response passed through a cache that held it 30 s (`Age: 30`), the
+round trip took 2 s and the cache has held it for 63 s since: $\max(7, 32) +
+63 = 95$ s, below the lifetime of 120 s.
+
+### Conditional requests and validators
+
+When a stored response is stale, or for data that must always be checked,
+the client can **revalidate** instead of downloading again. The server labels
+each representation with a **validator** — an **entity tag**, `ETag:
+"a3f2…"`, an opaque string that changes whenever the representation changes
+(often a hash of it), or `Last-Modified` — and the client sends it back in a
+**conditional request** [@rfc9110, §13]:
+
+- `If-None-Match: "a3f2…"` on a `GET`: if the tag still matches, the server
+  answers **304 Not Modified** with no body — the client's copy is valid;
+- `If-Match: "a3f2…"` on a `PUT`, `PATCH` or `DELETE`: the server applies
+  the change **only if** the resource still has that tag, otherwise it answers
+  **412 Precondition Failed**.
+
+The second use solves a classic problem of concurrent editing, the **lost
+update**: two clients read the same version, both modify it and write it
+back; the second write silently erases the first.
+
+::: {#thm-api-lost-update}
+## Optimistic concurrency with `If-Match` prevents lost updates
+Suppose that (i) the validator of a resource changes at every change of its
+state (a strong `ETag`, or a version number), (ii) the server checks
+`If-Match` and applies the write **atomically** (no other write between the
+check and the write), and (iii) every client sends the validator of the
+version it read. Then of all the writes based on the same version, at most one
+succeeds, and every successful write replaces exactly the version its client
+read: no update is overwritten without having been seen.
+:::
+
+*In one line:* `If-Match` is a compare-and-swap on the resource — "write
+this, but only if nobody has written since I read" — and the loser learns it
+(412) instead of silently winning.
+
+::: {.deep kind="proof"}
+## Proof of @thm-api-lost-update
+Let $W_1$ and $W_2$ be two writes based on the same version, with validator
+$v$, and say $W_1$ is applied first (writes are serialised by (ii)). When
+$W_1$ succeeds the state changes, so by (i) the validator becomes $v' \ne v$.
+When $W_2$ is checked, the current validator is $v'$ or a later one; none of
+them equals $v$ (a validator that changes at every change never returns to an
+earlier value if it is a version counter; for a hash, a return to $v$ would
+mean the state returned exactly to the one $W_2$ read — then nothing $W_2$
+saw was lost). So $W_2$ fails with 412. Consequently each successful write
+was checked against the validator of the then-current version, which by
+(iii) is the version its client read. $\blacksquare$
+:::
+
+The client that receives 412 must re-read, merge or ask the user, and try
+again — the "optimistic" part: no locks are held between reading and
+writing, and conflicts, assumed rare, are detected rather than prevented. Here
+is a resource with tags, in FastAPI (introduced properly in
+@sec-api-endpoints), exercised in-process with a `TestClient`:
+
+```{python}
+import hashlib
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.testclient import TestClient
+
+app = FastAPI()
+WINES = {42: {"id": 42, "name": "Barolo", "alcohol": 14.0}}
+
+def etag_of(obj) -> str:
+    return '"' + hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:16] + '"'
+
+@app.get("/wines/{wine_id}")
+def read_wine(wine_id: int, request: Request, response: Response):
+    wine = WINES.get(wine_id) or None
+    if wine is None:
+        raise HTTPException(404)
+    tag = etag_of(wine)
+    if request.headers.get("if-none-match") == tag:
+        return Response(status_code=304, headers={"ETag": tag})       # the client's copy is current
+    response.headers["ETag"] = tag
+    response.headers["Cache-Control"] = "no-cache"                    # store, but revalidate each time
+    return wine
+
+@app.put("/wines/{wine_id}")
+def replace_wine(wine_id: int, wine: dict, request: Request, response: Response):
+    current = WINES.get(wine_id)
+    if current is not None and request.headers.get("if-match") not in (None, etag_of(current)):
+        raise HTTPException(412, "the wine was modified since you read it")
+    WINES[wine_id] = {**wine, "id": wine_id}
+    response.headers["ETag"] = etag_of(WINES[wine_id])
+    return WINES[wine_id]
+
+client = TestClient(app)
+r1 = client.get("/wines/42");  tag = r1.headers["etag"]
+r2 = client.get("/wines/42", headers={"If-None-Match": tag})
+print(r1.status_code, tag, r1.json(), "| revalidation:", r2.status_code, f"{len(r2.content)} bytes of body")
+ok = client.put("/wines/42", json={"name": "Barolo", "alcohol": 14.5}, headers={"If-Match": tag})
+stale = client.put("/wines/42", json={"name": "Barolo DOCG", "alcohol": 14.0}, headers={"If-Match": tag})
+print("first writer:", ok.status_code, "| second writer with the old tag:", stale.status_code, stale.json())
+```
+
+### Practice {.unnumbered}
+
+::: {#exr-api1-rest-easy}
+## Easy — age and freshness by hand
+A cache sends a request at 10:00:00 (its clock) and receives at 10:00:03 a
+response with `Date: 09:59:30`, `Age: 10` and `Cache-Control:
+max-age=60`. Compute with @eq-api-age the current age at 10:00:30 and at
+10:01:00, and say whether the response is fresh. What changes if the origin's
+clock is 40 s fast (`Date: 10:00:40`)?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Work in seconds after 10:00:00. A negative apparent age is clipped to 0.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+With times in seconds after 10:00:00: request 0, response 3, date $-30$,
+age 10. Apparent age $\max(0, 3 + 30) = 33$; corrected age value $10 + 3 =
+13$; initial age 33. At 10:00:30: $33 + 27 = 60$, not fresh ($60 \not< 60$);
+at 10:01:00: 90, stale. With the fast clock: apparent age $\max(0, 3 - 40) =
+0$, initial age $\max(0, 13) = 13$: at 10:00:30 the age is 40, fresh. The
+`Age` header saved the computation from the wrong clock — the robustness that
+@thm-api-age formalises.
+```{python}
+base = parsedate_to_datetime("Mon, 16 Nov 2026 10:00:00 GMT").timestamp()
+for date in ("09:59:30", "10:00:40"):
+    h = {"Date": f"Mon, 16 Nov 2026 {date} GMT", "Age": "10", "Cache-Control": "max-age=60"}
+    for now in (30, 60):
+        a = current_age(h, base, base + 3, base + now)
+        print(f"Date {date}, now 10:00:{now:02d} -> age {a:.0f} s, fresh {a < freshness_lifetime(h)}"
+              if now < 60 else f"Date {date}, now 10:01:00 -> age {a:.0f} s, fresh {a < freshness_lifetime(h)}")
+```
+The usual mistake is to compute the age as `now - Date` only, which trusts the
+origin's clock and ignores the time spent in other caches.
+:::
+
+::: {#exr-api1-rest-medium}
+## Medium — what revalidation saves
+Serve a collection of 1 000 wines (about 100 kB of JSON) with an `ETag`.
+Simulate a client that polls it every minute for an hour, while the
+collection changes three times during the hour. Count the bytes of body
+transferred with plain `GET`s and with conditional `GET`s
+(`If-None-Match`), and the number of full downloads in each case.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The client keeps the last `ETag` and body; on 304 it reuses the body. The
+server must compute the tag from the current state (a version counter or a
+hash).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+rng = np.random.default_rng(0)
+coll_app = FastAPI()
+state = {"version": 1, "wines": [{"id": i, "alcohol": float(round(rng.uniform(11, 15), 1)),
+                                  "colour": str(rng.choice(["red", "white", "rosé"]))} for i in range(1000)]}
+
+@coll_app.get("/wines")
+def list_wines(request: Request):
+    tag = f'"v{state["version"]}"'                              # version counter as a strong validator
+    if request.headers.get("if-none-match") == tag:
+        return Response(status_code=304, headers={"ETag": tag})
+    return Response(json.dumps(state["wines"]), media_type="application/json", headers={"ETag": tag})
+
+cc = TestClient(coll_app)
+changes = {13, 31, 47}                                          # minutes at which the collection changes
+for conditional in (False, True):
+    state["version"] = 1
+    tag, body, transferred, full = None, None, 0, 0
+    for minute in range(60):
+        if minute in changes:
+            state["version"] += 1
+        headers = {"If-None-Match": tag} if conditional and tag else {}
+        r = cc.get("/wines", headers=headers)
+        transferred += len(r.content)
+        if r.status_code == 200:
+            tag, body, full = r.headers["etag"], r.content, full + 1
+    print(f"{'conditional' if conditional else 'plain'} GETs: {full} full downloads, {transferred / 1e3:,.0f} kB of body")
+```
+Plain polling downloads the whole collection sixty times; conditional polling
+downloads it four times (the first request and after each of the three
+changes) and receives 56 empty 304 responses. The saving grows with the size
+of the resource and the polling frequency. The requests still cost a round
+trip each: if even that is too much, the server can push changes (webhooks,
+server-sent events) instead. A frequent bug: computing the `ETag` from
+something that does not change with the content (a timestamp of the process
+start), which makes clients keep stale data.
+:::
+
+::: {#exr-api1-rest-hard}
+## Hard — two editors and a lost update
+Two editors increment the stock of a wine concurrently: each reads the
+resource, adds the bottles it received, and writes back with `PUT`. Run 200
+such updates from 8 threads against a uvicorn server (a) without
+preconditions, (b) with `If-Match`, retrying on 412 after re-reading. Compare
+the final stock with the expected one, and check the atomicity hypothesis of
+@thm-api-lost-update by removing the lock around the check-and-write.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use a version counter as `ETag`. With a threaded server (FastAPI runs plain
+`def` endpoints in a thread pool) the check and the write must be under a
+`threading.Lock`. A small `time.sleep` between check and write makes races
+easy to observe.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+ab.write("stock_api.py", '''
+    import os, threading, time
+    from fastapi import FastAPI, Request, Response, HTTPException
+
+    app = FastAPI()
+    STATE = {"stock": 0, "version": 0}
+    LOCK = threading.Lock() if os.environ.get("ATOMIC", "1") == "1" else None
+
+    @app.get("/stock")
+    def read(response: Response):
+        response.headers["ETag"] = f'"{STATE["version"]}"'
+        return {"stock": STATE["stock"]}
+
+    def check_and_write(if_match, new):
+        if if_match is not None and if_match != f'"{STATE["version"]}"':
+            raise HTTPException(412, "modified since read")
+        time.sleep(0.001)                                    # widen the race window
+        STATE["stock"], STATE["version"] = new, STATE["version"] + 1
+
+    @app.put("/stock")
+    def write(body: dict, request: Request):
+        if LOCK:
+            with LOCK:
+                check_and_write(request.headers.get("if-match"), body["stock"])
+        else:
+            check_and_write(request.headers.get("if-match"), body["stock"])
+        return {"stock": STATE["stock"]}
+''')
+from concurrent.futures import ThreadPoolExecutor
+
+def editor(base, n, use_if_match):
+    with httpx.Client(base_url=base) as c:
+        conflicts = 0
+        for _ in range(n):
+            while True:
+                r = c.get("/stock")
+                headers = {"If-Match": r.headers["etag"]} if use_if_match else {}
+                w = c.put("/stock", json={"stock": r.json()["stock"] + 1}, headers=headers)
+                if w.status_code != 412:
+                    break
+                conflicts += 1                                 # someone wrote first: re-read and retry
+        return conflicts
+
+for label, use_if_match, atomic in (("(a) no precondition", False, "1"),
+                                     ("(b) If-Match, atomic check", True, "1"),
+                                     ("(b') If-Match, no lock", True, "0")):
+    with ab.server("stock_api:app", env={"ATOMIC": atomic}) as base:
+        with ThreadPoolExecutor(8) as ex:
+            conflicts = sum(ex.map(lambda _: editor(base, 25, use_if_match), range(8)))
+        final = httpx.get(f"{base}/stock").json()["stock"]
+    print(f"{label:28s}: final stock {final:3d} of 200 expected, {conflicts:4d} conflicts (412) handled")
+```
+Without preconditions most increments are lost: two editors read the same
+stock and both write "stock + 1". With `If-Match` and an atomic check every
+increment survives — the losers of each race get 412, re-read and try again,
+which is the price of optimism under heavy contention. Without the lock, two
+writes based on the same version can both pass the check before either
+writes, and updates are lost again: the theorem's atomicity hypothesis is
+essential, and in a real service it is provided by the database (a
+conditional `UPDATE … WHERE version = ?` and a check that one row changed).
+The cleaner design for this particular resource would avoid read-modify-write
+altogether: an operation `POST /stock/movements {"delta": +1}` whose effect
+is applied by the server atomically — at the cost of losing idempotence, so
+it needs an idempotency key (@sec-api-methods).
+:::
+
+## Endpoints: design, validation and documentation {#sec-api-endpoints}
+
+### What an endpoint is
+
+An **endpoint** is one operation of an API: a **method** together with a
+**URI template** — `GET /v1/wines/{wine_id}` — and the contract that goes
+with it: path parameters (`wine_id`), query parameters (`?colour=red`),
+headers, the request body, and for each outcome the status code and the
+response body. The design rules that follow from the previous sections:
+
+- **nouns, not verbs**: the method is the verb (`DELETE /wines/42`, not
+  `POST /deleteWine?id=42`);
+- **collections and items**: `/wines` (the collection: `GET` lists, `POST`
+  creates) and `/wines/{id}` (an item: `GET`, `PUT`, `PATCH`, `DELETE`);
+  sub-resources for containment, `/wines/{id}/reviews`;
+- **query parameters** for filtering, sorting and pagination of collections;
+- a **version** in the path (`/v1/…`) or in a header, changed only for
+  incompatible changes;
+- the **status code** that says what happened:
+
+| Operation | Success | Typical failures |
+|---|---|---|
+| `POST /wines` | **201 Created** + `Location: /wines/{new id}` + the new resource | 409 (conflicts with an existing one), 422 (invalid) |
+| `GET /wines/{id}` | 200 + representation | 404 |
+| `PUT /wines/{id}` | 200 (or 204); 201 if it created the resource | 412 (precondition), 422 |
+| `PATCH /wines/{id}` | 200 (or 204) | 404, 409, 422 |
+| `DELETE /wines/{id}` | **204 No Content** | 404 |
+| `GET /wines?colour=red&limit=20` | 200 + page + link to the next page | 400/422 (bad parameters) |
+
+### Implementing endpoints with FastAPI
+
+**FastAPI** [@ramirez2026] builds an API from typed Python functions: the
+types of the parameters say where each value comes from (path, query, body)
+and how to validate it, using **Pydantic** models [@pydantic2026]; invalid
+requests are rejected with 422 before the function runs; and the whole API is
+described automatically in OpenAPI. A complete CRUD for wines:
+
+```{python}
+from typing import Literal
+from fastapi import status
+from pydantic import BaseModel, Field
+
+class WineIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    colour: Literal["red", "white", "rosé"]
+    alcohol: float = Field(ge=5, le=20, description="% vol")
+    year: int | None = Field(default=None, ge=1900, le=2100)
+
+class Wine(WineIn):
+    id: int
+
+api = FastAPI(title="Wine catalogue", version="1.0")
+DB: dict[int, Wine] = {}
+
+@api.post("/v1/wines", status_code=status.HTTP_201_CREATED, response_model=Wine)
+def create_wine(wine: WineIn, response: Response):
+    if any(w.name == wine.name for w in DB.values()):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"a wine named {wine.name!r} exists")
+    new = Wine(id=max(DB, default=0) + 1, **wine.model_dump())
+    DB[new.id] = new
+    response.headers["Location"] = f"/v1/wines/{new.id}"
+    return new
+
+@api.get("/v1/wines/{wine_id}", response_model=Wine)
+def get_wine(wine_id: int):
+    if wine_id not in DB:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such wine")
+    return DB[wine_id]
+
+@api.get("/v1/wines", response_model=list[Wine])
+def list_wines(colour: Literal["red", "white", "rosé"] | None = None, limit: int = 20):
+    return [w for w in DB.values() if colour is None or w.colour == colour][:limit]
+
+@api.delete("/v1/wines/{wine_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_wine(wine_id: int):
+    if DB.pop(wine_id, None) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such wine")
+
+c = TestClient(api)
+r = c.post("/v1/wines", json={"name": "Barolo", "colour": "red", "alcohol": 14.0, "year": 2019})
+print(r.status_code, r.headers["location"], r.json())
+c.post("/v1/wines", json={"name": "Soave", "colour": "white", "alcohol": 12.0})
+print(c.get("/v1/wines", params={"colour": "white"}).json())
+print(c.post("/v1/wines", json={"name": "Barolo", "colour": "red", "alcohol": 14.0}).status_code,
+      c.delete("/v1/wines/1").status_code, c.get("/v1/wines/1").status_code)
+bad = c.post("/v1/wines", json={"name": "", "colour": "blue", "alcohol": 45})
+print(bad.status_code, [(e["loc"][-1], e["msg"]) for e in bad.json()["detail"]])
+```
+
+The `TestClient` calls the application in-process through the same HTTP
+interface a network client would use, which makes it the natural tool for
+**tests** of an API: every request above is a test case. The invalid request
+was rejected with **422** and one error per field, generated from the type
+annotations alone.
+
+### Schemas: JSON Schema and OpenAPI
+
+Each Pydantic model has a **JSON Schema** — the standard vocabulary for
+describing and validating JSON documents, whose current version is 2020-12
+[@wright2022] — and any other program, in any language, can validate against
+it:
+
+```{python}
+from jsonschema import Draft202012Validator
+
+schema = WineIn.model_json_schema()
+print(json.dumps(schema["properties"]["alcohol"]), "| required:", schema["required"])
+validator = Draft202012Validator(schema)
+for doc in ({"name": "Soave", "colour": "white", "alcohol": 12.0},
+            {"name": "Soave", "colour": "white", "alcohol": "twelve"}):
+    errors = [e.message for e in validator.iter_errors(doc)]
+    print("valid" if not errors else f"invalid: {errors}")
+```
+
+The whole API is described by an **OpenAPI** document — paths, methods,
+parameters, schemas of bodies and responses, status codes — which FastAPI
+generates and serves at `/openapi.json` (with interactive documentation at
+`/docs`). The OpenAPI Specification is maintained by the OpenAPI Initiative;
+its latest version is 3.2.0 (September 2025), and since 3.1 its schemas are
+JSON Schema 2020-12 [@openapi2025]. FastAPI `{python} __import__("fastapi").__version__`
+emits OpenAPI `{python} api.openapi()["openapi"]`:
+
+```{python}
+spec = api.openapi()
+print("OpenAPI", spec["openapi"], "|", spec["info"]["title"], spec["info"]["version"])
+for path, ops in spec["paths"].items():
+    for method, op in ops.items():
+        print(f"  {method.upper():6s} {path:22s} responses {sorted(op['responses'])}")
+```
+
+From this document one can generate client libraries, mock servers, tests,
+and validate requests and responses in a gateway — the contract of the API,
+in a form that machines can check.
+
+### Errors that clients can rely on
+
+Every API returns errors; a good one returns them in **one documented
+format**. RFC 9457, *Problem Details for HTTP APIs* [@rfc9457], defines it:
+a JSON object with media type `application/problem+json` and the members
+`type` (a URI identifying the kind of problem), `title`, `status`, `detail`
+and `instance`, plus any extension members. A client can then handle all
+errors with the same code. @exr-api1-problem applies it to FastAPI.
+
+### Pagination
+
+A collection can be too long to return at once; the client asks for it in
+**pages**. Two schemes are common.
+
+- **Offset pagination**: `?offset=40&limit=20` returns the items in positions
+  40–59 of the ordered collection. Simple, and the client can jump to any
+  page.
+- **Keyset (cursor) pagination**: `?after=K&limit=20` returns the first 20
+  items whose sort key is greater than $K$, the key of the last item already
+  received; the response carries the next cursor (or a `Link: rel="next"`)
+  [@winand2012].
+
+::: {#thm-api-pagination}
+## Offsets skip and repeat; keysets do not
+Let the items be totally ordered by a **unique, immutable** key, and let a
+client traverse the collection page by page while other clients insert and
+delete items.
+(i) With offset pagination, an insertion of an item before the current offset
+between two page requests makes the next page start with an item already
+received (a duplicate); a deletion before the offset makes the next page skip
+an item never received.
+(ii) With keyset pagination, every item that is present during the whole
+traversal is received exactly once, and items are received in increasing key
+order, so no item is ever received twice.
+:::
+
+*In one line:* an offset counts positions, which move when the collection
+changes; a key names a place in the order, which does not.
+
+::: {.deep kind="proof"}
+## Proof of @thm-api-pagination
+(i) Suppose the client has received positions $0, \dots, m - 1$ and an item
+is inserted at a position $j < m$. Every item from $j$ on moves one position
+later: the item that was at position $m - 1$ (received) is now at $m$, the
+first position of the next page — a duplicate. A deletion at $j < m$ moves
+every later item one position earlier: the item that was at $m$ (not yet
+received) is now at $m - 1$ and is never requested — a skip.
+
+(ii) Let $K_0 = -\infty$ and $K_p$ the key of the last item of page $p$. Page
+$p + 1$ contains the smallest keys $> K_p$ present at the time of the request;
+keys are unique and every received key exceeds the previous cursor, so the
+sequence of received keys is strictly increasing — no duplicates. Let $x$ be
+present throughout, with key $k$. Let $p$ be the last page with $K_p < k$
+(it exists since $K_0 = -\infty$, and the traversal ends only when a page is
+not full, i.e. when no key $> K_p$ was left). Page $p + 1$ consists of the
+smallest keys $> K_p$ at that time; $x$ is among the candidates, and either
+it is returned or the page is full with keys smaller than $k$, so $K_{p+1} <
+k$, contradicting the choice of $p$. So $x$ is on page $p + 1$. $\blacksquare$
+:::
+
+Keyset pagination is also **faster** on large tables: with an index on the
+key, `WHERE id > ? ORDER BY id LIMIT 20` reads 20 rows wherever the page is,
+while `OFFSET 900000` must walk 900 000 rows to skip them
+(@exr-api1-endpoints-hard). Its limits: no "jump to page 37", and the sort key
+must be unique (append the ID to a non-unique sort key: `(price, id)`).
+
+### Practice {.unnumbered}
+
+::: {#exr-api1-endpoints-easy}
+## Easy — from RPC to resources
+Redesign these RPC-style endpoints as resources and methods, with the success
+status code of each: `POST /getWine {"id": 42}`, `POST /createWine`, `GET
+/deleteWine?id=42`, `POST /updateWineAlcohol {"id": 42, "alcohol": 13.5}`,
+`GET /listRedWines`, `POST /searchWines {"text": "barolo"}`, `POST
+/predictCultivar {"features": [...]}`. Which of the original endpoints were
+*dangerous*, and why?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Think about what a crawler, a prefetching browser or a cache would do with a
+`GET` that deletes. A prediction is the result of applying a model to an
+input: is it a resource?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+| RPC | Resource + method | Success |
+|---|---|---|
+| `POST /getWine {"id": 42}` | `GET /v1/wines/42` | 200 |
+| `POST /createWine` | `POST /v1/wines` | 201 + `Location` |
+| `GET /deleteWine?id=42` | `DELETE /v1/wines/42` | 204 |
+| `POST /updateWineAlcohol` | `PATCH /v1/wines/42 {"alcohol": 13.5}` | 200 |
+| `GET /listRedWines` | `GET /v1/wines?colour=red` | 200 |
+| `POST /searchWines` | `GET /v1/wines?q=barolo` | 200 |
+| `POST /predictCultivar` | `POST /v1/predictions` (creates a prediction) or `POST /v1/models/wine/predict` | 200 or 201 |
+
+`GET /deleteWine` is dangerous: `GET` is declared safe, so crawlers,
+link-preview bots and prefetching browsers may call it, and caches may
+replay it — any of them can delete wines. `POST /getWine` is wasteful rather
+than dangerous: reads become uncacheable and non-retryable for every
+intermediary. Predictions are the one place where a verb-like endpoint is
+customary: the computation is safe and idempotent for a fixed model, but the
+input is too large and structured for a query string, so `POST` is used — and
+the response can be marked cacheable only by an application cache keyed on
+the input.
+:::
+
+::: {#exr-api1-endpoints-medium}
+## Medium — a CRUD with the right status codes
+Extend the wine API with `PUT /v1/wines/{id}` (create or replace: 201 if it
+created, 200 if it replaced) and `PATCH /v1/wines/{id}` (partial update; 404
+if absent; 422 on invalid values; 409 if renaming to an existing name). Write
+a test suite with `TestClient` that checks the status code, the headers and
+the body of every success and failure case of the five endpoints.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For `PATCH`, a second Pydantic model with every field optional, and
+`model_dump(exclude_unset=True)` to apply only the fields sent; validate the
+merged result with `Wine.model_validate`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from typing import Optional
+from pydantic import ValidationError
+
+class WinePatch(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    colour: Optional[Literal["red", "white", "rosé"]] = None
+    alcohol: Optional[float] = Field(default=None, ge=5, le=20)
+    year: Optional[int] = Field(default=None, ge=1900, le=2100)
+
+def name_taken(name, except_id):
+    return any(w.name == name and w.id != except_id for w in DB.values())
+
+@api.put("/v1/wines/{wine_id}", response_model=Wine)
+def put_wine(wine_id: int, wine: WineIn, response: Response):
+    if name_taken(wine.name, wine_id):
+        raise HTTPException(409, "name already used")
+    created = wine_id not in DB
+    DB[wine_id] = Wine(id=wine_id, **wine.model_dump())
+    response.status_code = 201 if created else 200
+    if created:
+        response.headers["Location"] = f"/v1/wines/{wine_id}"
+    return DB[wine_id]
+
+@api.patch("/v1/wines/{wine_id}", response_model=Wine)
+def patch_wine(wine_id: int, patch: WinePatch):
+    if wine_id not in DB:
+        raise HTTPException(404, "no such wine")
+    changes = patch.model_dump(exclude_unset=True)
+    if "name" in changes and name_taken(changes["name"], wine_id):
+        raise HTTPException(409, "name already used")
+    DB[wine_id] = Wine.model_validate({**DB[wine_id].model_dump(), **changes})
+    return DB[wine_id]
+
+DB.clear()
+t = TestClient(api)
+cases = [
+    ("POST",   "/v1/wines",   {"name": "Barolo", "colour": "red", "alcohol": 14.0}, 201),
+    ("POST",   "/v1/wines",   {"name": "Barolo", "colour": "red", "alcohol": 14.0}, 409),
+    ("POST",   "/v1/wines",   {"name": "X", "colour": "green", "alcohol": 14.0}, 422),
+    ("GET",    "/v1/wines/1", None, 200),
+    ("GET",    "/v1/wines/9", None, 404),
+    ("PUT",    "/v1/wines/7", {"name": "Soave", "colour": "white", "alcohol": 12.0}, 201),
+    ("PUT",    "/v1/wines/7", {"name": "Soave", "colour": "white", "alcohol": 12.5}, 200),
+    ("PATCH",  "/v1/wines/7", {"alcohol": 13.0}, 200),
+    ("PATCH",  "/v1/wines/7", {"alcohol": 99}, 422),
+    ("PATCH",  "/v1/wines/7", {"name": "Barolo"}, 409),
+    ("PATCH",  "/v1/wines/8", {"alcohol": 13.0}, 404),
+    ("DELETE", "/v1/wines/7", None, 204),
+    ("DELETE", "/v1/wines/7", None, 404),
+]
+failures = 0
+for method, path, body, expected in cases:
+    r = t.request(method, path, json=body)
+    ok = r.status_code == expected
+    if method in ("POST", "PUT") and expected == 201:
+        ok &= r.headers.get("location") == f"/v1/wines/{r.json()['id']}"
+    if expected == 204:
+        ok &= r.content == b""
+    failures += not ok
+    print(f"{'ok  ' if ok else 'FAIL'} {method:6s} {path:12s} -> {r.status_code}")
+print("failures:", failures)
+```
+Each line is a test a CI pipeline can run in milliseconds, without a
+network. The design decisions worth noticing: `PUT` to a client-chosen URI is
+the idempotent way to create (retrying it is harmless), `POST` to the
+collection is the non-idempotent one; `PATCH` validates the *merged* state,
+not only the fields sent, so it cannot produce an invalid wine; 204 has no
+body. A common error is answering 200 with `{"error": ...}` in the body:
+every generic client, cache and monitoring tool then counts a failure as a
+success.
+:::
+
+::: {#exr-api1-endpoints-hard}
+## Hard — pagination that survives concurrent inserts
+Store 1 000 000 wines in SQLite (standard library), with an integer primary
+key. Implement `GET /v1/wines?limit=…&offset=…` and `GET
+/v1/wines?limit=…&after=…` (the latter with a `Link: <…>; rel="next"`
+header). (a) While a client walks the collection in pages of 100 items (the
+first 5 000 items), insert a new item at the front before each page and
+verify @thm-api-pagination: count duplicates and skips for both schemes.
+(b) Time the retrieval of a page deep in the collection (offset 900 000) with
+both schemes.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+To insert "at the front" of an ordering by ID, order by ID **descending**
+(newest first, as feeds do) and insert items with increasing IDs. For the
+keyset query on a descending order the condition is `id < ?`. Use
+`executemany` to fill the table quickly.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import sqlite3, threading
+from urllib.parse import urlencode
+
+conn = sqlite3.connect(":memory:", check_same_thread=False)
+conn.execute("CREATE TABLE wine (id INTEGER PRIMARY KEY, alcohol REAL)")
+conn.executemany("INSERT INTO wine VALUES (?, ?)", ((i, 11 + (i % 40) / 10) for i in range(1, 1_000_001)))
+db_lock = threading.Lock()
+
+pages = FastAPI()
+
+@pages.get("/v1/wines")
+def wines(response: Response, limit: int = 100, offset: int | None = None, after: int | None = None):
+    with db_lock:
+        if after is None:                                       # offset pagination (newest first)
+            rows = conn.execute("SELECT id, alcohol FROM wine ORDER BY id DESC LIMIT ? OFFSET ?",
+                                (limit, offset or 0)).fetchall()
+        else:                                                   # keyset pagination
+            rows = conn.execute("SELECT id, alcohol FROM wine WHERE id < ? ORDER BY id DESC LIMIT ?",
+                                (after, limit)).fetchall()
+    if after is not None or offset is None:
+        if len(rows) == limit:
+            response.headers["Link"] = f'</v1/wines?{urlencode({"limit": limit, "after": rows[-1][0]})}>; rel="next"'
+    return [{"id": i, "alcohol": a} for i, a in rows]
+
+pc = TestClient(pages)
+next_id = 1_000_001
+
+def insert_front():
+    global next_id
+    with db_lock:
+        conn.execute("INSERT INTO wine VALUES (?, 12.5)", (next_id,)); next_id += 1
+
+def walk(scheme, n_pages=50):
+    seen, url = [], "/v1/wines?limit=100&after=" + str(10 ** 9) if scheme == "keyset" else None
+    for p in range(n_pages):
+        if scheme == "offset":
+            r = pc.get("/v1/wines", params={"limit": 100, "offset": 100 * p})
+        else:
+            r = pc.get(url); url = r.headers["link"].split(">")[0][1:]
+        seen += [w["id"] for w in r.json()]
+        insert_front()                                          # someone inserts between two pages
+    return seen
+
+for scheme in ("offset", "keyset"):
+    first = next_id                                             # items inserted from now on are "new"
+    ids = walk(scheme)
+    old = [i for i in ids if i < first]
+    dup = len(old) - len(set(old))
+    expected = set(range(min(old), max(old) + 1))              # every pre-existing item in the range walked
+    print(f"{scheme:6s}: {len(ids)} items received, {dup} duplicates, {len(expected - set(old))} pre-existing items skipped")
+
+import time as _t
+queries = {"offset 900000": ("SELECT id, alcohol FROM wine ORDER BY id DESC LIMIT 100 OFFSET 900000", ()),
+           "keyset after id 100500": ("SELECT id, alcohol FROM wine WHERE id < ? ORDER BY id DESC LIMIT 100", (100_500,))}
+params = {"offset 900000": {"limit": 100, "offset": 900_000}, "keyset after id 100500": {"limit": 100, "after": 100_500}}
+for label, (sql, args) in queries.items():
+    s = _t.perf_counter()
+    for _ in range(20):
+        conn.execute(sql, args).fetchall()
+    q_ms = 1000 * (_t.perf_counter() - s) / 20
+    s = _t.perf_counter()
+    for _ in range(20):
+        pc.get("/v1/wines", params=params[label])
+    print(f"{label:24s}: query {q_ms:6.2f} ms, whole request {1000 * (_t.perf_counter() - s) / 20:6.1f} ms")
+```
+(a) With offsets, every insertion at the front shifts the collection by one,
+so each new page begins with the last item of the previous one: 49
+duplicates in 50 pages, exactly as part (i) of the theorem predicts (with
+deletions the error would be skips). With the keyset cursor no item is
+received twice. In both schemes no pre-existing item was skipped, as the
+theorem says for insertions (skips come from deletions); the new items,
+inserted before the cursor, are not part of the keyset traversal — a client
+that wants them starts again from the top, which the `Link` design makes
+explicit. (b) The deep offset query is far slower than the keyset query,
+because SQLite walks 900 000 index entries to skip them, while the keyset
+query seeks directly to the cursor in the primary-key index; through the whole
+API the ratio is smaller, since the fixed cost of a request (routing,
+validation, JSON) is added to both. The numbers depend on the machine; the
+ratio grows with the offset. Mistakes to avoid: keyset
+pagination on a non-unique key (ties at a page boundary get skipped), and
+exposing raw cursors that clients start to parse — make them opaque
+(e.g. base64 of the key) so that the server can change the scheme.
+:::
+
+## APIs in production: performance, limits and security {#sec-api-production}
+
+### Throughput, latency and Little's law
+
+Two numbers describe the performance of an API: **throughput** $\lambda$
+(requests completed per second) and **latency** $W$ (seconds from request to
+response). A third, often forgotten, ties them: the **concurrency** $L$, the
+number of requests in progress at a given moment — the number of open
+connections, of busy worker threads, of pods needed.
+
+::: {#thm-api-little}
+## Little's law on a finite interval
+Observe a system during $[0, T]$, empty at both ends. Let $A$ be the number of
+requests that arrived (and left) in the interval, $W_i$ the time request $i$
+spent in the system, $N(t)$ the number in the system at time $t$, and define
+the averages $L = \frac1T\int_0^TN(t)\,dt$, $\lambda = A/T$ and $W =
+\frac1A\sum_iW_i$. Then
+$$
+L = \lambda W .
+$$ {#eq-api-little}
+:::
+
+*In one line:* the average number of requests in flight equals the arrival
+rate times the average time each one stays — no assumption on distributions,
+arrival patterns or service order.
+
+::: {.deep kind="proof"}
+## Proof of @thm-api-little
+Write $N(t) = \sum_i\mathbb 1\{a_i \le t < d_i\}$, with $a_i$ and $d_i$ the
+arrival and departure times of request $i$. Integrating over $[0, T]$ and
+exchanging sum and integral (finitely many terms),
+$\int_0^TN(t)\,dt = \sum_i(d_i - a_i) = \sum_iW_i$, because every request lies
+entirely inside the interval. Dividing by $T$: $L = \frac1T\sum_iW_i =
+\frac AT\cdot\frac1A\sum_iW_i = \lambda W$. $\blacksquare$
+
+Little proved the law in 1961 for stationary queues in the limit $T \to
+\infty$ [@little1961]; this "sample-path" version, exact for every finite
+interval that starts and ends empty, is due to Stidham, who also showed that
+the long-run law follows from it under mild conditions [@stidham1974].
+:::
+
+The law sizes a service: at 200 requests per second with 150 ms of latency,
+$L = 200 \times 0.15 = 30$ requests are in progress on average, so a server
+with 8 worker threads cannot keep up, whatever its CPU; and if latency
+doubles under load, so does the concurrency needed.
+
+### The tail at scale
+
+Averages hide the **tail** of the latency distribution: the 99th percentile
+(p99) is the latency exceeded by one request in a hundred. The tail matters
+more than its frequency suggests, because one user action often **fans out**
+to many requests — a page that calls ten APIs, a prediction that queries a
+hundred feature shards.
+
+::: {#prp-api-tail}
+## Fan-out amplifies the tail
+If a response requires answers from $n$ servers, each slow independently with
+probability $q$, the response is slow with probability
+$$
+1 - (1 - q)^n \ \ge\ 1 - e^{-nq}.
+$$ {#eq-api-tail}
+:::
+
+*In one line:* with 100 servers each slow 1 % of the time, 63 % of the
+responses are slow — a rare event per server becomes the common case for the
+user.
+
+::: {.deep kind="proof"}
+## Proof of @prp-api-tail
+The response is fast only if all $n$ answers are fast, with probability $(1 -
+q)^n$ by independence. Since $1 - q \le e^{-q}$ (convexity of the exponential),
+$(1 - q)^n \le e^{-nq}$, which gives the inequality. Dean and Barroso
+popularised the computation and the remedies — hedged requests (send a second
+copy after the p95 delay, use the first answer), tied requests, micro-
+partitioning [@dean2013]. $\blacksquare$
+:::
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof tailQ = Inputs.range([0.001, 0.1], {value: 0.01, step: 0.001, label: "P(one server is slow)"})
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-api-tail-widget
+//| fig-cap: "Probability that a request fanning out to n servers is slow (@eq-api-tail), for the chosen per-server probability. The dashed line marks one request in two."
+Plot.plot({
+  height: 240, width: 520, x: {type: "log", label: "fan-out n (servers per request)", domain: [1, 1000]},
+  y: {domain: [0, 1], label: "P(request is slow)", grid: true},
+  marks: [Plot.line(d3.range(0, 3.001, 0.02).map(e => ({n: 10 ** e, p: 1 - (1 - tailQ) ** (10 ** e)})),
+                    {x: "n", y: "p", stroke: "#2a78d6", strokeWidth: 2}),
+          Plot.ruleY([0.5], {stroke: "#eb6834", strokeDasharray: "4,3"})]
+})
+```
+:::
+
+### Rate limiting
+
+A public API must protect itself — and its other clients — from a client
+that sends too much, by mistake or on purpose. The standard tool is the
+**token bucket**: a bucket holds at most $b$ tokens and is refilled at $r$
+tokens per second; each request takes a token, and a request that finds the
+bucket empty is rejected [@tanenbaum2011, §5.4]. The client is told so with
+**429 Too Many Requests** [@rfc6585, §4], ideally with a `Retry-After`
+header saying how many seconds to wait [@rfc9110, §10.2.3].
+
+::: {#thm-api-token-bucket}
+## The token bucket bounds every interval
+A token bucket with capacity $b$ and rate $r$ admits at most $b + rt$ requests
+in **any** interval of length $t$; and a client that sends at a steady rate
+$\le r$ is never rejected once the bucket is full.
+:::
+
+*In one line:* $b$ is the largest burst, $r$ the long-run rate — whatever the
+client does, it cannot exceed both at once.
+
+::: {.deep kind="proof"}
+## Proof of @thm-api-token-bucket
+Let $B(s)$ be the number of tokens at time $s$. In an interval $[s, s + t]$ the
+tokens available are those in the bucket at the start, $B(s) \le b$, plus
+those added, at most $rt$ (fewer if the bucket was full for part of the
+interval). Each admitted request consumes one token and the count never goes
+negative, so the admitted requests are at most $b + rt$. For the second
+claim: a client that sends one request every $1/r'$ seconds with $r' \le r$
+receives at least one new token between consecutive requests, so the bucket,
+full at the start, never empties. $\blacksquare$
+:::
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof tbB = Inputs.range([1, 30], {value: 10, step: 1, label: "capacity b (tokens)"})
+```
+
+```{ojs}
+//| echo: false
+viewof tbR = Inputs.range([1, 20], {value: 5, step: 1, label: "refill rate r (tokens/s)"})
+```
+
+```{ojs}
+//| echo: false
+tbSim = {
+  // a client that sends 20 req/s for 2 s, pauses 3 s, then 3 req/s; one tick = 50 ms
+  const out = []; let tokens = tbB, admitted = 0;
+  for (let i = 0; i < 200; i++) {
+    const t = i * 0.05; tokens = Math.min(tbB, tokens + tbR * 0.05);
+    const rate = t < 2 ? 20 : t < 5 ? 0 : 3;
+    const sent = Math.floor((t + 0.05) * rate) - Math.floor(t * rate);
+    let ok = 0;
+    for (let k = 0; k < sent; k++) if (tokens >= 1) { tokens -= 1; ok++; }
+    admitted += ok;
+    out.push({t, sent: admitted + 0, bound: tbB + tbR * (t + 0.05), tokens});
+  }
+  return out;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-api-token-widget
+//| fig-cap: "Cumulative requests admitted by a token bucket (blue) for a client that sends 20 requests per second for 2 s, pauses 3 s and then sends 3 per second, against the bound b + r t of @thm-api-token-bucket from time 0 (dashed). The burst is cut at about b plus what the refill allows; after the pause the slow client is never rejected when r ≥ 3."
+Plot.plot({
+  height: 260, width: 560, x: {label: "time (s)"}, y: {label: "requests admitted (cumulative)", grid: true},
+  marks: [Plot.line(tbSim, {x: "t", y: "sent", stroke: "#2a78d6", strokeWidth: 2}),
+          Plot.line(tbSim, {x: "t", y: "bound", stroke: "#eb6834", strokeDasharray: "4,3"})]
+})
+```
+:::
+
+### Security basics
+
+Every public endpoint is attacked; the minimum is a short list.
+
+- **HTTPS**, always: HTTP over TLS [@rfc8446] encrypts requests and
+  responses, protects them from modification and authenticates the server by
+  its certificate. Without it, API keys and data travel in clear text.
+- **Authentication** — who is calling. An **API key** identifies a client
+  application (a random secret sent in a header such as `X-API-Key`); a
+  **bearer token** (`Authorization: Bearer …` [@rfc6750]), typically issued by
+  an OAuth 2.0 authorisation server [@rfc6749], identifies a user or a service
+  and expires. Credentials go in headers, **never in URLs**, which end up in
+  logs, browser histories and `Referer` headers. Compare secrets with a
+  constant-time function (`hmac.compare_digest`), so that response times do
+  not leak how many characters matched.
+- **Authorisation** — what the caller may do: check it at every endpoint,
+  on every object (the classic hole is `GET /orders/{id}` returning *any*
+  user's order).
+- **Input limits**: maximum body size, maximum page size, timeouts, rate
+  limits — the defences the server of @exr-api1-http-hard lacked.
+- **CORS** (cross-origin resource sharing) is a rule of **browsers**, not a
+  security mechanism of the server: a web page from `https://a.example` may
+  read responses of `https://api.example` only if the API answers with
+  `Access-Control-Allow-Origin` allowing that origin [@whatwg2026fetch].
+  It protects users' browsers from malicious pages; it does not stop a
+  script or `curl`, so it never replaces authentication.
+- **Request signing** with a keyed hash (HMAC [@rfc2104]) proves that a
+  request was produced by the holder of a key and not modified, even through
+  intermediaries; with a timestamp and a nonce it also defeats replays
+  (@exr-api1-hmac).
+
+### Practice {.unnumbered}
+
+::: {#exr-api1-production-easy}
+## Easy — Little and the fan-out
+(a) A prediction API receives 300 requests per second with an average latency
+of 80 ms. How many requests are in progress on average? If each worker
+handles one request at a time, how many workers are needed at the minimum, and
+why should one provision more? (b) A page calls 20 back-end APIs in parallel,
+each with p99 latency of 500 ms (i.e. slower than 500 ms 1 % of the time,
+independently). What fraction of page loads wait more than 500 ms? How small
+must the per-API probability be for the page's p99 to stay below 500 ms?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+(a) is @eq-api-little. For (b), solve $1 - (1 - q)^{20} \le 0.01$ for $q$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+lam, W = 300, 0.080
+print(f"(a) L = {lam * W:.0f} requests in progress on average")
+q, n = 0.01, 20
+print(f"(b) P(page slow) = {1 - (1 - q) ** n:.3f}; per-API probability needed: q <= {1 - 0.99 ** (1 / n):.5f}")
+```
+(a) $L = 300 \times 0.08 = 24$: at least 24 workers, and more in practice,
+because 24 is an *average* — arrivals are bursty and latency grows when the
+workers are saturated (queueing), so with exactly 24 the queue would grow
+without bound whenever a burst arrives. (b) About 18 % of the page loads are
+slow although every API is "fast 99 % of the time"; to keep the page's p99 at
+500 ms each API must be slow less than about 0.05 % of the time — its p99.95.
+The usual mistake is to set per-service latency objectives without accounting
+for the fan-out of the callers.
+:::
+
+::: {#exr-api1-production-medium}
+## Medium — a token-bucket middleware
+Write a FastAPI middleware that applies a token bucket per API key (header
+`X-API-Key`) and answers 429 with `Retry-After` when the bucket is empty.
+Make the clock injectable, and test with a fake clock that (a) a burst of 50
+requests at time 0 admits exactly $b$, (b) in every window of length $t$ the
+admitted requests never exceed $b + rt$ for a client sending at random times,
+(c) a client sending steadily at rate $r$ is never rejected.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Store, per key, the number of tokens and the time of the last update; on each
+request add $r \times$ (elapsed time), cap at $b$, then take a token if one
+is there. `Retry-After` is the time until the next token, rounded up. For
+(b), check the bound on all windows whose start and end are request times.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+class TokenBucket(BaseHTTPMiddleware):
+    def __init__(self, app, rate, capacity, clock):
+        super().__init__(app)
+        self.rate, self.capacity, self.clock, self.buckets = rate, capacity, clock, {}
+
+    async def dispatch(self, request, call_next):
+        key = request.headers.get("x-api-key", "anonymous")
+        now = self.clock()
+        tokens, last = self.buckets.get(key, (self.capacity, now))
+        tokens = min(self.capacity, tokens + self.rate * (now - last))      # refill since last request
+        if tokens < 1:
+            self.buckets[key] = (tokens, now)
+            wait = math.ceil((1 - tokens) / self.rate)
+            return JSONResponse({"detail": "rate limit exceeded"}, status_code=429,
+                                headers={"Retry-After": str(wait)})
+        self.buckets[key] = (tokens - 1, now)
+        return await call_next(request)
+
+fake_now = [0.0]
+limited = FastAPI()
+limited.add_middleware(TokenBucket, rate=5.0, capacity=10, clock=lambda: fake_now[0])
+
+@limited.get("/ping")
+def ping():
+    return {"ok": True}
+
+lc = TestClient(limited)
+def call(t, key="k1"):
+    fake_now[0] = t
+    return lc.get("/ping", headers={"X-API-Key": key})
+
+codes = [call(0.0, "burst").status_code for _ in range(50)]
+print("(a) burst of 50 at t=0:", codes.count(200), "admitted; Retry-After:", call(0.0, "burst").headers["retry-after"])
+
+times = np.sort(np.random.default_rng(1).uniform(0, 20, 400))      # 400 requests in 20 s (20/s on average)
+ok = np.array([call(t, "random").status_code == 200 for t in times])
+adm = times[ok]
+worst = max(np.sum((adm >= s) & (adm <= e)) - (10 + 5 * (e - s)) for s in adm for e in adm if e >= s)
+print(f"(b) random client: {ok.sum()} of {len(times)} admitted; max over windows of admitted - (b + r t) = {worst:.2f} (<= 0)")
+
+steady = [call(t, "steady").status_code for t in np.arange(0, 20, 0.2)]   # exactly r = 5 per second
+print("(c) steady client at rate r:", steady.count(429), "rejections")
+```
+The burst gets exactly the bucket's 10 tokens; the random client, sending four
+times the allowed rate, gets about $b + 20r = 110$ of its 400 requests through
+and never more than $b + rt$ in any window; the steady client is never
+rejected. The fake clock makes the test deterministic — testing rate limits
+with real `sleep` calls gives slow and flaky tests. In production the buckets
+must live in a store shared by all replicas (Redis is common), keyed by
+authenticated identity rather than IP address, and the limiter should sit as
+early as possible (gateway) so that rejected requests cost almost nothing.
+:::
+
+::: {#exr-api1-production-hard}
+## Hard — a load test that checks Little's law
+Serve an endpoint that simulates a model taking about 20 ms per prediction
+(an `await asyncio.sleep`) with uvicorn, and drive it with an asynchronous
+httpx client at several concurrency levels (number of requests kept in flight).
+Measure throughput, mean latency and the p50/p95/p99 latencies; record the
+number of requests in flight over time and check $L = \lambda W$. What
+happens to latency when the server is limited to 8 concurrent requests and the
+clients keep 32 in flight?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Keep $c$ client tasks, each looping "send, wait for the response" for a fixed
+duration; record arrival and departure times of every request. $L$ is the
+time average of the in-flight count, computed from those times. To limit the
+server, put an `asyncio.Semaphore(8)` around the simulated work.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+ab.write("slow_model.py", '''
+    import asyncio, os
+    from fastapi import FastAPI
+    app = FastAPI()
+    LIMIT = int(os.environ.get("LIMIT", "0"))
+    sem = asyncio.Semaphore(LIMIT) if LIMIT else None
+
+    async def work():
+        await asyncio.sleep(0.02)                     # stands for 20 ms of model inference
+
+    @app.post("/predict")
+    async def predict(x: dict):
+        if sem:
+            async with sem:
+                await work()
+        else:
+            await work()
+        return {"y": 1}
+''')
+import asyncio
+
+async def load(base, concurrency, duration=4.0):
+    events = []                                                 # (arrival, departure) of each request
+    async with httpx.AsyncClient(base_url=base, limits=httpx.Limits(max_connections=concurrency)) as c:
+        end = time.perf_counter() + duration
+        async def worker():
+            while time.perf_counter() < end:
+                a = time.perf_counter()
+                await c.post("/predict", json={"x": 1})
+                events.append((a, time.perf_counter()))
+        await asyncio.gather(*(worker() for _ in range(concurrency)))
+    return np.array(events)
+
+def little(events):
+    a, d = events[:, 0], events[:, 1]
+    T0, T1 = a.min(), d.max()
+    lam = len(a) / (T1 - T0)
+    W = np.mean(d - a)
+    L = np.sum(d - a) / (T1 - T0)                              # time-average in-flight count = area / length
+    return lam, W, L
+
+from concurrent.futures import ThreadPoolExecutor
+
+def run_async(coro):
+    """Run a coroutine in a fresh event loop in another thread (Jupyter already runs one here)."""
+    with ThreadPoolExecutor(1) as ex:
+        return ex.submit(asyncio.run, coro).result()
+
+def run_load(concurrency, limit=0):
+    with ab.server("slow_model:app", env={"LIMIT": str(limit)}) as base:
+        run_async(load(base, 2, 0.5))                           # warm-up
+        return run_async(load(base, concurrency))
+
+rows = []
+for conc, limit in ((1, 0), (8, 0), (32, 0), (32, 8)):
+    ev = run_load(conc, limit)
+    lam, W, L = little(ev)
+    p50, p95, p99 = np.percentile(ev[:, 1] - ev[:, 0], [50, 95, 99]) * 1000
+    rows.append((conc, limit or "none", lam, 1000 * W, p50, p95, p99, L, lam * W))
+print(f"{'clients':>7} {'limit':>5} {'req/s':>7} {'W ms':>6} {'p50':>6} {'p95':>6} {'p99':>6} {'L':>6} {'lam*W':>6}")
+for r in rows:
+    print(f"{r[0]:7d} {str(r[1]):>5} {r[2]:7.0f} {r[3]:6.1f} {r[4]:6.1f} {r[5]:6.1f} {r[6]:6.1f} {r[7]:6.2f} {r[8]:6.2f}")
+```
+$L$ and $\lambda W$ agree to the last digit, as they must: on the measured
+interval the law is an identity (@thm-api-little), and computing $L$ from the
+recorded times is exactly its proof. The informative part is how the three
+quantities move. From 1 to 8 clients the throughput grows almost eightfold at
+nearly constant latency: the "model" only waits, so concurrency is free. At 32
+clients throughput still grows, but the mean latency rises by more than half
+and the tail lengthens (p99 near 200 ms), because client and server now
+compete for the machine's two CPUs — the
+bottleneck has moved from waiting to computing. With a limit of 8 concurrent
+requests the throughput stops just below $8/0.02 = 400$ per second and the
+extra concurrency turns into **queueing**: latency grows by the factor
+$32/8$, as Little's law predicts for a fixed throughput. Numbers depend
+on the machine (client and server share its CPUs). Mistakes to avoid:
+measuring latency with a client that cannot keep the intended concurrency
+(the client becomes the bottleneck — check that $L$ matches the number of
+tasks), and reporting only the mean.
+:::
+
+::: {.project-link}
+**In the projects.** This course has no final project; the natural
+application is to give the models of the earlier parts an API.
+
+- The **$k$-NN fruit classifier of Part IV** (@sec-ch-mla-project) is a
+  scikit-learn pipeline (scaler + `KNeighborsClassifier`) on five
+  measurements. Saved with `joblib.dump` after training, it is served by a few
+  lines of FastAPI whose Pydantic model *is* the input validation the project
+  asked to think about — impossible values are rejected before the model sees
+  them:
+  ```python
+  class Fruit(BaseModel):
+      weight_g: float = Field(gt=0, le=2000)
+      diameter_mm: float = Field(gt=0, le=300)
+      length_mm: float = Field(gt=0, le=300)
+      peel_hardness: float = Field(ge=1, le=10)
+      sweetness: float = Field(ge=1, le=10)
+
+  model = joblib.load("fruit-knn.joblib")
+
+  @app.post("/v1/fruits/classify")
+  def classify(fruits: list[Fruit]):
+      X = [[f.weight_g, f.diameter_mm, f.length_mm, f.peel_hardness, f.sweetness] for f in fruits]
+      return {"labels": model.predict(X).tolist(), "model_version": "1"}
+  ```
+  The radius-neighbours variant of @sec-ch-mla-knn could return a 422 or an
+  explicit `"unknown"` for fruits unlike any seen in training.
+- The **phone book of Part I** maps onto resources directly — `/contacts`,
+  `/contacts/{id}` — with `If-Match` to stop two devices from overwriting
+  each other's edits (@thm-api-lost-update), and keyset pagination for long
+  lists.
+- The **CRM of Part II** exposes customers and interactions as collections;
+  its C++ core can stay as it is behind a Python API process, talking over a
+  pipe as in @sec-ch-cpp-python, or be rewritten as a service.
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Verbs in URLs** and `GET` requests that change state.
+- **200 with an error in the body**: use the status code; reserve the body for
+  details (@exr-api1-problem).
+- **Blind retries of `POST`**: duplicates. Use idempotency keys
+  (@exr-api1-methods-medium).
+- **Retries without backoff and jitter**: retry storms (@prp-api-jitter).
+- **Read–modify–write without `If-Match`**: lost updates
+  (@thm-api-lost-update).
+- **Offset pagination on changing data**: duplicates and skips
+  (@thm-api-pagination).
+- **No limits**: body size, page size, timeouts, rate.
+- **Secrets in URLs**, comparisons of secrets with `==`, CORS mistaken for
+  security.
+- **Mean latency only**: look at p95/p99 and at the fan-out.
+- **Breaking changes without a new version** — renaming a field breaks every
+  client.
+:::
+
+## Summary
+
+- An API is a contract; a web API is a contract over HTTP: methods, URIs,
+  headers, status codes, representations (usually JSON).
+- Safe methods change nothing; idempotent ones can be repeated ($f^n = f$).
+  With independent failures $n$ attempts succeed with probability $1 - (1 -
+  p)^n$; at-least-once delivery plus idempotent handlers gives exactly-once
+  effects (if duplicates do not interleave with other writes); idempotency
+  keys make `POST` safe to retry; exponential backoff with jitter prevents
+  retry storms.
+- REST constrains interactions to stateless, cacheable requests on resources
+  through a uniform interface. Caches compute an age that never underestimates
+  the true one; `ETag` with `If-None-Match` saves transfers, with `If-Match`
+  prevents lost updates.
+- Endpoints are method + URI template + contract: nouns, collections and
+  items, correct status codes (201 + `Location`, 204, 404, 409, 412, 422),
+  validation from types (Pydantic, JSON Schema 2020-12), documentation as
+  OpenAPI, errors as RFC 9457 problem details, keyset pagination.
+- In production: $L = \lambda W$ sizes concurrency; fan-out turns rare slow
+  responses into common ones ($1 - (1 - q)^n$); a token bucket admits at most
+  $b + rt$ in any interval of length $t$; HTTPS, authentication in headers,
+  authorisation per object, limits, and CORS for what it is.
+
+## Exercises
+
+::: {#exr-api1-model-service}
+**The model as a service, in a container.** Turn the wine classifier of
+Part V into a proper API: `POST /v1/predict` accepting a list of 1–1 000 wines,
+each with 13 finite measurements (reject anything else with 422), returning
+the classes and the model version; `GET /v1/health`; `GET /v1/version`.
+Write tests with `TestClient`. Then package it with the techniques of
+@sec-ch-ctr-containers — model trained at build time, non-root user, exec
+form, uvicorn — build the image, run it with a published port, and call it
+with `curl` from the host.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The application, written so that it can be tested in-process and run
+unchanged in the container:
+```{python}
+service = ab.write("service/app.py", '''
+    """Wine classifier as an HTTP API (FastAPI)."""
+    import json, math
+    from typing import Annotated
+    import joblib
+    from fastapi import FastAPI
+    from pydantic import BaseModel, Field, field_validator
+
+    MODEL = joblib.load("model.joblib")
+    with open("model.json") as f:
+        META = json.load(f)
+
+    Measurements = Annotated[list[float], Field(min_length=13, max_length=13)]
+
+    class PredictRequest(BaseModel):
+        wines: Annotated[list[Measurements], Field(min_length=1, max_length=1000)]
+
+        @field_validator("wines")
+        @classmethod
+        def finite(cls, wines):
+            if not all(math.isfinite(v) for w in wines for v in w):
+                raise ValueError("measurements must be finite numbers")
+            return wines
+
+    class PredictResponse(BaseModel):
+        classes: list[int]
+        model_version: str
+
+    app = FastAPI(title="Wine classifier", version=META["version"])
+
+    @app.get("/v1/health")
+    def health():
+        return {"status": "ok"}
+
+    @app.get("/v1/version")
+    def version():
+        return META
+
+    @app.post("/v1/predict", response_model=PredictResponse)
+    def predict(req: PredictRequest):
+        return {"classes": MODEL.predict(req.wines).tolist(), "model_version": META["version"]}
+''')
+```
+Tests, with a model trained on the host exactly as `train.py` does in the
+image:
+```{python}
+import importlib, os
+from sklearn.datasets import load_wine
+sys.path.insert(0, str(ab.ROOT / "containers"))
+import ctrbook as cb
+
+svc_dir = ab.WORK / "service"
+(svc_dir / "train.py").write_text(cb.TRAIN_PY)
+subprocess.run([sys.executable, "train.py"], cwd=svc_dir, check=True, capture_output=True)
+cwd = os.getcwd(); os.chdir(svc_dir)
+sys.path.insert(0, str(svc_dir)); sys.modules.pop("app", None)
+svc = importlib.import_module("app")
+os.chdir(cwd)
+
+tc = TestClient(svc.app)
+Xw, yw = load_wine(return_X_y=True)
+checks = {
+    "health": tc.get("/v1/health").json() == {"status": "ok"},
+    "version": tc.get("/v1/version").json()["model"] == "wine-logreg",
+    "predict 3 wines": tc.post("/v1/predict", json={"wines": Xw[[0, 70, 150]].tolist()}).json()["classes"] == [0, 1, 2],
+    "12 values -> 422": tc.post("/v1/predict", json={"wines": [[1.0] * 12]}).status_code == 422,
+    "empty list -> 422": tc.post("/v1/predict", json={"wines": []}).status_code == 422,
+    "1001 wines -> 422": tc.post("/v1/predict", json={"wines": [[1.0] * 13] * 1001}).status_code == 422,
+    "text -> 422": tc.post("/v1/predict", json={"wines": [["a"] * 13]}).status_code == 422,
+}
+print(checks, "all passed:", all(checks.values()))
+```
+The image reuses the Dockerfile pattern of @sec-ctr-build:
+```{python}
+#| output: asis
+d = cb.project("wine-api")
+for name, text in (("requirements.txt", cb.REQUIREMENTS + "fastapi==0.163.1\nuvicorn==0.54.0\n"),
+                   ("train.py", cb.TRAIN_PY), ("app.py", (svc_dir / "app.py").read_text())):
+    (d / name).write_text(text)
+cb.show(d, "Dockerfile", """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    COPY train.py .
+    RUN python train.py
+    COPY app.py .
+    USER 10001
+    EXPOSE 8000
+    CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+""")
+cb.build(d, "local/wine-api:1", table=False)
+cb.run("docker rm -f wine-api >/dev/null 2>&1")
+cb.sh("docker run -d --name wine-api -p 8081:8000 local/wine-api:1")
+for _ in range(50):                                         # wait until uvicorn listens
+    if cb.run("curl -s localhost:8081/v1/health").stdout:
+        break
+    time.sleep(0.2)
+cb.sh("curl -s localhost:8081/v1/version")
+cb.sh("curl -s -X POST localhost:8081/v1/predict -H 'Content-Type: application/json' "
+      "-d '{\"wines\": [[13.2, 1.78, 2.14, 11.2, 100, 2.65, 2.76, 0.26, 1.28, 4.38, 1.05, 3.4, 1050]]}'")
+cb.sh("curl -s -o /dev/null -w '%{http_code}\\n' -X POST localhost:8081/v1/predict "
+      "-H 'Content-Type: application/json' -d '{\"wines\": [[1, 2, 3]]}'")
+_s = time.perf_counter(); cb.run("docker stop wine-api"); _stop = time.perf_counter() - _s
+_code = cb.run("docker inspect -f '{{.State.ExitCode}}' wine-api").stdout.strip()
+print(cb._output_block(f"docker stop took {_stop:.1f} s, exit code {_code}"))
+cb.quiet("docker rm wine-api")
+```
+The validation lives in the types: wrong lengths, empty or oversized batches,
+non-numbers and non-finite values never reach the model, and the client gets a
+422 that says which field is wrong. The tests run in milliseconds without a
+network or a container; the same code then runs in the image as an
+unprivileged user, and uvicorn handles `SIGTERM` gracefully, so `docker stop`
+returns at once (@sec-ctr-run). Training at build time binds the model to the
+image: the image digest identifies code *and* model, and a new model is a new
+image rolled out as in @sec-ctr-k8s.
+:::
+
+::: {#exr-api1-problem}
+**Errors as problem details.** Make every error of the wine catalogue API —
+validation errors (422), `HTTPException`s and unexpected exceptions (500) —
+return an RFC 9457 document with media type `application/problem+json` and
+the members `type`, `title`, `status`, `detail`, `instance`, plus an `errors`
+extension listing the invalid fields for 422. Unexpected exceptions must not
+leak internals.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+def problem(status_code, title, detail, instance, type_="about:blank", **extra):
+    body = {"type": type_, "title": title, "status": status_code, "detail": detail, "instance": instance, **extra}
+    return JSONResponse(body, status_code=status_code, media_type="application/problem+json")
+
+papi = FastAPI(title="Wine catalogue", version="1.1")
+papi.include_router(api.router)                                # same endpoints, new error handling
+
+@papi.exception_handler(StarletteHTTPException)
+async def http_problem(request, exc):
+    return problem(exc.status_code, HTTPStatus(exc.status_code).phrase, str(exc.detail), request.url.path)
+
+@papi.exception_handler(RequestValidationError)
+async def validation_problem(request, exc):
+    errors = [{"field": ".".join(str(p) for p in e["loc"][1:]), "message": e["msg"]} for e in exc.errors()]
+    return problem(422, "Invalid request", f"{len(errors)} invalid field(s)", request.url.path,
+                   type_="https://api.example.com/problems/validation", errors=errors)
+
+@papi.exception_handler(Exception)
+async def unexpected_problem(request, exc):
+    return problem(500, "Internal Server Error", "an unexpected error occurred; it has been logged", request.url.path)
+
+@papi.get("/v1/boom")
+def boom():
+    raise RuntimeError("database password is hunter2")         # must not reach the client
+
+pt = TestClient(papi, raise_server_exceptions=False)
+for r in (pt.get("/v1/wines/999"), pt.post("/v1/wines", json={"name": "", "colour": "blue", "alcohol": 3}),
+          pt.get("/v1/boom")):
+    print(r.status_code, r.headers["content-type"], json.dumps(r.json()))
+```
+Clients now handle all errors with one parser: switch on `status` and `type`,
+show `detail` to people, use `errors` to highlight fields. The 500 handler is
+as important as the others: FastAPI's default answer to an unhandled exception is a bare
+`Internal Server Error` in plain text, which clients cannot parse as JSON,
+and frameworks configured for debugging return tracebacks — never in
+production. Note that exception handlers must be registered before the
+application serves its first request: FastAPI builds its middleware stack
+once, which is why this solution creates a new application around the same
+routes instead of adding handlers to the one already exercised above. A `type` URI should point to human-readable documentation of the
+problem; `about:blank` means "nothing more than the status code".
+:::
+
+::: {#exr-api1-hmac}
+**Signed requests.** A client and a server share a secret key. Design a
+signature for requests: an HMAC-SHA256 over the method, the path, a
+timestamp, a random nonce and the SHA-256 of the body, sent in headers. The
+server rejects (401) a request whose signature is wrong, whose timestamp is
+more than 5 minutes from its clock, or whose nonce was already seen. Show that
+a modified body, an old request replayed later, and a fresh request replayed
+immediately are all rejected — and explain why the timestamp alone and the
+nonce alone are not enough.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import hmac, secrets
+
+KEY = b"shared-secret-key-for-the-example"
+
+def sign(method, path, body: bytes, ts: int, nonce: str) -> str:
+    msg = "\n".join([method, path, str(ts), nonce, hashlib.sha256(body).hexdigest()]).encode()
+    return hmac.new(KEY, msg, hashlib.sha256).hexdigest()
+
+signed = FastAPI()
+seen_nonces: dict[str, int] = {}
+server_clock = [1_800_000_000]                                  # injectable clock (seconds)
+
+@signed.middleware("http")
+async def verify(request, call_next):
+    body = await request.body()
+    try:
+        ts, nonce, sig = int(request.headers["x-timestamp"]), request.headers["x-nonce"], request.headers["x-signature"]
+    except (KeyError, ValueError):
+        return JSONResponse({"detail": "missing signature headers"}, status_code=401)
+    expected = sign(request.method, request.url.path, body, ts, nonce)
+    if not hmac.compare_digest(expected, sig):                  # constant-time comparison
+        return JSONResponse({"detail": "bad signature"}, status_code=401)
+    if abs(server_clock[0] - ts) > 300:
+        return JSONResponse({"detail": "timestamp outside the 5-minute window"}, status_code=401)
+    for n, t in list(seen_nonces.items()):                      # forget nonces older than the window
+        if server_clock[0] - t > 300:
+            del seen_nonces[n]
+    if nonce in seen_nonces:
+        return JSONResponse({"detail": "replayed request"}, status_code=401)
+    seen_nonces[nonce] = ts
+    return await call_next(request)
+
+@signed.post("/v1/transfers")
+async def transfer(request: Request):
+    return {"accepted": json.loads(await request.body())}
+
+st = TestClient(signed)
+def send(body: dict, ts=None, nonce=None, tamper=None):
+    raw = json.dumps(body).encode()
+    ts = server_clock[0] if ts is None else ts
+    nonce = nonce or secrets.token_hex(16)
+    headers = {"X-Timestamp": str(ts), "X-Nonce": nonce, "X-Signature": sign("POST", "/v1/transfers", raw, ts, nonce),
+               "Content-Type": "application/json"}
+    return st.post("/v1/transfers", content=tamper or raw, headers=headers), (raw, ts, nonce, headers)
+
+r, (raw, ts, nonce, headers) = send({"to": "IT60X0542811101000000123456", "eur": 100})
+print("genuine request:          ", r.status_code)
+print("body modified in transit: ", send({"eur": 100}, tamper=b'{"eur": 100000}')[0].status_code)
+print("immediate replay:         ", st.post("/v1/transfers", content=raw, headers=headers).status_code)
+server_clock[0] += 3600
+print("replay one hour later:    ", st.post("/v1/transfers", content=raw, headers=headers).status_code)
+```
+The HMAC proves that the request was produced by a holder of the key and has
+not been changed: any change of method, path, body, timestamp or nonce
+changes the signature [@rfc2104]. A **timestamp alone** limits replays to the
+acceptance window, but within those five minutes an attacker who captured a
+request can resend it as often as they like. A **nonce alone** stops
+repetitions, but the server would have to remember every nonce for ever
+(otherwise an old request becomes valid again once its nonce is forgotten).
+Together: the timestamp bounds the time window, and the nonce store needs to
+cover only that window. Signing does not encrypt — use HTTPS as well — and the
+canonical form of the signed message must be specified exactly (order of
+fields, encoding of the body), or client and server will compute different
+signatures for the same request.
+:::
+
+## Further reading {.unnumbered}
+
+- @fielding2000, ch. 5 (REST: the constraints and the properties they induce)
+  and ch. 6 (experience with the Web's design).
+- @rfc9110 — HTTP semantics: §9 (methods, safe and idempotent), §13
+  (conditional requests), §15 (status codes); @rfc9111 §4 (freshness, age
+  calculation, validation); @rfc9112 for the HTTP/1.1 message syntax;
+  @rfc3986 for URIs; @rfc8259 for JSON.
+- @rfc9457 (problem details), @rfc8288 (web linking), @rfc6585 (429),
+  @jena2025 (idempotency keys).
+- @openapi2025 and @wright2022 — OpenAPI 3.2 and JSON Schema 2020-12;
+  @ramirez2026 and @pydantic2026 for FastAPI and Pydantic; @christie2026 for
+  httpx.
+- @brooker2015 — backoff and jitter, with simulations; @kleppmann2017, ch. 8
+  and 11 — unreliable networks, idempotence and exactly-once semantics.
+- @little1961 and @stidham1974 — Little's law and its sample-path proof;
+  @dean2013 — the tail at scale; @tanenbaum2011, §5.4 — traffic shaping and
+  the token bucket.
+- @winand2012 — why `OFFSET` is slow and how keyset pagination works.
+- @rfc8446 (TLS 1.3), @rfc6749 and @rfc6750 (OAuth 2.0 and bearer tokens),
+  @rfc2104 (HMAC), @whatwg2026fetch (CORS).

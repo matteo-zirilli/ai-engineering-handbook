@@ -1,0 +1,7 @@
+jupyter: python3
+# Part V: ordinary Python cells. Most cells call containers/ctrbook.py, which
+# writes Dockerfiles, sources and manifests to a temporary directory, runs
+# docker / kubectl, and prints Markdown (files, command, masked output); those
+# cells are hidden and declare `output: asis`. Cells with Python the reader
+# should see (inspectors, simulations, solutions) are shown as usual.
+# Re-executing needs root, a running Docker daemon and k3s (see CLAUDE.md).

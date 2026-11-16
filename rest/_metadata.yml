@@ -1,0 +1,5 @@
+jupyter: python3
+# Part VI: ordinary Python cells, shown with their outputs. Servers run on
+# 127.0.0.1 only (in-process with FastAPI's TestClient, or uvicorn started by
+# rest/apibook.py); no public service is contacted. The final exercise builds
+# a container image through containers/ctrbook.py (needs Docker, as Part V).

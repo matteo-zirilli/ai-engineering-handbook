@@ -1120,7 +1120,7 @@
   address   = {Sebastopol, CA},
   year      = {2017},
   isbn      = {978-1-449-37332-0},
-  note      = {Ch. 4: encoding and evolution of data formats}
+  note      = {Libraries. Ch. 4: encoding and evolution of data formats; ch. 8 (unreliable networks, timeouts) and 11 (idempotence and exactly-once semantics) for Part VI}
 }
 
 % ---- Modules and packages (Chapter 10) ---------------------------------------
@@ -4576,4 +4576,519 @@
   year    = {2007},
   doi     = {10.1145/1273445.1273458},
   note    = {Two pages; free author copy widely available}
+}
+
+% -----------------------------------------------------------------------------
+% Part V — Introduction to containers
+% -----------------------------------------------------------------------------
+
+% ---- Containers and orchestration (Chapter 1): virtualisation and history ----
+
+@article{popek1974,
+  author  = {Popek, Gerald J. and Goldberg, Robert P.},
+  title   = {Formal Requirements for Virtualizable Third Generation Architectures},
+  journal = {Communications of the {ACM}},
+  volume  = {17},
+  number  = {7},
+  pages   = {412--421},
+  year    = {1974},
+  doi     = {10.1145/361011.361073},
+  note    = {ACM Digital Library. The definition of a virtual machine monitor (efficiency, resource control, equivalence) and Theorem 1 on sensitive and privileged instructions}
+}
+
+@inproceedings{kamp2000,
+  author    = {Kamp, Poul-Henning and Watson, Robert N. M.},
+  title     = {Jails: Confining the Omnipotent Root},
+  booktitle = {Proceedings of the 2nd International System Administration and Networking Conference ({SANE} 2000)},
+  address   = {Maastricht},
+  year      = {2000},
+  url       = {https://papers.freebsd.org/2000/phk-jails/},
+  note      = {Free on the FreeBSD papers site. The design of FreeBSD jails, a direct ancestor of containers}
+}
+
+@inproceedings{soltesz2007,
+  author    = {Soltesz, Stephen and P{\"o}tzl, Herbert and Fiuczynski, Marc E. and Bavier, Andy and Peterson, Larry},
+  title     = {Container-Based Operating System Virtualization: A Scalable, High-Performance Alternative to Hypervisors},
+  booktitle = {Proceedings of the 2nd {ACM} {SIGOPS/EuroSys} European Conference on Computer Systems},
+  pages     = {275--287},
+  year      = {2007},
+  doi       = {10.1145/1272996.1273025},
+  note      = {ACM Digital Library. Sections 2--3 (the design space of isolation) and 5 (measurements against Xen)}
+}
+
+@inproceedings{felter2015,
+  author    = {Felter, Wes and Ferreira, Alexandre and Rajamony, Ram and Rubio, Juan},
+  title     = {An Updated Performance Comparison of Virtual Machines and {Linux} Containers},
+  booktitle = {2015 {IEEE} International Symposium on Performance Analysis of Systems and Software ({ISPASS})},
+  pages     = {171--172},
+  year      = {2015},
+  doi       = {10.1109/ISPASS.2015.7095802},
+  note      = {IEEE Xplore; the longer IBM Research Report RC25482 (2014) with all the benchmarks is freely available}
+}
+
+@article{merkel2014,
+  author  = {Merkel, Dirk},
+  title   = {Docker: Lightweight {Linux} Containers for Consistent Development and Deployment},
+  journal = {Linux Journal},
+  volume  = {2014},
+  number  = {239},
+  year    = {2014},
+  url     = {https://www.linuxjournal.com/content/docker-lightweight-linux-containers-consistent-development-and-deployment},
+  note    = {Free online. Docker's images, layers, Dockerfiles and registry as presented in its first year}
+}
+
+@inproceedings{verma2015,
+  author    = {Verma, Abhishek and Pedrosa, Luis and Korupolu, Madhukar and Oppenheimer, David and Tune, Eric and Wilkes, John},
+  title     = {Large-Scale Cluster Management at {Google} with {Borg}},
+  booktitle = {Proceedings of the Tenth European Conference on Computer Systems ({EuroSys} '15)},
+  pages     = {18:1--18:17},
+  year      = {2015},
+  doi       = {10.1145/2741948.2741964},
+  note      = {Free from Google Research. Sections 2--3 (jobs, tasks, scheduling) and 8 (lessons that shaped Kubernetes)}
+}
+
+@article{burns2016,
+  author  = {Burns, Brendan and Grant, Brian and Oppenheimer, David and Brewer, Eric and Wilkes, John},
+  title   = {{Borg}, {Omega}, and {Kubernetes}},
+  journal = {Communications of the {ACM}},
+  volume  = {59},
+  number  = {5},
+  pages   = {50--57},
+  year    = {2016},
+  doi     = {10.1145/2890784},
+  note    = {Free (also in ACM Queue 14(1), 2016). Containers as the unit of management, reconciliation loops, labels and selectors}
+}
+
+% ---- Containers and orchestration (Chapter 1): kernel mechanisms ------------
+
+@misc{linuxmanpages2025,
+  author       = {{The Linux man-pages project}},
+  title        = {Linux Programmer's Manual: namespaces(7), pid\_namespaces(7), user\_namespaces(7), cgroups(7)},
+  howpublished = {man-pages 6.x},
+  year         = {2025},
+  url          = {https://man7.org/linux/man-pages/},
+  note         = {Free online; maintained by Michael Kerrisk and Alejandro Colomar. The behaviour of PID 1 with signals is in pid\_namespaces(7)}
+}
+
+@misc{heo2015,
+  author       = {Heo, Tejun},
+  title        = {Control Group v2},
+  howpublished = {Linux kernel documentation, Documentation/admin-guide/cgroup-v2.rst},
+  year         = {2015},
+  url          = {https://docs.kernel.org/admin-guide/cgroup-v2.html},
+  note         = {Free; a living document (accessed November 2026). Sections on resource distribution models (weights, limits) and the CPU and memory controllers (cpu.weight, cpu.max, memory.max)}
+}
+
+@misc{brown2014overlay,
+  author       = {Brown, Neil},
+  title        = {Overlay Filesystem},
+  howpublished = {Linux kernel documentation, Documentation/filesystems/overlayfs.rst},
+  year         = {2014},
+  url          = {https://docs.kernel.org/filesystems/overlayfs.html},
+  note         = {Free (accessed November 2026). Upper and lower layers, copy-up, whiteouts and opaque directories}
+}
+
+@article{parekh1993,
+  author  = {Parekh, Abhay K. and Gallager, Robert G.},
+  title   = {A Generalized Processor Sharing Approach to Flow Control in Integrated Services Networks: The Single-Node Case},
+  journal = {{IEEE/ACM} Transactions on Networking},
+  volume  = {1},
+  number  = {3},
+  pages   = {344--357},
+  year    = {1993},
+  doi     = {10.1109/90.234856},
+  note    = {IEEE Xplore and libraries. Section II defines GPS and its fairness property, used for the CPU-sharing theorem}
+}
+
+@misc{holder2026,
+  author       = {Holder, Itamar},
+  title        = {New Conversion from cgroup v1 {CPU} Shares to v2 {CPU} Weight},
+  howpublished = {Kubernetes Blog},
+  year         = {2026},
+  month        = jan,
+  url          = {https://kubernetes.io/blog/2026/01/30/new-cgroup-v1-to-v2-cpu-conversion-formula/},
+  note         = {Free. The linear and the new quadratic-in-log mapping, adopted by runc 1.3.2 and crun 1.23}
+}
+
+% ---- Containers and orchestration (Chapter 1): images and builds ------------
+
+@misc{oci2025image,
+  author       = {{Open Container Initiative}},
+  title        = {{OCI} Image Format Specification, version 1.1.1},
+  year         = {2025},
+  url          = {https://github.com/opencontainers/image-spec/blob/v1.1.1/spec.md},
+  note         = {Free. Sections "Descriptors" (digests and algorithms), "Image Manifest", "Image Index", "Image Configuration" and "Image Layer Filesystem Changeset" (whiteouts)}
+}
+
+@misc{oci2025runtime,
+  author       = {{Open Container Initiative}},
+  title        = {{OCI} Runtime Specification, version 1.3.0},
+  year         = {2025},
+  url          = {https://github.com/opencontainers/runtime-spec/blob/v1.3.0/spec.md},
+  note         = {Free. The filesystem bundle, the configuration (namespaces, cgroups, mounts) and the container life cycle}
+}
+
+@techreport{nist2015,
+  author      = {{National Institute of Standards and Technology}},
+  title       = {Secure Hash Standard ({SHS})},
+  institution = {NIST},
+  type        = {Federal Information Processing Standards Publication},
+  number      = {FIPS 180-4},
+  year        = {2015},
+  doi         = {10.6028/NIST.FIPS.180-4},
+  note        = {Free. Section 6.2 specifies SHA-256}
+}
+
+@inproceedings{merkle1987,
+  author    = {Merkle, Ralph C.},
+  title     = {A Digital Signature Based on a Conventional Encryption Function},
+  booktitle = {Advances in Cryptology --- {CRYPTO} '87},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {293},
+  pages     = {369--378},
+  publisher = {Springer},
+  year      = {1988},
+  doi       = {10.1007/3-540-48184-2_32},
+  note      = {Springer and libraries. The hash tree that commits to many values with one hash, the idea behind Merkle DAGs}
+}
+
+@misc{reproduciblebuilds2017,
+  author       = {{Reproducible Builds project}},
+  title        = {{SOURCE\_DATE\_EPOCH} specification},
+  year         = {2017},
+  url          = {https://reproducible-builds.org/specs/source-date-epoch/},
+  note         = {Free. The variable, its semantics and its use by build tools}
+}
+
+@misc{docker2026,
+  author       = {{Docker Inc.}},
+  title        = {Docker Documentation},
+  year         = {2026},
+  url          = {https://docs.docker.com/},
+  note         = {Free (accessed November 2026). "Dockerfile reference", "Build cache" (cache invalidation), "Multi-stage builds", "Build secrets", "Running containers" (resource constraints)}
+}
+
+@misc{wiggins2011,
+  author       = {Wiggins, Adam},
+  title        = {The Twelve-Factor App},
+  year         = {2011},
+  url          = {https://12factor.net/},
+  note         = {Free. Factor III, "Config": configuration in the environment}
+}
+
+% ---- Containers and orchestration (Chapter 1): orchestration ----------------
+
+@misc{kubernetes2026,
+  author       = {{The Kubernetes Authors}},
+  title        = {Kubernetes Documentation (v1.37)},
+  year         = {2026},
+  url          = {https://kubernetes.io/docs/},
+  note         = {Free (accessed November 2026). Concepts: "Pods", "Deployments" (rolling update, maxSurge and maxUnavailable), "Service", "Resource Management for Pods and Containers", "Horizontal Pod Autoscaling" (algorithm details)}
+}
+
+@misc{k3s2026,
+  author       = {{The K3s Authors}},
+  title        = {K3s: Lightweight {Kubernetes}},
+  year         = {2026},
+  url          = {https://docs.k3s.io/},
+  note         = {Free (accessed November 2026). Installation, air-gap images and the containerd configuration template}
+}
+
+@book{garey1979,
+  author    = {Garey, Michael R. and Johnson, David S.},
+  title     = {Computers and Intractability: A Guide to the Theory of {NP}-Completeness},
+  publisher = {W. H. Freeman},
+  address   = {San Francisco},
+  year      = {1979},
+  isbn      = {978-0-7167-1045-5},
+  note      = {Libraries. Problem SR1 (bin packing) in the appendix}
+}
+
+% -----------------------------------------------------------------------------
+% Part VI — Introduction to REST APIs
+% -----------------------------------------------------------------------------
+
+% ---- APIs, HTTP and REST (Chapter 1): architecture and protocol --------------
+
+@phdthesis{fielding2000,
+  author = {Fielding, Roy Thomas},
+  title  = {Architectural Styles and the Design of Network-Based Software Architectures},
+  school = {University of California, Irvine},
+  year   = {2000},
+  url    = {https://ics.uci.edu/~fielding/pubs/dissertation/top.htm},
+  note   = {Free online. Ch. 5 (REST: the constraints and the properties they induce) and ch. 6 (experience with HTTP and URI)}
+}
+
+@misc{rfc9110,
+  author       = {Fielding, Roy T. and Nottingham, Mark and Reschke, Julian},
+  title        = {{HTTP} Semantics},
+  howpublished = {RFC 9110 (Internet Standard STD 97)},
+  publisher    = {IETF},
+  year         = {2022},
+  doi          = {10.17487/RFC9110},
+  url          = {https://www.rfc-editor.org/rfc/rfc9110},
+  note         = {Free. Sections 9 (methods; 9.2.1 safe, 9.2.2 idempotent), 10.2.3 (Retry-After), 13 (conditional requests), 15 (status codes)}
+}
+
+@misc{rfc9111,
+  author       = {Fielding, Roy T. and Nottingham, Mark and Reschke, Julian},
+  title        = {{HTTP} Caching},
+  howpublished = {RFC 9111 (Internet Standard STD 98)},
+  publisher    = {IETF},
+  year         = {2022},
+  doi          = {10.17487/RFC9111},
+  url          = {https://www.rfc-editor.org/rfc/rfc9111},
+  note         = {Free. Section 4.2 (freshness; 4.2.3 calculating age) and 5.2 (Cache-Control)}
+}
+
+@misc{rfc9112,
+  author       = {Fielding, Roy T. and Nottingham, Mark and Reschke, Julian},
+  title        = {{HTTP}/1.1},
+  howpublished = {RFC 9112 (Internet Standard STD 99)},
+  publisher    = {IETF},
+  year         = {2022},
+  doi          = {10.17487/RFC9112},
+  url          = {https://www.rfc-editor.org/rfc/rfc9112},
+  note         = {Free. Sections 2--6: message format, request and status lines, field syntax, message body length}
+}
+
+@misc{rfc3986,
+  author       = {Berners-Lee, Tim and Fielding, Roy T. and Masinter, Larry},
+  title        = {Uniform Resource Identifier ({URI}): Generic Syntax},
+  howpublished = {RFC 3986 (Internet Standard STD 66)},
+  publisher    = {IETF},
+  year         = {2005},
+  doi          = {10.17487/RFC3986},
+  url          = {https://www.rfc-editor.org/rfc/rfc3986},
+  note         = {Free. Section 3 (components) and 2.1 (percent-encoding)}
+}
+
+@misc{rfc5789,
+  author       = {Dusseault, Lisa and Snell, James M.},
+  title        = {{PATCH} Method for {HTTP}},
+  howpublished = {RFC 5789},
+  publisher    = {IETF},
+  year         = {2010},
+  doi          = {10.17487/RFC5789},
+  url          = {https://www.rfc-editor.org/rfc/rfc5789},
+  note         = {Free. Section 2 (semantics; PATCH is neither safe nor idempotent in general)}
+}
+
+@misc{rfc8288,
+  author       = {Nottingham, Mark},
+  title        = {Web Linking},
+  howpublished = {RFC 8288},
+  publisher    = {IETF},
+  year         = {2017},
+  doi          = {10.17487/RFC8288},
+  url          = {https://www.rfc-editor.org/rfc/rfc8288},
+  note         = {Free. Section 3 (the Link header field) and the registered relation types such as next}
+}
+
+@misc{rfc9457,
+  author       = {Nottingham, Mark and Wilde, Erik and Dalal, Sanjay},
+  title        = {Problem Details for {HTTP} {APIs}},
+  howpublished = {RFC 9457},
+  publisher    = {IETF},
+  year         = {2023},
+  doi          = {10.17487/RFC9457},
+  url          = {https://www.rfc-editor.org/rfc/rfc9457},
+  note         = {Free. Section 3 (members of a problem details object); obsoletes RFC 7807}
+}
+
+@misc{rfc6585,
+  author       = {Nottingham, Mark and Fielding, Roy T.},
+  title        = {Additional {HTTP} Status Codes},
+  howpublished = {RFC 6585},
+  publisher    = {IETF},
+  year         = {2012},
+  doi          = {10.17487/RFC6585},
+  url          = {https://www.rfc-editor.org/rfc/rfc6585},
+  note         = {Free. Section 4 (429 Too Many Requests)}
+}
+
+@misc{jena2025,
+  author       = {Jena, Jayadeba and Dalal, Sanjay},
+  title        = {The {Idempotency-Key} {HTTP} Header Field},
+  howpublished = {Internet-Draft draft-ietf-httpapi-idempotency-key-header-07, work in progress},
+  publisher    = {IETF},
+  year         = {2025},
+  url          = {https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/},
+  note         = {Free. Not yet an RFC; it standardises a widespread practice. Sections 2 (the header, uniqueness, expiry, fingerprint) and 2.6 (enforcement)}
+}
+
+@misc{fowler2010,
+  author       = {Fowler, Martin},
+  title        = {{Richardson} Maturity Model: Steps toward the Glory of {REST}},
+  year         = {2010},
+  url          = {https://martinfowler.com/articles/richardsonMaturityModel.html},
+  note         = {Free. Levels 0--3 of "RESTfulness", after a talk by Leonard Richardson}
+}
+
+% ---- APIs, HTTP and REST (Chapter 1): tools and schemas ----------------------
+
+@misc{christie2026,
+  author       = {Christie, Tom and {Encode OSS}},
+  title        = {{HTTPX}: A Next-Generation {HTTP} Client for {Python}},
+  year         = {2026},
+  url          = {https://www.python-httpx.org/},
+  note         = {Free (version 0.28.1; accessed November 2026). Quickstart, clients, async support, transports (MockTransport)}
+}
+
+@misc{ramirez2026,
+  author       = {Ram{\'\i}rez, Sebasti{\'a}n},
+  title        = {{FastAPI}},
+  year         = {2026},
+  url          = {https://fastapi.tiangolo.com/},
+  note         = {Free (version 0.163.1; accessed November 2026). Tutorial: path and query parameters, request bodies, response status codes, handling errors, testing}
+}
+
+@misc{pydantic2026,
+  author       = {{Pydantic Services}},
+  title        = {Pydantic Documentation},
+  year         = {2026},
+  url          = {https://docs.pydantic.dev/},
+  note         = {Free (version 2.13; accessed November 2026). Models, fields and constraints, validators, JSON Schema generation}
+}
+
+@misc{wright2022,
+  author       = {Wright, Austin and Andrews, Henry and Hutton, Ben and Dennis, Greg},
+  title        = {{JSON} Schema: A Media Type for Describing {JSON} Documents},
+  howpublished = {Internet-Draft draft-bhutton-json-schema-01 (JSON Schema 2020-12)},
+  year         = {2022},
+  url          = {https://json-schema.org/specification},
+  note         = {Free. The 2020-12 dialect, current as of November 2026; the companion validation vocabulary (draft-bhutton-json-schema-validation-01) defines type, minimum, maxLength and friends}
+}
+
+@misc{openapi2025,
+  author       = {{OpenAPI Initiative}},
+  title        = {{OpenAPI} Specification, version 3.2.0},
+  year         = {2025},
+  url          = {https://spec.openapis.org/oas/v3.2.0.html},
+  note         = {Free; released September 2025. Sections on the OpenAPI object, paths and operations, and the schema object (JSON Schema 2020-12 since 3.1)}
+}
+
+@book{winand2012,
+  author    = {Winand, Markus},
+  title     = {{SQL} Performance Explained},
+  publisher = {Markus Winand},
+  address   = {Vienna},
+  year      = {2012},
+  isbn      = {978-3-9503078-2-5},
+  url       = {https://use-the-index-luke.com/no-offset},
+  note      = {The book's content is free online as "Use The Index, Luke"; the chapter on partial results covers offset versus keyset ("seek") pagination}
+}
+
+% ---- APIs, HTTP and REST (Chapter 1): performance and reliability ------------
+
+@misc{brooker2015,
+  author       = {Brooker, Marc},
+  title        = {Exponential Backoff and Jitter},
+  howpublished = {AWS Architecture Blog},
+  year         = {2015},
+  month        = mar,
+  url          = {https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/},
+  note         = {Free. The simulations comparing no jitter, full, equal and decorrelated jitter}
+}
+
+@article{little1961,
+  author  = {Little, John D. C.},
+  title   = {A Proof for the Queuing Formula: {$L = \lambda W$}},
+  journal = {Operations Research},
+  volume  = {9},
+  number  = {3},
+  pages   = {383--387},
+  year    = {1961},
+  doi     = {10.1287/opre.9.3.383},
+  note    = {JSTOR and libraries. The original proof for stationary queues}
+}
+
+@article{stidham1974,
+  author  = {Stidham, Shaler, Jr.},
+  title   = {A Last Word on {$L = \lambda W$}},
+  journal = {Operations Research},
+  volume  = {22},
+  number  = {2},
+  pages   = {417--421},
+  year    = {1974},
+  doi     = {10.1287/opre.22.2.417},
+  note    = {JSTOR and libraries. The sample-path proof used in this book}
+}
+
+@article{dean2013,
+  author  = {Dean, Jeffrey and Barroso, Luiz Andr{\'e}},
+  title   = {The Tail at Scale},
+  journal = {Communications of the {ACM}},
+  volume  = {56},
+  number  = {2},
+  pages   = {74--80},
+  year    = {2013},
+  doi     = {10.1145/2408776.2408794},
+  note    = {Free from Google Research. Why fan-out amplifies tail latency; hedged and tied requests}
+}
+
+@book{tanenbaum2011,
+  author    = {Tanenbaum, Andrew S. and Wetherall, David J.},
+  title     = {Computer Networks},
+  edition   = {5},
+  publisher = {Prentice Hall},
+  address   = {Boston},
+  year      = {2011},
+  isbn      = {978-0-13-212695-3},
+  note      = {Libraries. Section 5.4 (quality of service: traffic shaping, leaky and token buckets) and 7.6 (HTTP)}
+}
+
+% ---- APIs, HTTP and REST (Chapter 1): security --------------------------------
+
+@misc{rfc8446,
+  author       = {Rescorla, Eric},
+  title        = {The Transport Layer Security ({TLS}) Protocol Version 1.3},
+  howpublished = {RFC 8446},
+  publisher    = {IETF},
+  year         = {2018},
+  doi          = {10.17487/RFC8446},
+  url          = {https://www.rfc-editor.org/rfc/rfc8446},
+  note         = {Free. Section 1 (goals: authentication, confidentiality, integrity)}
+}
+
+@misc{rfc6749,
+  author       = {Hardt, Dick},
+  title        = {The {OAuth} 2.0 Authorization Framework},
+  howpublished = {RFC 6749},
+  publisher    = {IETF},
+  year         = {2012},
+  doi          = {10.17487/RFC6749},
+  url          = {https://www.rfc-editor.org/rfc/rfc6749},
+  note         = {Free. Section 1 (roles, access tokens)}
+}
+
+@misc{rfc6750,
+  author       = {Jones, Michael B. and Hardt, Dick},
+  title        = {The {OAuth} 2.0 Authorization Framework: Bearer Token Usage},
+  howpublished = {RFC 6750},
+  publisher    = {IETF},
+  year         = {2012},
+  doi          = {10.17487/RFC6750},
+  url          = {https://www.rfc-editor.org/rfc/rfc6750},
+  note         = {Free. Section 2.1 (the Authorization request header) and 5 (security considerations: never in URLs)}
+}
+
+@misc{rfc2104,
+  author       = {Krawczyk, Hugo and Bellare, Mihir and Canetti, Ran},
+  title        = {{HMAC}: Keyed-Hashing for Message Authentication},
+  howpublished = {RFC 2104},
+  publisher    = {IETF},
+  year         = {1997},
+  doi          = {10.17487/RFC2104},
+  url          = {https://www.rfc-editor.org/rfc/rfc2104},
+  note         = {Free. Section 2 (definition of HMAC)}
+}
+
+@misc{whatwg2026fetch,
+  author       = {{WHATWG}},
+  title        = {Fetch Standard},
+  howpublished = {Living Standard},
+  year         = {2026},
+  url          = {https://fetch.spec.whatwg.org/},
+  note         = {Free (accessed November 2026). Section 3.2 (CORS protocol) and the Access-Control-Allow-Origin header}
 }

@@ -26,7 +26,9 @@ reproduce any course material. It is:
   used.
 
 Each part ends with the course's final project, implemented in the companion
-repository [`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-projects).
+repository [`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-projects);
+the short courses without a project (Parts V and VI) end with synthesis
+exercises instead.
 
 ## Contents
 
@@ -36,7 +38,9 @@ repository [`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-p
 | II | High-performance programming with C and C++ | Command-line CRM for an insurance company | ✅ |
 | III | Foundations of machine learning | Regularised models for house-price prediction | ✅ |
 | IV | Machine learning: models and algorithms | Classification of fruit types with k-nearest neighbours | ✅ |
-| V–XII | remaining courses of the master | — | 🛠 in preparation |
+| V | Introduction to containers | — (no final project) | ✅ |
+| VI | Introduction to REST APIs | — (no final project) | ✅ |
+| VII–XII | remaining courses of the master | — | 🛠 in preparation |
 
 ## Repository layout
 
@@ -57,6 +61,10 @@ appendices/            finding and reading the sources
 references.qmd         the bibliography page
 references.bib         all sources (BibTeX), with DOI/arXiv/ISBN/URL and access notes
 images/                static figures
+containers/             Part V — Introduction to containers (one chapter: Docker, images, Kubernetes)
+containers/ctrbook.py   helper that builds and runs the container examples (docker, kubectl) and masks IDs
+rest/                   Part VI — Introduction to REST APIs (one chapter: HTTP, REST, FastAPI)
+rest/apibook.py         helper for Part VI (local uvicorn servers, figure style)
 styles/                theme customisations
 _freeze/               stored results of the executed Python cells (do not edit by hand)
 .github/workflows/     GitHub Action that renders the book and publishes it to GitHub Pages
@@ -72,7 +80,11 @@ project notebook), plus network access to `raw.githubusercontent.com` for the
 two cells of the project chapter that download the published notebook and the
 original data. Re-executing Part II also needs GCC
 (`g++`/`gcc` with C++20 support), GDB, Make, CMake, Ninja, `strace` and the
-binutils (`nm`, `objdump`, `readelf`), on Linux.
+binutils (`nm`, `objdump`, `readelf`), on Linux. Re-executing Part V needs
+root, Docker Engine with BuildKit, `debootstrap`, `unshare` and k3s (the
+helper builds local stand-ins for the official base images); Part VI needs
+`fastapi`, `httpx`, `uvicorn` and `jsonschema`, and Docker for its last
+exercise.
 
 ```bash
 quarto preview            # live preview in the browser

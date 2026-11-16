@@ -74,6 +74,12 @@ book:
         - mlalg/06-knn.qmd
         - mlalg/07-trees-forests.qmd
         - mlalg/08-project-fruits.qmd
+    - part: containers/index.qmd
+      chapters:
+        - containers/01-containers.qmd
+    - part: rest/index.qmd
+      chapters:
+        - rest/01-rest-apis.qmd
   appendices:
     - appendices/finding-sources.qmd
     - references.qmd

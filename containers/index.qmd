@@ -1,0 +1,122 @@
+# Introduction to containers {.unnumbered}
+
+> *"A virtual machine is taken to be an efficient, isolated duplicate of the
+> real machine."* — Gerald Popek and Robert Goldberg, 1974 [@popek1974]
+
+This part corresponds to the fifth course of the master: a short, single-module
+introduction to **containers** and to their **orchestration**. The first four
+parts produced programs and models that run on one machine — the author's.
+This part is about the step that comes next for every program that matters:
+running it somewhere else, identically, many times, and keeping it running.
+
+The single chapter follows the course's lessons — what containers and
+orchestration are, the foundations of containers, running a container with
+Docker, orchestrating containers with Kubernetes — and goes beneath each of
+them: the kernel mechanisms a container is made of, the image format and its
+hashes, the build cache, signals and exit codes, the control loops of
+Kubernetes and the bounds that govern a rolling update.
+
+::: {.callout-note}
+## Why this part matters for an AI engineer
+A model is useful only where it runs, and it runs only if its whole stack —
+interpreter, numerical libraries, the serialised model, the serving code —
+arrives intact. Containers are how models are shipped today: training jobs on
+GPU clusters, batch scoring pipelines and prediction services are container
+images scheduled by an orchestrator. Knowing what an image contains, why a
+build is slow or an image is huge, why a container takes ten seconds to stop
+or dies with code 137, and how an update can avoid dropping requests is part
+of the job of putting machine learning into production.
+:::
+
+## What you will be able to do {.unnumbered}
+
+1. Explain what a container is, build one by hand from namespaces, a root
+   filesystem and cgroups, and predict how CPU is shared among containers by
+   weights and quotas (@sec-ctr-what, @sec-ctr-kernel).
+2. Read an OCI image — index, manifest, configuration, layers — and use
+   digests correctly; explain why deleting a file never shrinks an image,
+   and build reproducible images (@sec-ctr-images).
+3. Write Dockerfiles that rebuild fast and ship small, using the cache's
+   prefix property, the optimal order of steps and multi-stage builds
+   (@sec-ctr-build).
+4. Run containers safely: ports, volumes, environment, non-root users,
+   read-only filesystems, limits, graceful shutdown and the meaning of exit
+   codes (@sec-ctr-run).
+5. Deploy, heal, scale and update a service on Kubernetes, and bound the
+   duration of a rolling update (@sec-ctr-k8s).
+
+## Prerequisites {.unnumbered}
+
+From Part I: virtual environments and pinned dependencies
+(@sec-ch-venv, @sec-requirements), files and JSON (@sec-ch-files),
+exceptions (@sec-ch-exceptions). From Part II: compiling and linking
+(@sec-toolchain) and, above all, processes, signals and exit statuses
+(@sec-ch-cpp-python). From Parts III and IV: pipelines that avoid leakage
+(@sec-leakage) and the models that the examples serve. Probability at the
+level of Part III (independence, expectation, the union bound) is enough for
+the proofs. This part does not repeat any of it: it links back.
+
+To run the examples you need a Linux machine (or a Linux VM, which Docker
+Desktop provides on macOS and Windows) with Docker Engine and, for the last
+section, a small Kubernetes such as k3s, kind or minikube.
+
+## Graded practice {.unnumbered}
+
+As in Part IV, every main section ends with a **Practice** block of three
+exercises — **Easy** (by hand), **Medium** (in code), **Hard** (a small open
+problem) — each with a collapsed hint and a separate collapsed solution, with
+executed code. Since this course has no final project, the Hard exercises
+follow a common thread instead: **putting a trained model into production** —
+a wine classifier like those of Parts III and IV, trained at build time,
+served over HTTP, scored in batch, rolled out on a cluster.
+
+## Tools and versions {.unnumbered}
+
+```{python}
+#| echo: false
+#| output: asis
+import sys
+sys.path.insert(0, ".")
+import ctrbook as cb
+def _v(cmd):
+    return cb.run(cmd).stdout.strip()
+_docker = _v("docker version -f '{{.Server.Version}}'")
+_buildx = _v("docker buildx version").split()[1].lstrip("v")
+_compose = _v("docker compose version --short")
+_runc = _v("runc --version").splitlines()[0].split()[-1]
+_k3s = _v("k3s --version").splitlines()[0].split()[2]
+print(f"The examples were executed with **Docker Engine {_docker}** (BuildKit via buildx {_buildx}, "
+      f"Compose {_compose}), **runc {_runc}** and **k3s {_k3s}** (Kubernetes {_k3s.split('+')[0]}), "
+      f"on {cb.machine()}; every output shown was produced by actually running it when the book was built.")
+```
+
+The standards referred to are the OCI Image Format Specification 1.1
+[@oci2025image] and Runtime Specification 1.3 [@oci2025runtime]. The build
+machine could not reach public image registries; the Dockerfiles therefore
+take their base image as a build argument with the official image as default
+(for example `ARG BASE=python:3.12-slim`), and the book builds them with local
+equivalents produced from the Ubuntu 24.04 archive. The helper that runs the
+examples and masks machine-specific output is
+[`containers/ctrbook.py`](https://github.com/matteo-zirilli/ai-engineering-handbook/blob/main/containers/ctrbook.py).
+
+The data are the wine measurements that ship with scikit-learn
+[@aeberhard1992] (UCI, CC BY 4.0).
+
+## Map of the part {.unnumbered}
+
+| Section | Core topics | What the book adds |
+|---|---|---|
+| @sec-ctr-what | containers versus virtual machines and virtual environments, images, runtimes, registries, orchestration | measured start-up time, the history from `chroot` to the OCI |
+| @sec-ctr-kernel | namespaces, root filesystems, cgroups, union filesystems | a container built by hand; weighted fair sharing and quotas proved and measured; the v1→v2 weight conversion |
+| @sec-ctr-images | the OCI image: index, manifest, configuration, layers; tags and digests | collision bound for SHA-256, Merkle commitment, additive layers and leaked secrets, reproducible digests |
+| @sec-ctr-build | Dockerfile, build context, cache, multi-stage builds | prefix property, expected rebuild cost and optimal order proved by an exchange argument, static C++ on `scratch` |
+| @sec-ctr-run | life cycle, ports, volumes, environment, users, signals, exit codes | PID 1 and `SIGTERM` measured, the ambiguity of 137, a locked-down batch job and its OOM kill |
+| @sec-ctr-k8s | Kubernetes objects, deployments, services, probes, scaling, rolling updates | reconciliation loops, bounds on rolling updates, the autoscaler's fixed point, a zero-downtime update measured |
+
+## No final project {.unnumbered}
+
+This course has **no final project**, so this part ends with its chapter's
+synthesis exercises instead of a project chapter. The "In the projects" box of
+the chapter applies the techniques to the projects of the earlier parts — the
+phone book of Part I, the CRM of Part II, the classifier of Part IV — and Part
+VI continues the same thread by giving the model a proper web API.

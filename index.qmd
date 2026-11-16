@@ -9,9 +9,10 @@ AI Engineering that I attended. For each course I wrote a
 part of this book that is **far more detailed than the lectures**: every idea
 is traced back to the book, paper or standard where it was born, every formula
 is derived or proved, and every concept is illustrated with worked examples
-and runnable code. Each part ends with the **final project** of the course,
-which you can find, fully implemented, in the companion repository
-[`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-projects).
+and runnable code. Each part whose course has a **final project** ends with
+it, and you can find it, fully implemented, in the companion repository
+[`matteo-zirilli/ai-projects`](https://github.com/matteo-zirilli/ai-projects);
+short courses without a project end with synthesis exercises instead.
 
 ## Who this book is for {.unnumbered}
 
@@ -53,12 +54,13 @@ Each course of the master becomes a **part** of the book. The structure of
 each part is always the same:
 
 - an **overview page** with what you will be able to do, the map of the chapters,
-  and the final project;
+  and the final project (or a note that the course has none);
 - one **chapter per topic** of the course, in which theory and practice are
   merged: ideas first, then runnable code;
-- a **project chapter** that states the project requirements in my own words,
-  maps each requirement to the chapters that teach the necessary skills, and
-  walks through the design and implementation.
+- for the courses that have a final project, a **project chapter** that states
+  the project requirements in my own words, maps each requirement to the
+  chapters that teach the necessary skills, and walks through the design and
+  implementation.
 
 | Part | Course | Status |
 |---|---|---|
@@ -66,7 +68,9 @@ each part is always the same:
 | II | [High-performance programming with C and C++](cpp/index.qmd) | ✅ available |
 | III | [Foundations of machine learning](ml/index.qmd) | ✅ available |
 | IV | [Machine learning: models and algorithms](mlalg/index.qmd) | ✅ available |
-| V–XII | the remaining courses of the master | 🛠 in preparation |
+| V | [Introduction to containers](containers/index.qmd) | ✅ available |
+| VI | [Introduction to REST APIs](rest/index.qmd) | ✅ available |
+| VII–XII | the remaining courses of the master | 🛠 in preparation |
 
 ## Conventions {.unnumbered}
 

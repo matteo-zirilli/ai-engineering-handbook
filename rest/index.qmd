@@ -1,0 +1,102 @@
+# Introduction to REST APIs {.unnumbered}
+
+> *"REST is a hybrid style derived from several of the network-based
+> architectural styles…"* — Roy T. Fielding, 2000 [@fielding2000, §5.1]
+
+This part corresponds to the sixth course of the master: a short,
+single-module introduction to **APIs** — what they are, the **HTTP methods**,
+the **REST** style, and **endpoints**. Part V put a model in a container;
+this part gives it a front door: a contract that any program, in any language,
+can use over the network.
+
+The chapter follows the course's lessons and goes beneath each of them: the
+bytes of HTTP messages, written and parsed with raw sockets; the semantics of
+the methods and what they guarantee when networks fail; Fielding's
+constraints and the caching and concurrency machinery of HTTP; the design,
+validation and documentation of endpoints with FastAPI, JSON Schema and
+OpenAPI; and the quantities that govern an API in production.
+
+::: {.callout-note}
+## Why this part matters for an AI engineer
+Almost every model in production is reached through an API — a prediction
+endpoint, a batch-scoring job triggered by a request, a feature store queried
+by key — and almost every AI application calls APIs: model providers, vector
+databases, other teams' services. Knowing when a request may be retried, how
+to validate inputs before they reach a model, how to page through large
+results without losing items, how many workers a given latency requires, and
+why a model that is slow 1 % of the time makes a page slow 18 % of the time
+is part of turning a notebook into a service.
+:::
+
+## What you will be able to do {.unnumbered}
+
+1. Explain what an API is and how HTTP works — URLs, messages, headers,
+   status codes, JSON — and write a minimal client and server with sockets
+   (@sec-api-http).
+2. Use the HTTP methods according to their semantics; prove when retries are
+   safe and design them with idempotency keys and exponential backoff with
+   jitter (@sec-api-methods).
+3. Apply the REST constraints, and use caching and conditional requests to
+   save bandwidth and prevent lost updates (@sec-api-rest).
+4. Design, implement, test, validate and document endpoints with FastAPI,
+   with correct status codes, problem-details errors and keyset pagination
+   (@sec-api-endpoints).
+5. Size and protect an API: Little's law, tail latency under fan-out, token
+   buckets and 429, authentication, HTTPS, CORS and request signing
+   (@sec-api-production).
+
+## Prerequisites {.unnumbered}
+
+From Part I: functions and modules (@sec-ch-functions), exceptions
+(@sec-ch-exceptions), files and JSON (@sec-json). From Part II: processes and
+pipes (@sec-ch-cpp-python). From Part V: images, containers and
+deployments (@sec-ch-ctr-containers), used when the service is packaged. The
+probability needed (independence, expectation, the union bound) is that of
+Part III.
+
+## Graded practice {.unnumbered}
+
+Every main section ends with a **Practice** block — **Easy** (by hand),
+**Medium** (in code), **Hard** (a small open problem) — each with a collapsed
+hint and a separate collapsed solution, with executed code. As in Part V there
+is no final project, and the Hard exercises share a thread: an API in front of
+a trained model, robust to failures, concurrency and load.
+
+## Tools and versions {.unnumbered}
+
+```{python}
+#| echo: false
+#| output: asis
+import sys, fastapi, httpx, pydantic, starlette, uvicorn
+from importlib.metadata import version
+print(f"The code of this part was executed with **Python {sys.version.split()[0]}**, **FastAPI {fastapi.__version__}** "
+      f"(Starlette {starlette.__version__}), **Pydantic {pydantic.__version__}**, **httpx {httpx.__version__}**, "
+      f"**uvicorn {uvicorn.__version__}** and **jsonschema {version('jsonschema')}**; every output shown was "
+      "produced by actually running it when the book was built.")
+```
+
+All servers run on the build machine's loopback interface — in-process through
+FastAPI's `TestClient`, or as real uvicorn processes started by a small
+helper,
+[`rest/apibook.py`](https://github.com/matteo-zirilli/ai-engineering-handbook/blob/main/rest/apibook.py);
+no public test service is called. The specifications referred to are the
+HTTP RFCs 9110–9112 [@rfc9110; @rfc9111; @rfc9112], OpenAPI 3.2.0
+[@openapi2025] and JSON Schema 2020-12 [@wright2022]. The data are the wine
+measurements that ship with scikit-learn [@aeberhard1992].
+
+## Map of the part {.unnumbered}
+
+| Section | Core topics | What the book adds |
+|---|---|---|
+| @sec-api-http | APIs, web APIs, URLs, HTTP messages, status codes, JSON | raw requests over sockets, a client and a server from scratch |
+| @sec-api-methods | GET, POST, PUT, PATCH, DELETE; safe and idempotent methods | $f^n = f$ proved, success with retries, at-least-once + idempotent = exactly once (with hypotheses), idempotency keys, backoff with jitter |
+| @sec-api-rest | REST constraints, resources, representations, hypermedia, caching, ETags | the cache's age never underestimates, `If-Match` prevents lost updates — proved and tested under concurrency |
+| @sec-api-endpoints | endpoints, URI design, status codes, FastAPI, Pydantic, OpenAPI, errors, pagination | JSON Schema validation, RFC 9457 errors, offset anomalies and keyset correctness proved and measured |
+| @sec-api-production | throughput, latency, rate limits, security | Little's law (sample-path proof, verified by a load test), tail at scale, token-bucket bound, HMAC signing against replay |
+
+## No final project {.unnumbered}
+
+This course has **no final project**. The chapter ends with synthesis
+exercises, the first of which serves the wine model of Part V through a
+validated API inside a container; the "In the projects" box applies the same
+ideas to the models and programs of the earlier parts.
