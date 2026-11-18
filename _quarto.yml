@@ -80,6 +80,16 @@ book:
     - part: rest/index.qmd
       chapters:
         - rest/01-rest-apis.qmd
+    - part: mlops/index.qmd
+      chapters:
+        - mlops/01-mlops.qmd
+        - mlops/02-reproducibility.qmd
+        - mlops/03-serving.qmd
+        - mlops/04-testing.qmd
+        - mlops/05-deployment.qmd
+        - mlops/06-cicd.qmd
+        - mlops/07-monitoring.qmd
+        - mlops/08-orchestration.qmd
   appendices:
     - appendices/finding-sources.qmd
     - references.qmd

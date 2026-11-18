@@ -1,0 +1,175 @@
+# MLOps: machine learning in production {.unnumbered}
+
+> *"Only a small fraction of real-world ML systems is composed of the ML
+> code… The required surrounding infrastructure is vast and complex."*
+> — D. Sculley et al., 2015 [@sculley2015]
+
+This part corresponds to the seventh course of the master. Parts III and IV
+taught how to **build** a model; Parts V and VI how to **package** a program
+and give it an **API**. This part is about what happens next: keeping a
+model working, for months, in front of real traffic, while data, code and the
+world change underneath it. That discipline is called **MLOps** — the
+practices that make machine learning systems reproducible, tested, deployed
+automatically, observed, and retrained on purpose rather than by accident.
+
+The chapters follow the modules of the course — what MLOps is; isolated
+environments and version control for code, data and models; serving a model
+over HTTP; testing; containers and deployment; continuous integration and
+delivery; monitoring; orchestration — and go beneath each of them. Every
+practice comes with the quantity that justifies it: how many examples a
+model test needs before its verdict means anything, how large a canary must
+be to see a 2-point drop, why the population stability index is a symmetric
+Kullback–Leibler divergence, how to estimate the sentiment mix of a stream
+**without labels**, how long to wait before an alert fires, when retraining
+pays for itself.
+
+::: {.callout-note}
+## Why this part matters for an AI engineer
+Most models that fail in production do not fail with an exception. They keep
+answering — with a stale dependency, a feature computed differently than in
+training, inputs that have drifted away from anything seen before, or a
+world in which the same words now mean something else. Industry surveys of
+deployments find the same obstacles again and again: reproducing results,
+moving from notebook to service, testing, monitoring [@paleyes2022;
+@amershi2019]. The engineering in this part is what turns a model that
+worked once into a system that keeps working — and that tells you when it
+stops.
+:::
+
+## What you will be able to do {.unnumbered}
+
+1. Explain the life cycle of an ML system, the roles around it, the kinds of
+   technical debt it accumulates, and assess its maturity with explicit
+   rubrics; measure **prediction churn** between model versions
+   (@sec-ch-ops-intro).
+2. Make a project **reproducible**: pinned and hashed environments, Git as a
+   content-addressed store, experiment tracking, a model registry with
+   aliases and lineage from data to deployed image (@sec-ch-ops-repro).
+3. **Serve** a model with FastAPI: load once, validate inputs, expose
+   prediction and health endpoints, return **calibrated** probabilities, and
+   size micro-batching with Little's law (@sec-ch-ops-serving).
+4. **Test** an ML system: unit, integration and contract tests with pytest,
+   linting and formatting with Ruff, behavioural tests of the model, and
+   quality tests with a controlled false-failure rate (@sec-ch-ops-testing).
+5. **Deploy** it: a lean, deterministic image for the model service, and
+   release strategies — rolling, blue/green, shadow, canary — with the sample
+   sizes that make a canary meaningful (@sec-ch-ops-deploy).
+6. Build **CI/CD** pipelines with GitHub Actions, order their stages, gate
+   the promotion of a model with a paired statistical test, and publish an
+   image (@sec-ch-ops-cicd).
+7. **Monitor** a model service: golden signals and SLOs, Prometheus metrics
+   and alerts, Docker Compose stacks, Grafana dashboards; detect **data and
+   concept drift** (PSI, Kolmogorov–Smirnov, χ²), estimate **label shift**
+   without labels, and detect changes sequentially with CUSUM
+   (@sec-ch-ops-monitor).
+8. **Orchestrate** the cycle with DAGs: topological order, critical path,
+   idempotent tasks, Airflow with returned values, and retraining policies
+   with their cost model (@sec-ch-ops-orch).
+
+## Prerequisites {.unnumbered}
+
+From Part I: virtual environments and requirements (@sec-ch-venv,
+@sec-requirements), files and JSON (@sec-json), exceptions
+(@sec-ch-exceptions). From Parts III and IV: train/test splits and
+cross-validation (@sec-cross-validation), leakage (@sec-leakage),
+classification metrics (@sec-classification-metrics), the test-set bound
+(@thm-test-set-size). From Part V: images, layers and digests, Kubernetes
+rollouts (@sec-ch-ctr-containers). From Part VI: HTTP, FastAPI, idempotence,
+Little's law, tail latency, token buckets (@sec-ch-api-rest). The
+probability used — expectations, the binomial and normal distributions,
+hypothesis tests at the level of a first course — is introduced where needed.
+
+## Graded practice {.unnumbered}
+
+Every main section ends with a **Practice** block — **Easy** (by hand),
+**Medium** (in code), **Hard** (a small open problem) — each with a collapsed
+hint and a separate collapsed solution, with executed code. Unlike Parts V
+and VI this course **has a final project**, and the Hard exercises move in
+its direction — a sentiment classifier served, tested, packaged, released,
+monitored and retrained — on the small local model of the theory chapters,
+without solving the project itself.
+
+## Data and models of the theory chapters {.unnumbered}
+
+The theory chapters do not depend on any downloaded model or dataset. They
+use **synthetic short posts** generated in code by the part's helper,
+[`mlops/opsbook.py`](https://github.com/matteo-zirilli/ai-engineering-handbook/blob/main/mlops/opsbook.py):
+each post mentions a product topic, may contain polar words, negations,
+emojis or slang, and carries a label 0 = negative, 1 = neutral, 2 = positive
+(the encoding of the model used in the project), with 6 % annotation noise.
+The generator exposes every kind of change studied in @sec-ch-ops-monitor as
+a parameter — class priors (label shift), topics, length, emojis, unseen
+slang (covariate shift), words that change polarity (concept shift) — so
+that each formula can be checked against a known truth. The model is small
+and trains in a fraction of a second: TF-IDF features of words and word
+pairs and a multinomial logistic regression (@sec-ch-ml-classification).
+No real person's text is used anywhere in the theory chapters.
+
+## Tools and versions {.unnumbered}
+
+```{python}
+#| echo: false
+#| output: asis
+import sys, subprocess
+from importlib.metadata import version
+sys.path.insert(0, ".")
+import opsbook as ob
+
+def v(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
+
+mlflow_v = v(f"{ob.venv_python('mlflow')} -c 'import mlflow; print(mlflow.__version__)'")
+airflow_v = v(f"{ob.venv_python('airflow')} -c 'import airflow; print(airflow.__version__)'")
+prom_v = v(f"{ob.tool('prometheus')} --version").split()[2]
+am_v = v(f"{ob.tool('alertmanager')} --version").split()[2]
+docker_v = v("docker version --format '{{.Server.Version}}'") or "not running"
+compose_v = v("docker compose version --short")
+print(f"The code of this part was executed with **Python {sys.version.split()[0]}**, "
+      f"scikit-learn {version('scikit-learn')}, NumPy {version('numpy')}, SciPy {version('scipy')}, "
+      f"pandas {version('pandas')}; **FastAPI {version('fastapi')}**, Pydantic {version('pydantic')}, "
+      f"uvicorn {version('uvicorn')}, httpx {version('httpx')}; **pytest {version('pytest')}**, "
+      f"**Ruff {version('ruff')}**; prometheus-client {version('prometheus-client')}; "
+      f"**MLflow {mlflow_v}** and **Apache Airflow {airflow_v}** (each in its own virtual environment); "
+      f"**Prometheus {prom_v}** and **Alertmanager {am_v}**, **actionlint {v(ob.tool('actionlint') + ' --version').splitlines()[0]}** "
+      f"and **act {v(ob.tool('act') + ' --version').split()[-1]}** (binaries from their GitHub releases); "
+      f"**Docker Engine {docker_v}** with **Compose {compose_v}**. Every output shown was produced by "
+      "actually running the code when the book was built.")
+```
+
+All services run on the build machine's loopback interface. The build
+machine cannot reach Docker Hub or any other image registry, so images are
+built from local stand-ins of the official base images, exactly as in
+Part V; it cannot download Grafana either, so Grafana's configuration
+(data source, dashboard, alert rule) is written, validated and explained,
+but not rendered by a running Grafana — Prometheus and Alertmanager, which
+can be downloaded, run for real.
+
+## Map of the part {.unnumbered}
+
+| Chapter | Core topics | What the book adds |
+|---|---|---|
+| @sec-ch-ops-intro | what MLOps is, life cycle, roles, maturity models, tool stack, model hubs and model cards | prediction churn and its bounds, technical debt made concrete, the ML Test Score as a computation, content-pinned downloads |
+| @sec-ch-ops-repro | virtual environments, version control, model versioning, registries | what determines a run, floating-point non-associativity, Git objects computed by hand, `git bisect` on a model, MLflow tracking and aliases, lineage by hashes |
+| @sec-ch-ops-serving | serving patterns, HTTP APIs for models, FastAPI | load-once cost model, schema validation and health/readiness, calibration (ECE, temperature scaling with proofs), micro-batching and Little's law |
+| @sec-ch-ops-testing | why test, kinds of tests, linting and formatting, pytest, testing models | the ML Test Score's categories, fixtures and contracts, formatter idempotence, behavioural tests (invariance, direction), Wilson intervals and test sizing with power |
+| @sec-ch-ops-deploy | deployment, containers, Docker images for models | baking vs fetching the model, health checks, rolling/blue-green/shadow/canary, two-proportion sample sizes |
+| @sec-ch-ops-cicd | CI/CD, pipeline stages, services, GitHub Actions, continuous delivery | optimal stage order (exchange argument), critical path, actionlint and local runs, McNemar's test as a promotion gate |
+| @sec-ch-ops-monitor | what to monitor, data and concept drift, Docker Compose, Grafana, alerts | quantiles from histograms, PSI = Jeffreys divergence, KS + DKW sample sizes, χ², BBSE and EM for label shift, CUSUM, `for:` durations and false alarms |
+| @sec-ch-ops-orch | orchestrators, DAGs, Airflow, returned values | Kahn's algorithm proved, span and work bounds, idempotent partitions, the optimal retraining period, feedback loops |
+
+## The project {.unnumbered}
+
+The course ends with a project: take a **pre-trained sentiment classifier
+for social-media posts** (a RoBERTa model fine-tuned on tweets, published on
+the Hugging Face Hub) and carry it through the whole chain of this part — a
+tested FastAPI service, a reproducible environment and a readable history, a
+container image, a CI/CD pipeline, metrics with a dashboard and an alert, a
+discussion of the drift signals to watch, and an orchestrated cycle of data
+collection, evaluation and retraining. The project chapter restates the
+requirements in my own words, maps each to the chapters above, and walks
+through a complete reference implementation. It is **in preparation**: the
+build machine cannot reach the Hugging Face Hub, so the way the model's files
+reach the book, and the public dataset with a clear licence used to evaluate
+it, are being settled with the author before the chapter is written. Each
+theory chapter's "In the project" box already says which of its tools the
+project needs.

@@ -40,7 +40,8 @@ exercises instead.
 | IV | Machine learning: models and algorithms | Classification of fruit types with k-nearest neighbours | ✅ |
 | V | Introduction to containers | — (no final project) | ✅ |
 | VI | Introduction to REST APIs | — (no final project) | ✅ |
-| VII–XII | remaining courses of the master | — | 🛠 in preparation |
+| VII | MLOps: machine learning in production | MLOps pipeline for monitoring sentiment on social media | 🛠 theory chapters ✅, project chapter in preparation |
+| VIII–XII | remaining courses of the master | — | 🛠 in preparation |
 
 ## Repository layout
 
@@ -65,6 +66,8 @@ containers/             Part V — Introduction to containers (one chapter: Dock
 containers/ctrbook.py   helper that builds and runs the container examples (docker, kubectl) and masks IDs
 rest/                   Part VI — Introduction to REST APIs (one chapter: HTTP, REST, FastAPI)
 rest/apibook.py         helper for Part VI (local uvicorn servers, figure style)
+mlops/                  Part VII — MLOps: machine learning in production (one .qmd per module; project to come)
+mlops/opsbook.py        helper for Part VII (synthetic posts, local model, service, tools, separate venvs)
 styles/                theme customisations
 _freeze/               stored results of the executed Python cells (do not edit by hand)
 .github/workflows/     GitHub Action that renders the book and publishes it to GitHub Pages
@@ -84,7 +87,12 @@ binutils (`nm`, `objdump`, `readelf`), on Linux. Re-executing Part V needs
 root, Docker Engine with BuildKit, `debootstrap`, `unshare` and k3s (the
 helper builds local stand-ins for the official base images); Part VI needs
 `fastapi`, `httpx`, `uvicorn` and `jsonschema`, and Docker for its last
-exercise.
+exercise. Re-executing Part VII needs, in addition, `pytest-cov`, `hypothesis`,
+`ruff`, `prometheus-client` and `pyyaml`, Docker with Compose, network access
+to PyPI and to GitHub release downloads (Prometheus, Alertmanager,
+actionlint, act and the CNCF registry are downloaded by `mlops/opsbook.py`),
+and creates two separate virtual environments, for MLflow and for Airflow
+(see `CLAUDE.md`).
 
 ```bash
 quarto preview            # live preview in the browser

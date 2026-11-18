@@ -1,0 +1,1102 @@
+# Reproducibility: environments, version control, registries {#sec-ch-ops-repro}
+
+> *"Non-reproducible single occurrences are of no significance to science."*
+> — Karl Popper, 1959 [@popper1959, §8]
+
+```{python}
+#| echo: false
+import opsbook as ob
+ob.setup()
+import json, os, re, subprocess, sys, textwrap, hashlib, zlib, shutil
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from sklearn.metrics import accuracy_score
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- list everything that determines the result of a training run — code, data,
+  configuration, environment, randomness, hardware — and record it;
+- build **pinned and hashed** environments, fingerprint them, and explain
+  why floating-point results can depend on the order of operations (with the
+  error bound of recursive summation);
+- explain Git as a **content-addressed store**: compute blob, tree and commit
+  identifiers by hand, prove that a commit identifier authenticates its whole
+  history, and use `git bisect` to find the commit that degraded a model;
+- **track experiments** and manage model versions with MLflow — runs,
+  parameters, metrics, artefacts, registered versions and aliases — and
+  implement a minimal registry with promotion, rollback and **lineage** from
+  data to image;
+- choose the length of short identifiers with the birthday bound.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Virtual environments in Python; version control of code with Git; versioning
+of models and model registries; creating and managing environments and
+working with Git in practice.
+:::
+
+## What determines a run {#sec-ops-envs}
+
+### Six inputs
+
+Run the same training script twice and compare the two models. If they
+differ, one of the inputs of the run differed. A run is a function
+$$
+\text{model, metrics} = F(\text{code}, \text{data}, \text{configuration},
+\text{environment}, \text{randomness}, \text{hardware}),
+$$
+and **reproducibility** means being able to supply the same six arguments
+again. The ACM distinguishes *repeatability* (same team, same setup),
+*reproducibility* (different team, same artefacts) and *replicability*
+(different team, independently developed artefacts) [@acm2020badging];
+MLOps aims at the first two, automatically. Each argument has its tool:
+
+| Input | What can change silently | How it is pinned |
+|---|---|---|
+| code | an uncommitted edit, a different branch | Git commit id (@sec-ops-git) |
+| data | a file overwritten, a query returning new rows | content hash of the data (@sec-ops-registry) |
+| configuration | a default changed, a flag set in a shell | a validated, hashed configuration (@exr-ops1-debt-hard) |
+| environment | a package upgraded, another Python | pinned versions **and** hashes; a fingerprint |
+| randomness | seeds, thread scheduling, hash randomisation | explicit seeds; deterministic algorithms |
+| hardware | CPU instruction sets, GPU kernels, number of threads | record it; tolerate tiny numerical differences |
+
+Part I introduced virtual environments and requirement files
+(@sec-ch-venv, @sec-requirements). Two refinements make them reproducible
+rather than merely isolated.
+
+### Pinning versions and bytes
+
+A line `scikit-learn==1.9.1` pins a **version name**, not the bytes installed:
+a package index could serve a different file under the same name (a rebuilt
+wheel, a compromised mirror). pip's **hash-checking mode** pins the bytes:
+each requirement carries the SHA-256 of the acceptable distribution files,
+and pip refuses any file whose hash differs — and, once one requirement has a
+hash, refuses any requirement without one, including dependencies, so that
+the whole tree is pinned [@pip2026hashes]. Here is an environment pinned this
+way, built twice, and a requirement with a wrong hash:
+
+```{python}
+#| echo: false
+#| output: asis
+envdir = ob.project("envs")
+ob.sh(f"{sys.executable} -m pip download -q --no-deps --only-binary=:all: -d wheels 'six==1.17.0' && "
+      f"{sys.executable} -m pip hash wheels/six-1.17.0-py2.py3-none-any.whl",
+      cwd=envdir, shown="pip download --no-deps -d wheels six==1.17.0 && pip hash wheels/six-*.whl")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+six_hash = ob.run(f"{sys.executable} -m pip hash wheels/six-1.17.0-py2.py3-none-any.whl",
+                  cwd=envdir).stdout.split("--hash=sha256:")[1].strip()
+ob.write("requirements.lock", f"six==1.17.0 --hash=sha256:{six_hash}\n", base=envdir)
+ob.write("tampered.lock", f"six==1.17.0 --hash=sha256:{'0' * 64}\n", base=envdir)
+ob.show("requirements.lock", base=envdir)
+for name in ("a", "b"):
+    ob.run(f"{sys.executable} -m venv {name} && {name}/bin/pip install -q --require-hashes "
+           f"-r requirements.lock", cwd=envdir, check=True)
+ob.sh("python -m venv c && c/bin/pip install -q --require-hashes -r tampered.lock", cwd=envdir,
+      filt=lambda s: "\n".join(l for l in s.splitlines() if "six" in l or "ERROR" in l or "Expected" in l or "Got" in l))
+```
+
+The two environments `a` and `b` installed exactly the bytes of the lock
+file; the tampered lock is refused before anything is installed. Lock files
+with hashes are produced by tools — `pip-compile --generate-hashes`
+(pip-tools), `uv pip compile --generate-hashes`, Poetry, PDM — from a short
+list of direct dependencies [@uv2026].
+
+An **environment fingerprint** summarises what is installed: the interpreter
+version, the platform, and the sorted list of installed distributions. Two
+runs with the same fingerprint used the same packages:
+
+```{python}
+def env_fingerprint(python: str) -> tuple[str, str]:
+    """(SHA-256 prefix, description) of an interpreter's environment."""
+    code = ("import sys, platform, importlib.metadata as m; "
+            "print(sys.version.split()[0], platform.machine()); "
+            "print('\\n'.join(sorted(f'{d.metadata[\"Name\"].lower()}=={d.version}' for d in m.distributions())))")
+    out = subprocess.run([python, "-c", code], capture_output=True, text=True).stdout
+    return ob.sha256(out)[:16], out.splitlines()[0] + f", {len(out.splitlines()) - 1} distributions"
+
+for name in ("a", "b"):
+    print(name, *env_fingerprint(str(envdir / name / "bin" / "python")))
+print("book", *env_fingerprint(sys.executable))
+```
+
+### Randomness that is not obvious
+
+Seeds are the visible part of randomness. Two less visible sources matter in
+practice.
+
+**Hash randomisation.** Python randomises the hash of strings per process
+(unless `PYTHONHASHSEED` is fixed), so the iteration order of a `set` of
+strings changes between runs [@python2026hashseed]. Code that builds a
+vocabulary by iterating over a set gets a different feature order in every
+process:
+
+```{python}
+code = "words = {'love', 'hate', 'phone', 'battery', 'great', 'slow'}; print(list(words))"
+for seed in ("1", "2"):
+    out = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, PYTHONHASHSEED=seed),
+                         capture_output=True, text=True).stdout.strip()
+    print(f"PYTHONHASHSEED={seed}: {out}")
+```
+
+**Floating-point order.** Floating-point addition is not associative, so the
+*order* of a sum — which depends on how a library splits work across threads
+or vector registers — can change its last digits.
+
+::: {#prp-ops-summation}
+## Recursive summation depends on order, within a bound
+Let $\mathrm{fl}$ denote rounding to the nearest double, with unit roundoff
+$u = 2^{-53}$, so that $\mathrm{fl}(a + b) = (a + b)(1 + \delta)$ with
+$|\delta| \le u$ [@higham2002, §2.2]. Then (i) addition in floating point is
+not associative; (ii) computing $\hat s = \mathrm{fl}(\cdots
+\mathrm{fl}(\mathrm{fl}(x_1 + x_2) + x_3) \cdots + x_n)$ in any order gives
+$$
+|\hat s - s| \;\le\; \gamma_{n-1} \sum_{i=1}^n |x_i|, \qquad \gamma_k =
+\frac{k u}{1 - k u},
+$$ {#eq-ops-summation}
+where $s$ is the exact sum. Two orders can therefore differ by up to twice
+this bound, and agree to the bit only by luck.
+:::
+
+*In one line:* each addition may round, rounding errors depend on the
+partial sums, and partial sums depend on the order — but all orders are close.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-summation
+(i) With $a = 1$, $b = c = 2^{-53}$: $\mathrm{fl}(\mathrm{fl}(a + b) + c) =
+1$, because $1 + 2^{-53}$ is exactly halfway between $1$ and the next double
+$1 + 2^{-52}$ and rounds to the even one, $1$, twice; but $\mathrm{fl}(a +
+\mathrm{fl}(b + c)) = \mathrm{fl}(1 + 2^{-52}) = 1 + 2^{-52}$.
+(ii) Let $\hat s_k$ be the computed partial sum after $k$ terms (in the chosen
+order, relabelled $x_1, \dots, x_n$). Then $\hat s_k = (\hat s_{k-1} +
+x_k)(1 + \delta_k)$ with $|\delta_k| \le u$, and unrolling,
+$$
+\hat s_n = \sum_{i=1}^n x_i \prod_{k=\max(i,2)}^{n} (1 + \delta_k),
+$$
+each product having at most $n - 1$ factors. A product of $m$ factors $(1 +
+\delta_k)$ with $|\delta_k| \le u$ and $mu < 1$ equals $1 + \theta_m$ with
+$|\theta_m| \le \gamma_m$ [@higham2002, Lemma 3.1] (by induction: $(1 +
+\theta_{m-1})(1 + \delta) = 1 + \theta_m$ with $|\theta_m| \le \gamma_{m-1}
++ u + \gamma_{m-1}u \le \gamma_m$). Hence $\hat s_n - s = \sum_i x_i
+\theta^{(i)}$ with $|\theta^{(i)}| \le \gamma_{n-1}$, and the triangle
+inequality gives @eq-ops-summation. $\blacksquare$
+:::
+
+```{python}
+rng = np.random.default_rng(0)
+x = rng.normal(size=100_000) * 10.0 ** rng.integers(-3, 4, size=100_000)
+s_forward = 0.0
+for v in x:                       # recursive summation, left to right
+    s_forward += v
+s_backward = 0.0
+for v in x[::-1]:                 # the same terms, right to left
+    s_backward += v
+s_pairwise = float(np.sum(x))     # NumPy: pairwise summation in blocks
+exact = float(sum(map(__import__("fractions").Fraction, x)))   # exact rational sum
+bound = (len(x) - 1) * 2.0**-53 / (1 - (len(x) - 1) * 2.0**-53) * np.abs(x).sum()
+for name, val in [("forward", s_forward), ("backward", s_backward), ("numpy", s_pairwise)]:
+    print(f"{name:9s} {float(val)!r:24s} error {abs(val - exact):.2e}")
+print(f"bound (eq.)  {bound:.2e}")
+```
+
+Three orders, three different last digits, all far inside the bound.
+Consequences: a model trained with a different number of threads, or on a
+machine with other vector instructions, may differ in its last bits; tests
+should compare floating-point results with a **tolerance** (`np.allclose`),
+and reproducibility claims should say whether they are bitwise. For the
+small deterministic models of this part, bitwise reproducibility on one
+machine is achievable — the Hard exercise proves it with hashes.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops2-envs-easy}
+## Easy — what must be recorded?
+A colleague sends you `model.joblib` and says "accuracy 0.93 on the test
+set". Using the table of the six inputs, list the minimal information you
+need to retrain the same model and check the number, and say for each item
+how you would record it automatically at training time.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+One line per input; "automatically" means something the training script can
+compute itself — a hash, a command's output, a field of the configuration.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+- **Code**: the Git commit id (`git rev-parse HEAD`) and whether the working
+  tree was clean (`git status --porcelain` empty).
+- **Data**: the SHA-256 of the training and test files (or of a canonical
+  serialisation of the query result), plus their row counts.
+- **Configuration**: the full configuration, canonical JSON and its hash
+  (@exr-ops1-debt-hard).
+- **Environment**: Python version, platform, the lock file's hash and the
+  environment fingerprint above.
+- **Randomness**: every seed (data split, model, sampling), and
+  `PYTHONHASHSEED` if anything iterates over sets.
+- **Hardware**: CPU model and number of threads (`os.cpu_count()`, the BLAS
+  thread settings); for GPUs, the device and driver.
+
+Plus the **definition** of the metric (accuracy on which split, which
+threshold). Without the data hash, "accuracy 0.93 on the test set" cannot be
+checked even with the identical model: the test set may have changed.
+:::
+
+::: {#exr-ops2-envs-medium}
+## Medium — two environments, one fingerprint
+Create two virtual environments from the same hashed lock file (as above) and
+a third in which you additionally install another package. Compute the three
+fingerprints, and show which line of the description differs. Then explain
+why the fingerprint includes the interpreter version and platform.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Reuse `env_fingerprint`; to see the difference, compute the set difference of
+the two package lists.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+ob.run(f"{sys.executable} -m venv d && d/bin/pip install -q --require-hashes -r requirements.lock "
+       f"&& d/bin/pip download -q --no-deps -d wheels 'idna==3.10' && d/bin/pip install -q --no-index wheels/idna-3.10-py3-none-any.whl",
+       cwd=envdir, check=True)
+
+def packages(python):
+    code = ("import importlib.metadata as m; "
+            "print('\\n'.join(sorted(f'{d.metadata[\"Name\"].lower()}=={d.version}' for d in m.distributions())))")
+    return set(subprocess.run([python, "-c", code], capture_output=True, text=True).stdout.split())
+
+for name in ("a", "b", "d"):
+    print(name, *env_fingerprint(str(envdir / name / "bin" / "python")))
+print("only in d:", packages(str(envdir / "d/bin/python")) - packages(str(envdir / "a/bin/python")))
+```
+`a` and `b` share the fingerprint; `d` differs by exactly one distribution.
+The interpreter version and the platform are part of the fingerprint because
+the same package version ships different wheels for different Pythons and
+CPUs (compiled extensions), and the standard library itself changes between
+Python versions. A common mistake is to fingerprint `requirements.txt` — the
+*intention* — instead of what is actually installed.
+:::
+
+::: {#exr-ops2-envs-hard}
+## Hard — prove a training run reproducible
+Write a training script for the local model that records the six inputs of
+the run in a JSON manifest and saves the model. Run it twice, in two separate
+processes with **different** `PYTHONHASHSEED`, and prove that the runs are
+reproducible by comparing the SHA-256 of the saved models, of the predicted
+probabilities on a fixed test set, and of the metrics. Then break
+reproducibility on purpose with one change to the script and show which hash
+detects it.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Hash the probabilities after rounding them to, say, 12 decimals, and the
+metrics as canonical JSON. The model file's bytes are a stronger check than
+the probabilities: they also catch differences in parts of the model that the
+test set does not exercise.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+train_dir = ob.project("repro")
+ob.write("train.py", '''
+    """Train the local model and write model.joblib + manifest.json (all six inputs)."""
+    import hashlib, json, os, platform, sys
+    import joblib, numpy as np
+    sys.path.insert(0, sys.argv[1])                 # folder of opsbook.py
+    import opsbook as ob
+    from sklearn.metrics import accuracy_score
+
+    config = {"n_train": 3000, "data_seed": 1, "C": 4.0, "ngram": [1, 2], "model_seed": 0}
+    train = ob.make_posts(config["n_train"], seed=config["data_seed"])
+    test = ob.make_posts(2000, seed=100)
+    model = ob.train_model(train.text, train.label, C=config["C"], ngram=tuple(config["ngram"]),
+                           seed=config["model_seed"])
+    joblib.dump(model, "model.joblib")
+    proba = np.round(model.predict_proba(test.text), 12)
+    metrics = {"accuracy": round(float(accuracy_score(test.label, proba.argmax(1))), 6)}
+    sha = lambda b: hashlib.sha256(b).hexdigest()
+    manifest = {
+        "config": config,
+        "data_sha256": sha(train.to_csv(index=False).encode()),
+        "environment": {"python": sys.version.split()[0], "platform": platform.machine()},
+        "hashseed": os.environ.get("PYTHONHASHSEED"),
+        "model_sha256": sha(open("model.joblib", "rb").read()),
+        "proba_sha256": sha(proba.tobytes()),
+        "metrics": metrics,
+        "metrics_sha256": sha(json.dumps(metrics, sort_keys=True).encode()),
+    }
+    json.dump(manifest, open("manifest.json", "w"), indent=1, sort_keys=True)
+''', base=train_dir)
+
+def run_training(hashseed):
+    p = ob.run(f"{sys.executable} train.py {Path.cwd()}", cwd=train_dir,
+               env={"PYTHONHASHSEED": hashseed}, check=True)
+    return json.loads((train_dir / "manifest.json").read_text())
+
+m1, m2 = run_training("1"), run_training("2")
+for key in ("data_sha256", "model_sha256", "proba_sha256", "metrics_sha256"):
+    print(f"{key:15s} {m1[key][:16]}  {m2[key][:16]}  {'same' if m1[key] == m2[key] else 'DIFFERENT'}")
+
+# Break it: draw the training sample without a fixed seed.
+script = (train_dir / "train.py").read_text()
+(train_dir / "train.py").write_text(script.replace('seed=config["data_seed"]', "seed=None"))
+m3 = run_training("1")
+for key in ("data_sha256", "model_sha256", "metrics_sha256"):
+    print(f"unseeded run: {key:15s} {'same' if m1[key] == m3[key] else 'DIFFERENT'}")
+```
+With the same six inputs, the model bytes, the probabilities and the metrics
+are identical even under different hash seeds — the pipeline does not depend
+on set order. Removing the data seed changes the data hash, hence the model
+and its metrics: the manifest says *which* input changed, not just *that*
+something did. A typical error is to compare only the metric — two different
+models can have the same accuracy (@prp-ops-churn).
+:::
+
+## Version control: Git as a content-addressed store {#sec-ops-git}
+
+### Objects and their names
+
+Git stores a project's history as **objects** in a key–value store whose keys
+are the hashes of the values [@chacon2014, §10.2]. There are four kinds:
+
+- a **blob** holds the bytes of one file (not its name);
+- a **tree** holds a directory: a list of entries (mode, name, id of a blob
+  or of a sub-tree);
+- a **commit** holds the id of the root tree, the ids of its parent commits,
+  author, committer, dates and message;
+- a **tag** names an object with a message (and possibly a signature).
+
+The id of an object is the SHA-1 (SHA-256 in repositories created with
+`--object-format=sha256`) of a header `"<type> <size>\0"` followed by the
+content. Let us compute one by hand and ask Git:
+
+```{python}
+def git_blob_id(content: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+
+content = b"love great amazing\n"
+repo = ob.project("gitdemo")
+ob.run("git init -q -b main && git config user.email a@example.org && git config user.name Ada", cwd=repo)
+(repo / "words.txt").write_bytes(content)
+print("by hand:", git_blob_id(content))
+print("by git :", ob.run("git hash-object words.txt", cwd=repo).stdout.strip())
+```
+
+A tree is serialised as, for each entry sorted by name, `"<mode> <name>\0"`
+followed by the 20 raw bytes of the entry's id; a commit is text. After a
+first commit we can rebuild the commit's id from its parts:
+
+```{python}
+env = {"GIT_AUTHOR_DATE": "2026-01-01T12:00:00+0000", "GIT_COMMITTER_DATE": "2026-01-01T12:00:00+0000"}
+ob.run("git add words.txt && git commit -q -m 'Add lexicon'", cwd=repo, env=env, check=True)
+
+tree_body = b"100644 words.txt\0" + bytes.fromhex(git_blob_id(content))
+tree_id = hashlib.sha1(b"tree %d\0" % len(tree_body) + tree_body).hexdigest()
+commit_body = ob.run("git cat-file commit HEAD", cwd=repo).stdout.encode()
+commit_id = hashlib.sha1(b"commit %d\0" % len(commit_body) + commit_body).hexdigest()
+print(commit_body.decode())
+print("tree   by hand:", tree_id, "| git:", ob.run("git rev-parse HEAD^{tree}", cwd=repo).stdout.strip())
+print("commit by hand:", commit_id, "| git:", ob.run("git rev-parse HEAD", cwd=repo).stdout.strip())
+```
+
+A commit contains the id of its tree and of its parents; trees contain the ids
+of blobs and sub-trees. The history is a **Merkle DAG** — the structure of
+image manifests and layers in Part V (@prp-ctr-merkle).
+
+::: {#prp-ops-commit}
+## A commit id authenticates the whole history
+Assume no two distinct objects in the repository have the same id. Then two
+commits with the same id have the same message and metadata, the same files
+with the same contents in every directory, and the same ancestors, all the way
+back to the first commit.
+:::
+
+*In one line:* checking 40 hexadecimal digits checks every byte of every file
+in every version — which is why a commit id in a run's manifest pins the code.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-commit
+By strong induction on the longest path from the commit to a root. Equal ids
+and no collisions imply equal serialised content, hence equal message,
+metadata, tree id and list of parent ids. Equal tree ids imply equal tree
+contents (again by absence of collisions), hence equal names, modes and child
+ids; recursing down the finite tree, all blob ids and therefore all file
+contents are equal. The parents have equal ids and shorter paths to a root,
+so by the induction hypothesis their histories are equal. A root commit has no
+parents, which is the base case. $\blacksquare$
+:::
+
+The hypothesis is the absence of collisions. For SHA-256 the birthday bound
+makes accidental collisions negligible (@thm-ctr-collision); SHA-1 is broken
+against *deliberate* collisions — the SHAttered attack produced two PDFs with
+the same SHA-1 [@stevens2017] — so Git uses a hardened SHA-1 that detects the
+known attack patterns, and supports SHA-256 repositories [@git2026hashtransition].
+
+### Branches, merges and a readable history
+
+Everything else in Git is **pointers** to commits: a branch is a file
+containing a commit id, `HEAD` points to the current branch, a tag to a fixed
+commit. Committing creates a new commit whose parent is the old tip and moves
+the branch; merging creates a commit with two parents (or just moves the
+pointer, a *fast-forward*, when one tip is an ancestor of the other):
+
+```{python}
+#| echo: false
+#| output: asis
+ob.sh("""git switch -q -c negation
+printf 'love great amazing\\nnot\\n' > words.txt && git commit -qam 'Handle negation words'
+git switch -q main
+printf 'hate awful\\n' > negative.txt && git add negative.txt && git commit -qm 'Add negative lexicon'
+git merge -q --no-edit negation
+git log --graph --oneline --format='%h %s'""", cwd=repo, env=env,
+      shown="git switch -c negation; …commit…; git switch main; …commit…; git merge negation; git log --graph")
+```
+
+Commit ids depend on dates and authors, so yours would differ; the shape would
+not. A history is useful when each commit is **one logical change**, builds
+and passes the tests, and says *why* in its message: then `git log` explains
+the project, `git revert` undoes one change, and `git bisect` can search it.
+What **not** to commit: secrets, virtual environments, caches, large data and
+model files. The last two belong to a store addressed by content, with only
+small **pointers** in Git — Git LFS replaces each large file by a three-line
+pointer containing its SHA-256 and size [@gitlfs2024spec]; DVC does the same
+with `.dvc` files [@dvc2026]:
+
+```{python}
+model_bytes = (Path("..") / "references.bib").read_bytes()[:300_000]   # any large file
+pointer = f"version https://git-lfs.github.com/spec/v1\noid sha256:{ob.sha256(model_bytes)}\nsize {len(model_bytes)}\n"
+print(pointer)
+```
+
+### Practice {.unnumbered}
+
+::: {#exr-ops2-git-easy}
+## Easy — a blob id by hand
+What is the exact byte string that Git hashes for a file containing the five
+characters `hello` followed by a newline? Compute its blob id with `hashlib`
+and check it with `git hash-object`. Then: if you rename the file, does the
+blob id change? Does the commit id?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The header counts bytes of the content, not including the header; the
+separator is a NUL byte. A blob does not contain the file name — where is the
+name stored?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+data = b"hello\n"
+print(repr(b"blob %d\0" % len(data) + data), git_blob_id(data))
+(repo / "hello.txt").write_bytes(data)
+print("git:", ob.run("git hash-object hello.txt", cwd=repo).stdout.strip())
+```
+The hashed string is `b"blob 6\x00hello\n"` (six bytes of content). Renaming
+the file does not change the blob, whose id depends only on the content; it
+changes the **tree** entry (names live in trees), so the tree id changes, so
+the commit id of the commit recording the rename changes. Forgetting the
+newline that editors add at the end of the file is the classic reason why a
+hand-computed id "does not match".
+:::
+
+::: {#exr-ops2-git-medium}
+## Medium — detect a rewritten history
+Two clones of the same repository report the same file contents on `main`
+today, but one of them was obtained after someone amended an old commit
+message and force-pushed. Show, in a small repository, that the tip commit
+ids differ even though the files are identical, and find the first commit at
+which the two histories diverge.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Build three commits, copy the repository, rewrite the first commit's message
+in the copy (`git rebase -i` is interactive; `git filter-branch
+--msg-filter` or `git commit-tree` are not), and compare `git rev-list` of
+both from the root.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+r1 = ob.project("hist1")
+ob.run("git init -q -b main && git config user.email a@example.org && git config user.name Ada", cwd=r1)
+for i, msg in enumerate(["first", "second", "third"]):
+    (r1 / "f.txt").write_text(f"line {i}\n")
+    ob.run(f"git add f.txt && git commit -qm '{msg}'", cwd=r1, env=env, check=True)
+r2 = ob.WORK / "hist2"
+shutil.rmtree(r2, ignore_errors=True)
+shutil.copytree(r1, r2)
+ob.run("git filter-branch -f --msg-filter 'sed s/^first$/First!/' main >/dev/null 2>&1", cwd=r2,
+       env=dict(env, FILTER_BRANCH_SQUELCH_WARNING="1"), check=True)
+
+revs = lambda r: ob.run("git rev-list --reverse main", cwd=r).stdout.split()
+same_files = ob.run("git rev-parse main^{tree}", cwd=r1).stdout == ob.run("git rev-parse main^{tree}", cwd=r2).stdout
+print("same files at the tip:", same_files)
+for k, (a, b) in enumerate(zip(revs(r1), revs(r2))):
+    print(f"commit {k}: {a[:10]} {b[:10]} {'same' if a == b else 'DIFFERENT'}")
+```
+The trees at the tip are equal, but every commit from the rewritten one onward
+has a new id: by @prp-ops-commit, changing any ancestor changes every
+descendant. This is why a run's manifest records the commit id rather than
+"`main` on Tuesday", and why force-pushing a shared branch breaks everyone's
+references. Comparing only the files at the tip would miss the rewrite.
+:::
+
+::: {#exr-ops2-git-hard}
+## Hard — bisect a model regression
+Build a repository whose history has twelve commits changing the training
+configuration of the local model (a JSON file read by a training script). At
+one commit, someone switched off bigrams "to make training faster"; the
+accuracy dropped. Write a test script that trains the model at the checked-out
+commit and fails if the accuracy on a fixed test set is below a threshold, and
+let `git bisect run` find the guilty commit. How many trainings did bisect
+need, compared with testing every commit?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`git bisect start <bad> <good>` then `git bisect run <script>`: the script's
+exit code 0 means good, 1–127 (except 125) bad, 125 skip. Bisect halves the
+range of candidate commits at each step.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+bis = ob.project("bisect")
+ob.run("git init -q -b main && git config user.email a@example.org && git config user.name Ada", cwd=bis)
+ob.write("check.py", f'''
+    """Exit 0 if the model trained with config.json reaches accuracy >= 0.92, else 1."""
+    import json, sys
+    sys.path.insert(0, {str(Path.cwd())!r})
+    import opsbook as ob
+    from sklearn.metrics import accuracy_score
+    cfg = json.load(open("config.json"))
+    train, test = ob.make_posts(3000, seed=1), ob.make_posts(2000, seed=100)
+    m = ob.train_model(train.text, train.label, C=cfg["C"], ngram=(1, cfg["ngram_max"]))
+    acc = accuracy_score(test.label, m.predict(test.text))
+    open("trainings.log", "a").write(f"{{acc:.4f}}\\n")
+    sys.exit(0 if acc >= 0.92 else 1)
+''', base=bis)
+ob.run("printf 'trainings.log\\ncheck.py\\n' > .gitignore", cwd=bis)
+cfg = {"C": 4.0, "ngram_max": 2}
+for i in range(12):
+    if i == 7:
+        cfg["ngram_max"] = 1                   # the guilty change
+    else:
+        cfg["C"] = round(cfg["C"] * 1.05, 3)   # harmless tweaks
+    (bis / "config.json").write_text(json.dumps(cfg))
+    ob.run(f"git add config.json .gitignore && git commit -qm 'tweak {i}'", cwd=bis, env=env, check=True)
+
+first = ob.run("git rev-list --max-parents=0 HEAD", cwd=bis).stdout.strip()
+out = ob.run(f"git bisect start HEAD {first} >/dev/null && git bisect run {sys.executable} check.py", cwd=bis).stdout
+guilty = re.search(r"([0-9a-f]{40}) is the first bad commit", out).group(1)
+print("first bad commit:", ob.run(f"git log -1 --format=%s {guilty}", cwd=bis).stdout.strip())
+print("trainings run by bisect:", len((bis / "trainings.log").read_text().split()), "of 11 candidates")
+_ = ob.run("git bisect reset", cwd=bis)
+```
+Bisect found the commit that switched off bigrams after about $\lceil\log_2
+11\rceil$ trainings instead of up to 11: binary search over the history. This
+needs two things the chapter insists on: commits small enough that "the first
+bad commit" identifies a single change, and a **deterministic** check — with a
+noisy test (an accuracy estimated on a tiny sample), bisect can be misled at
+any step. The test set is fixed by seed and the threshold sits between the two
+accuracies; @sec-ch-ops-testing shows how to choose such a threshold when the
+accuracy itself is uncertain.
+:::
+
+## Experiments, models and registries {#sec-ops-registry}
+
+### Tracking experiments
+
+Training a model is a search: dozens of runs with different data, features and
+hyperparameters. An **experiment tracker** records each run — parameters,
+metrics (possibly per epoch), artefacts (the model, plots, the manifest), and
+the code version — in a store that can be queried later. **MLflow** is a
+widely used open-source tracker: an *experiment* groups *runs*; each run has
+parameters, metrics, tags and artefacts; a model logged by a run can be
+**registered** under a name, which gives it a version number; **aliases**
+(such as `champion`) are mutable pointers to versions, through which serving
+code loads models (`models:/<name>@<alias>`) [@mlflow2026]. (Earlier MLflow
+versions had fixed "stages" — Staging, Production — which have been
+deprecated in favour of aliases and tags.)
+
+The following script, run in its own environment (MLflow brings its own web
+stack), tracks a small grid search over the regularisation constant, registers
+the best model, points the alias `champion` to it, and loads the model back
+through the alias. The store is a local SQLite file:
+
+```{python}
+mlf = ob.project("mlflow")
+ob.write("grid.py", '''
+    import logging, sys, warnings
+    warnings.filterwarnings("ignore")
+    logging.getLogger("mlflow").setLevel(logging.ERROR)
+    sys.path.insert(0, sys.argv[1])
+    import mlflow, mlflow.sklearn
+    import opsbook as ob
+    from sklearn.metrics import accuracy_score
+
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    mlflow.set_experiment("sentiment-local")
+    train, valid = ob.make_posts(3000, seed=1), ob.make_posts(2000, seed=50)
+    data_hash = ob.sha256(train.to_csv(index=False))[:16]
+    for C in [0.25, 1.0, 4.0, 16.0]:
+        with mlflow.start_run(run_name=f"C={C}"):
+            model = ob.train_model(train.text, train.label, C=C)
+            mlflow.log_params({"C": C, "ngram": "1-2", "data_sha256": data_hash})
+            mlflow.log_metric("valid_accuracy", accuracy_score(valid.label, model.predict(valid.text)))
+            mlflow.sklearn.log_model(model, name="model")
+
+    runs = mlflow.search_runs(order_by=["metrics.valid_accuracy DESC"])
+    print(runs[["params.C", "metrics.valid_accuracy"]].to_string(index=False))
+    best = runs.iloc[0]
+    version = mlflow.register_model(f"runs:/{best.run_id}/model", "sentiment-local")
+    client = mlflow.MlflowClient()
+    client.set_registered_model_alias("sentiment-local", "champion", version.version)
+    champion = mlflow.pyfunc.load_model("models:/sentiment-local@champion")
+    print("champion = version", version.version, "with C =", best["params.C"])
+    print("predictions:", champion.predict(["the battery is awful", "the camera is brilliant"]).tolist())
+''', base=mlf)
+p = ob.run(f"{ob.venv_python('mlflow')} grid.py {Path.cwd()}", cwd=mlf,
+           env={"MLFLOW_DISABLE_AGENT_HINT": "1", "PYTHONWARNINGS": "ignore"})
+print(p.stdout)
+```
+
+Behind the API, the store is two things: a **database** of metadata (runs,
+parameters, metrics, registered models, versions, aliases) and an
+**artefact store** of files, one folder per logged model. Nothing in it is
+magic, and a minimal registry fits in a few dozen lines — which makes clear
+what a registry must guarantee.
+
+### A registry in a few lines
+
+A model registry needs four operations: **register** an artefact as a new
+version (immutable), **find** a version by number or by alias, **promote**
+(move an alias), **roll back** (move it back). If artefacts are stored under
+their content hash, registering the same bytes twice is detected, and any
+corruption is detectable at load time.
+
+```{python}
+import joblib, time
+
+class Registry:
+    """Content-addressed artefacts + a JSON index of versions and aliases."""
+    def __init__(self, root: Path):
+        self.root = root
+        (root / "blobs").mkdir(parents=True, exist_ok=True)
+        self.index_path = root / "index.json"
+        if not self.index_path.exists():
+            self._save({"versions": [], "aliases": {}, "history": []})
+
+    def _load(self):
+        return json.loads(self.index_path.read_text())
+
+    def _save(self, index):                          # atomic replace of the index
+        tmp = self.index_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(index, indent=1))
+        tmp.replace(self.index_path)
+
+    def register(self, file: Path, **metadata) -> int:
+        digest = ob.sha256(file)
+        index = self._load()
+        for v in index["versions"]:
+            if v["sha256"] == digest:
+                return v["version"]                  # same bytes: same version
+        shutil.copyfile(file, self.root / "blobs" / digest)
+        version = len(index["versions"]) + 1
+        index["versions"].append({"version": version, "sha256": digest, **metadata})
+        self._save(index)
+        return version
+
+    def set_alias(self, alias: str, version: int):
+        index = self._load()
+        index["history"].append({"alias": alias, "from": index["aliases"].get(alias), "to": version})
+        index["aliases"][alias] = version
+        self._save(index)
+
+    def rollback(self, alias: str):
+        index = self._load()
+        last = [h for h in index["history"] if h["alias"] == alias][-1]
+        self.set_alias(alias, last["from"])
+
+    def load(self, ref: str):
+        index = self._load()
+        version = index["aliases"][ref] if not str(ref).isdigit() else int(ref)
+        entry = index["versions"][version - 1]
+        blob = self.root / "blobs" / entry["sha256"]
+        if ob.sha256(blob) != entry["sha256"]:
+            raise RuntimeError(f"artefact of version {version} is corrupted")
+        return joblib.load(blob), entry
+
+reg = Registry(ob.project("registry"))
+valid = ob.make_posts(2000, seed=50)
+for C in (1.0, 4.0):
+    m = ob.train_model(ob.make_posts(3000, seed=1).text, ob.make_posts(3000, seed=1).label, C=C)
+    path = ob.WORK / f"model-C{C}.joblib"
+    joblib.dump(m, path)
+    v = reg.register(path, C=C, valid_accuracy=round(accuracy_score(valid.label, m.predict(valid.text)), 4))
+    print("registered version", v, "C =", C)
+print("re-registering the same file gives version", reg.register(ob.WORK / "model-C4.0.joblib", C=4.0))
+reg.set_alias("champion", 1)
+reg.set_alias("champion", 2)                         # promotion
+print("champion:", reg.load("champion")[1])
+reg.rollback("champion")
+print("after rollback:", reg.load("champion")[1])
+```
+
+Promotion and rollback are **pointer moves**: no model is copied or rebuilt,
+so both are instantaneous and the rollback restores exactly the bytes that
+were serving before. The index is replaced atomically (written to a temporary
+file, then renamed, @sec-atomic-writes), so a crash never leaves a
+half-written registry.
+
+### How short can an identifier be?
+
+Hashes are long; humans and logs prefer prefixes — Git shows 7 or more
+hexadecimal digits, registries show 12. With $n$ objects and prefixes of $k$
+hexadecimal digits ($4k$ bits), @thm-ctr-collision with $b = 4k$ bounds the
+probability that two prefixes coincide by
+$$
+P(\text{some two of } n \text{ prefixes collide}) \le \frac{n(n-1)}{2 \cdot
+16^{k}},
+$$ {#eq-ops-prefix}
+so keeping it below $\varepsilon$ needs $k \ge \log_{16}\bigl(n(n-1)/(2
+\varepsilon)\bigr)$. For $n = 10^4$ model versions and $\varepsilon = 10^{-6}$
+this gives $k \ge 11.4$, i.e. 12 digits. Git's 7 digits are an *abbreviation*,
+lengthened automatically when ambiguous, not an identifier to store.
+
+```{python}
+k_needed = lambda n, eps: np.log(n * (n - 1) / (2 * eps)) / np.log(16)
+for n in (10**3, 10**4, 10**6):
+    print(f"n = {n:>9,}: k >= {k_needed(n, 1e-6):.1f} hex digits for P(collision) <= 1e-6")
+```
+
+### Practice {.unnumbered}
+
+::: {#exr-ops2-registry-easy}
+## Easy — content addressing by hand
+Three model files have SHA-256 digests beginning `3fa1…`, `3fa1…` and
+`9c07…`, and the first two are byte-identical. (a) How many blobs does a
+content-addressed registry store? (b) The registry shows 4-digit prefixes;
+with 500 versions, bound the probability that two *different* models share a
+prefix. (c) How many digits make it below 1 %?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Use @eq-ops-prefix with $n = 500$; a probability bound larger than 1 says
+nothing.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Two: identical bytes have the same address and are stored once.
+```{python}
+n = 500
+for k in (4, 6, 8):
+    print(f"k = {k}: bound {n * (n - 1) / (2 * 16**k):.4g}")
+print("k for 1 %:", int(np.ceil(k_needed(500, 0.01))))
+```
+(b) With 4 digits the bound is about 1.9: useless — a collision is in fact
+very likely (the birthday paradox at $16^4 = 65\,536$ values and 500 draws).
+(c) Six digits give about 0.7 %, below 1 %. The mistake is to reason "65 536
+possible prefixes, 500 models, so collisions are rare": the number of *pairs*
+grows like $n^2$.
+:::
+
+::: {#exr-ops2-registry-medium}
+## Medium — aliases with guard rails
+Extend the `Registry` with (i) a `promote(alias, version, min_accuracy)` that
+refuses to point an alias to a version whose recorded validation accuracy is
+below a threshold or lower than the current alias target's, and (ii) a
+`history(alias)` returning the list of moves. Demonstrate a refused promotion,
+an accepted one and a rollback.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Read the current target from the index before moving; raise an exception with
+a clear message when the rule is violated, and do not touch the index then.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+class GuardedRegistry(Registry):
+    def promote(self, alias, version, min_accuracy=0.9):
+        index = self._load()
+        new = index["versions"][version - 1]
+        cur_v = index["aliases"].get(alias)
+        if new["valid_accuracy"] < min_accuracy:
+            raise ValueError(f"version {version}: accuracy {new['valid_accuracy']} < {min_accuracy}")
+        if cur_v and new["valid_accuracy"] < index["versions"][cur_v - 1]["valid_accuracy"]:
+            raise ValueError(f"version {version} is worse than current {alias} (version {cur_v})")
+        self.set_alias(alias, version)
+
+    def history(self, alias):
+        return [(h["from"], h["to"]) for h in self._load()["history"] if h["alias"] == alias]
+
+g = GuardedRegistry(ob.project("guarded"))
+train = ob.make_posts(3000, seed=1)
+for C in (0.05, 4.0, 1.0):
+    m = ob.train_model(train.text, train.label, C=C)
+    joblib.dump(m, ob.WORK / f"g{C}.joblib")
+    g.register(ob.WORK / f"g{C}.joblib", C=C,
+               valid_accuracy=round(accuracy_score(valid.label, m.predict(valid.text)), 4))
+print([(v["version"], v["C"], v["valid_accuracy"]) for v in g._load()["versions"]])
+for v in (1, 2, 3):
+    try:
+        g.promote("champion", v)
+        print(f"promoted version {v}")
+    except ValueError as e:
+        print("refused:", e)
+g.rollback("champion")
+print("history:", g.history("champion"), "-> champion is now", g._load()["aliases"]["champion"])
+```
+The heavily regularised model is refused by the absolute threshold, version 2
+is promoted, version 3 is refused for being worse than the champion, and the
+rollback restores the previous target (here: none, so the alias is cleared
+to `None`). Comparing recorded validation accuracies is the simplest guard;
+@sec-ch-ops-cicd replaces it with a paired test on the same examples, since a
+difference of a few tenths of a point between two numbers measured on 2 000
+posts is mostly noise. A typical mistake is to check the rule *after* moving
+the alias.
+:::
+
+::: {#exr-ops2-registry-hard}
+## Hard — lineage from data to image
+Record and verify the **lineage** of a model all the way to a container image:
+the SHA-256 of the training data, the configuration hash, the commit id of
+the training code, the model artefact's hash, and the id of a Docker image
+that contains the model (built from the local Python base image of Part V).
+Then show that the chain detects tampering at each link: change one byte of
+the model inside the image, or use different data, and say which check fails.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Each link is a pair "input hash → output hash" plus the recipe that turns one
+into the other. To verify, recompute every output from its recorded input and
+compare. For the image, `docker image inspect --format '{{.Id}}'` gives its
+content-addressed id, and `docker run --rm <image> sha256sum /app/model.joblib`
+reads the model inside it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+sys.path.insert(0, str(Path("..") / "containers"))
+import ctrbook as cb          # Part V's helper: local base images and builds
+cb.ensure_base_images()
+
+lin = ob.project("lineage")
+ob.run("git init -q -b main && git config user.email a@example.org && git config user.name Ada", cwd=lin)
+config = {"C": 4.0, "ngram": [1, 2], "data_seed": 1, "n_train": 3000}
+ob.write("config.json", json.dumps(config, sort_keys=True), base=lin)
+ob.write("train.py", "# training code (identical to ob.train_model)\n", base=lin)
+ob.run("git add . && git commit -qm 'Training code and config'", cwd=lin, env=env, check=True)
+
+data = ob.make_posts(config["n_train"], seed=config["data_seed"])
+model = ob.train_model(data.text, data.label, C=config["C"], ngram=tuple(config["ngram"]))
+joblib.dump(model, lin / "model.joblib")
+ob.write("Dockerfile", """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    COPY model.joblib /app/model.joblib
+""", base=lin)
+ob.run(f"docker build -q --build-arg BASE={cb.LOCAL['python']} -t lineage-demo:1 .", cwd=lin, check=True)
+
+record = {
+    "data_sha256": ob.sha256(data.to_csv(index=False)),
+    "config_sha256": ob.sha256(json.dumps(config, sort_keys=True)),
+    "code_commit": ob.run("git rev-parse HEAD", cwd=lin).stdout.strip(),
+    "model_sha256": ob.sha256(lin / "model.joblib"),
+    "image_id": ob.run("docker image inspect --format '{{.Id}}' lineage-demo:1").stdout.strip(),
+}
+
+def verify(record, data, image="lineage-demo:1"):
+    checks = {}
+    checks["data"] = ob.sha256(data.to_csv(index=False)) == record["data_sha256"]
+    retrained = ob.train_model(data.text, data.label, C=config["C"], ngram=tuple(config["ngram"]))
+    joblib.dump(retrained, ob.WORK / "retrained.joblib")
+    checks["data -> model"] = ob.sha256(ob.WORK / "retrained.joblib") == record["model_sha256"]
+    inside = ob.run(f"docker run --rm {image} sha256sum /app/model.joblib").stdout.split()[0]
+    checks["model -> image"] = inside == record["model_sha256"]
+    checks["image id"] = ob.run(f"docker image inspect --format '{{{{.Id}}}}' {image}").stdout.strip() == record["image_id"]
+    return checks
+
+print("intact chain:      ", verify(record, data))
+print("other data:        ", verify(record, ob.make_posts(3000, seed=2)))
+ob.write("Dockerfile", """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    COPY model.joblib /app/model.joblib
+    RUN printf 'x' >> /app/model.joblib
+""", base=lin)
+ob.run(f"docker build -q --build-arg BASE={cb.LOCAL['python']} -t lineage-demo:1 .", cwd=lin, check=True)
+print("tampered image:    ", verify(record, data))
+_ = ob.run("docker rmi -f lineage-demo:1 >/dev/null 2>&1")
+```
+Every link is checked by recomputation: the data by their hash, the model by
+retraining (possible because training is deterministic, @exr-ops2-envs-hard),
+the image by reading the model's hash inside it and by the image id. Other
+data break the first two links; a modified image breaks the last two, even
+though it is tagged with the same name — tags are pointers, ids are content.
+This is the chain the project needs from its evaluation data to the image it
+runs. A typical gap is to record the image *tag*: `lineage-demo:1` now names
+different bytes.
+:::
+
+::: {.project-link}
+**In the project.** Isolate the environment from the first minute: one
+virtual environment, a short list of direct dependencies and a **lock file
+with hashes** generated from it; the Dockerfile and the CI install from the
+lock, so local, CI and container environments are the same
+(@exr-ops2-envs-medium). Commit in small, working steps whose messages tell
+the story (API, then tests, then container, then pipeline, then monitoring,
+then orchestration); keep model weights and data out of Git, referenced by
+revision and hash. Record a manifest for every evaluation or retraining run
+(@exr-ops2-envs-hard), register models with aliases, and keep the lineage
+from data to image (@exr-ops2-registry-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **`pip freeze` as a lock file**: it pins versions, not bytes, and mixes
+  direct and transitive dependencies with no record of why. Use a lock tool
+  with hashes.
+- **Unseeded randomness** — and seeded randomness that still depends on set
+  order or thread scheduling.
+- **Comparing floats for equality** across machines: use tolerances, and say
+  whether reproducibility is bitwise.
+- **Large files in Git**: history grows forever. Use pointers (LFS, DVC) or a
+  registry.
+- **Force-pushing shared branches**: every descendant commit id changes.
+- **Recording tags instead of ids** (`latest`, `main`, `v1`): tags move.
+- **Promotion by copying files**: use pointer moves, which roll back exactly.
+:::
+
+## Summary
+
+- A run is a function of code, data, configuration, environment, randomness
+  and hardware; reproducibility means recording all six, automatically.
+- Lock files with hashes pin the bytes of every package; a fingerprint of the
+  installed distributions identifies an environment. Floating-point sums
+  depend on order, within $\gamma_{n-1}\sum|x_i|$; string hashing depends on
+  `PYTHONHASHSEED`.
+- Git is a content-addressed Merkle DAG: blob, tree and commit ids are hashes
+  of headers and contents, so a commit id authenticates the whole history;
+  branches and tags are pointers; `git bisect` finds a regression in
+  $O(\log n)$ deterministic checks.
+- Experiment trackers record runs (parameters, metrics, artefacts); registries
+  turn artefacts into numbered, immutable versions with movable aliases;
+  promotion and rollback are pointer moves; lineage links data, configuration,
+  code, model and image by hashes. Short identifiers need $k \ge
+  \log_{16}(n^2/2\varepsilon)$ hexadecimal digits.
+
+## Exercises
+
+::: {#exr-ops2-manifest-diff}
+**What changed?** Write `diff_manifests(m1, m2)` that compares two run
+manifests (as written in @exr-ops2-envs-hard) and reports, in the order of
+the six inputs, the *first* input that differs and every output that differs
+as a consequence. Test it on a pair of runs that differ only in `C`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def diff_manifests(a, b):
+    order = [("config", "configuration"), ("data_sha256", "data"), ("environment", "environment"),
+             ("hashseed", "hash seed")]
+    causes = [label for key, label in order if a.get(key) != b.get(key)]
+    effects = [k for k in ("model_sha256", "proba_sha256", "metrics_sha256") if a[k] != b[k]]
+    return causes, effects
+
+script = (train_dir / "train.py").read_text().replace("seed=None", 'seed=config["data_seed"]')
+(train_dir / "train.py").write_text(script.replace('"C": 4.0', '"C": 2.0'))
+m4 = run_training("1")
+print(diff_manifests(m1, m4))
+```
+Only the configuration differs, and all three outputs change as a consequence.
+A diff that listed only "model hash differs" would leave the investigation to
+be done by hand; ordering causes before effects is what makes a manifest
+useful in an incident.
+:::
+
+::: {#exr-ops2-lfs}
+**Pointers or copies?** A repository tracks a 400 MB model file that is
+retrained and committed every week. Estimate the growth of the repository
+after a year (a) with the file committed directly, (b) with Git LFS pointers
+and the weights in an LFS store, and (c) with a registry that deduplicates
+identical artefacts, if one retraining in four produces identical weights.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Git stores every version's blob (compressed; trained weights compress
+poorly): about $52 \times 400$ MB ≈ 21 GB in the history, downloaded by every
+clone. (b) The repository grows by 52 pointers of about 130 bytes; the LFS
+store holds the same ≈ 21 GB, but clones download only the versions they
+check out. (c) With content addressing, identical artefacts are stored once:
+about $39 \times 400$ MB ≈ 15.6 GB, and old versions can be garbage-collected
+once no alias or lineage record points to them. In every case the *history*
+of which model was used when is kept by small records, not by the weights.
+:::
+
+::: {#exr-ops2-bisect-noise}
+**A noisy bisect.** In @exr-ops2-git-hard the test set had 2 000 posts. If
+the accuracy of a good commit is 0.932 and the threshold is 0.92, estimate,
+with the normal approximation, the probability that the check wrongly fails
+on a good commit when the test set is drawn anew at each run with only 300
+posts, and what that does to bisect.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from scipy.stats import norm
+for m in (300, 2000):
+    sd = np.sqrt(0.932 * 0.068 / m)
+    print(f"m = {m}: P(accuracy < 0.92 | good) ≈ {norm.cdf((0.92 - 0.932) / sd):.3f}")
+```
+With 300 fresh posts, a good commit fails about one time in five; bisect,
+which trusts every verdict, then discards the half of the history that
+contains the true culprit and returns a wrong commit. With 2 000 posts the
+risk is small but not zero; with a *fixed* test set the check is
+deterministic, which is what bisect needs. @sec-ch-ops-testing chooses sizes
+and thresholds for such tests on purpose.
+:::
+
+## Further reading {.unnumbered}
+
+- @chacon2014, ch. 10 (Git internals: objects, references, packfiles) and
+  ch. 7.5 (`git bisect`); @git2026hashtransition for the move to SHA-256.
+- @pip2026hashes — hash-checking mode; @uv2026 for a fast resolver that
+  produces hashed lock files.
+- @higham2002, ch. 2–4 — floating-point arithmetic and the error analysis of
+  summation (including pairwise and compensated summation).
+- @mlflow2026 — tracking, the model registry and aliases; @dvc2026 for data
+  versioning with pointer files; @gitlfs2024spec for the LFS pointer format.
+- @acm2020badging — definitions of repeatability, reproducibility and
+  replicability; @stevens2017 — the first SHA-1 collision.

@@ -1,0 +1,1099 @@
+# Orchestrating ML pipelines {#sec-ch-ops-orch}
+
+> *"Workflows are defined as code, so that they become more maintainable,
+> versionable, testable, and collaborative."* — Apache Airflow documentation
+> [@airflow2026]
+
+```{python}
+#| echo: false
+import opsbook as ob
+ob.setup()
+import json, os, re, sys, time, random, threading, heapq, textwrap
+from collections import deque
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what an **orchestrator** adds to a scheduler like cron —
+  dependencies, retries, backfills, parameters, observability — and compare
+  the main tools;
+- represent a pipeline as a **DAG**, compute a topological order with
+  **Kahn's algorithm** (proved correct, cycles detected), and bound the
+  running time with $W$ workers between $\max(\text{work}/W, \text{span})$ and
+  $\text{work}/W + \text{span}$;
+- write **Airflow** DAGs with the TaskFlow API, pass **returned values**
+  between tasks through XCom (and know what not to pass), schedule them over
+  data intervals, and run them locally with `airflow dags test`;
+- make tasks **idempotent** with partitioned, atomically written outputs, and
+  prove that retries and backfills then leave the same final state as a
+  single clean run;
+- decide **when to retrain**: the optimal retraining period under a linear
+  decay (a square-root law), drift-triggered retraining with CUSUM, and the
+  **feedback loops** that a careless retraining pipeline creates.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What an orchestrator is; setting up an environment for orchestration; Apache
+Airflow; writing a DAG; passing values returned by one task to the next.
+:::
+
+## What an orchestrator does {#sec-ops-orchestrator}
+
+### Beyond cron
+
+The simplest way to run a pipeline every night is a **cron** entry: at 02:17,
+run `pipeline.sh`. It breaks as soon as the pipeline has more than one step:
+if the third of five steps fails, cron does not know, cannot retry just that
+step, cannot run the remaining steps when it is fixed, cannot re-run last
+Tuesday for a corrected input, and cannot show what ran when. An
+**orchestrator** is a scheduler that knows the **structure** of the work
+[@airflow2026]:
+
+- **dependencies**: tasks form a DAG; a task starts when its upstream tasks
+  have succeeded;
+- **retries** with delays per task, timeouts, and alerts on failure;
+- **parameters**: each run is tied to a **data interval** (e.g. the day it
+  processes), so that re-running a past interval — a **backfill** — processes
+  that interval's data, not today's;
+- **state and observability**: which task of which run succeeded, failed or
+  is waiting; logs per attempt; durations over time;
+- **concurrency** limits and pools, so that a backfill of 100 days does not
+  saturate a database.
+
+The main open-source orchestrators differ in emphasis: **Apache Airflow**
+(Python DAG files, a scheduler with a metadata database; the most widely
+deployed), **Prefect** and **Dagster** (Python-native, with Dagster centred on
+the *assets* the pipeline produces), **Kubeflow Pipelines** and **Argo
+Workflows** (each task a container on Kubernetes, Part V). This chapter uses
+Airflow; the ideas transfer.
+
+### DAGs and topological order
+
+A pipeline is a directed graph whose vertices are tasks and whose edges $u \to
+v$ mean "$v$ needs $u$". It can be executed only if there is an order in
+which every task comes after all its upstream tasks — a **topological
+order** — which exists exactly when the graph has no cycle.
+
+::: {#thm-ops-kahn}
+## Kahn's algorithm
+Repeatedly remove a vertex with no incoming edges, appending it to a list,
+and delete its outgoing edges. (i) If the graph is acyclic, the procedure
+removes every vertex and the list is a topological order. (ii) If it stops
+with vertices left, the remaining graph contains a cycle. It runs in $O(V +
+E)$ time [@kahn1962].
+:::
+
+*In one line:* an acyclic graph always has a task with no pending
+dependencies; removing it leaves an acyclic graph — so the process never gets
+stuck unless there is a cycle.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ops-kahn
+**Every non-empty acyclic graph has a vertex with no incoming edge.** Start
+anywhere and walk *backwards* along incoming edges; if every vertex had an
+incoming edge the walk could continue for ever, and since the graph is finite
+it would revisit a vertex — a cycle. (i) Removing a vertex and its edges
+keeps the graph acyclic, so by induction on the number of vertices Kahn's
+procedure removes all of them. When a vertex $v$ is appended, it has no
+incoming edges left, so all its upstream vertices were removed — appended —
+before it: the list is a topological order. (ii) If the procedure stops with
+a non-empty remainder, every remaining vertex has an incoming edge from
+another remaining vertex; by the backward walk above, the remainder contains a
+cycle. Complexity: each vertex enters the queue once and each edge decrements
+an in-degree once. $\blacksquare$
+:::
+
+With $W$ workers, how long does a DAG take? Let the **work** $T_1 = \sum_v
+w_v$ be the total running time of the tasks and the **span** $T_\infty$ the
+weight of the critical path (@prp-ops-critical-path).
+
+::: {#prp-ops-greedy}
+## Bounds on the makespan with $W$ workers
+Any schedule on $W$ workers takes at least $\max(T_1/W, T_\infty)$. A
+**greedy** schedule — whenever a worker is idle and a task is ready, start it
+— takes at most $T_1/W + T_\infty$, hence within a factor 2 of optimal
+[@graham1969; @brent1974].
+:::
+
+*In one line:* at every moment a greedy scheduler either keeps all workers
+busy (that time is at most $T_1/W$ in total) or is running every ready task,
+which shortens the remaining critical path.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-greedy
+Lower bound: $W$ workers do at most $W$ units of work per unit time, and the
+tasks of a path must run one after the other. Upper bound: split the greedy
+schedule's time into **full** intervals (all $W$ workers busy) and **non-full**
+ones. Full intervals do $W$ units of work per unit of time, so they last at
+most $T_1/W$ in total. During a non-full interval every ready task is running
+(otherwise an idle worker would start it). Follow, backwards from the task
+that finishes last, a chain of tasks each of which was the last-finishing
+predecessor of the next: whenever no task of the chain is running, all
+predecessors of the next chain task have finished, so that task is ready, so
+it is running unless all workers are busy. Hence every non-full instant is
+spent running some task of the chain, and the non-full intervals last at most
+the chain's weight, at most $T_\infty$. $\blacksquare$
+:::
+
+```{python}
+def kahn(tasks: dict[str, list[str]]) -> list[str]:
+    """tasks: name -> upstream names. Returns a topological order or raises on a cycle."""
+    indeg = {t: len(up) for t, up in tasks.items()}
+    down = {t: [] for t in tasks}
+    for t, up in tasks.items():
+        for u in up:
+            down[u].append(t)
+    ready = deque(sorted(t for t, d in indeg.items() if d == 0))
+    order = []
+    while ready:
+        t = ready.popleft()
+        order.append(t)
+        for v in down[t]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                ready.append(v)
+    if len(order) < len(tasks):
+        raise ValueError(f"cycle among {sorted(set(tasks) - set(order))}")
+    return order
+
+pipeline = {"ingest": [], "validate": ["ingest"], "features": ["validate"], "predict": ["features"],
+            "monitor": ["predict"], "train": ["features"], "evaluate": ["train"], "gate": ["evaluate", "monitor"],
+            "report": ["gate"]}
+print(" -> ".join(kahn(pipeline)))
+try:
+    kahn({**pipeline, "ingest": ["report"]})          # a loop back to the start
+except ValueError as e:
+    print("rejected:", e)
+```
+
+### Practice {.unnumbered}
+
+::: {#exr-ops8-dag-easy}
+## Easy — orders and cycles by hand
+Tasks: `a` (no upstream), `b` needs `a`, `c` needs `a`, `d` needs `b` and `c`,
+`e` needs `c`, `f` needs `d` and `e`. (a) Give two different topological
+orders. (b) With durations a 1, b 3, c 2, d 1, e 4, f 1 and two workers, compute
+work, span and the bounds of @prp-ops-greedy. (c) Add "`a` needs `f`": where
+does Kahn's algorithm stop?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The span is the heaviest path from `a` to `f`. In (c), no task has in-degree
+zero at the start.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+small = {"a": [], "b": ["a"], "c": ["a"], "d": ["b", "c"], "e": ["c"], "f": ["d", "e"]}
+w = {"a": 1, "b": 3, "c": 2, "d": 1, "e": 4, "f": 1}
+print("one order:", kahn(small))
+finish = {}
+for t in kahn(small):
+    finish[t] = w[t] + max((finish[u] for u in small[t]), default=0)
+T1, Tinf, W = sum(w.values()), max(finish.values()), 2
+print(f"work {T1}, span {Tinf}: any schedule >= {max(T1 / W, Tinf)}, greedy <= {T1 / W + Tinf}")
+try:
+    kahn({**small, "a": ["f"]})
+except ValueError as e:
+    print(e)
+```
+(a) `a, b, c, d, e, f` and `a, c, e, b, d, f` are both valid. (b) Work 12,
+span 8 (a → c → e → f): any two-worker schedule needs at least 8, a greedy
+one at most 14 — here greedy achieves 8. (c) With `a` needing `f` there is a
+cycle a → c → e → f → a and every task has a pending dependency: Kahn's
+algorithm removes nothing and reports all six.
+:::
+
+::: {#exr-ops8-dag-medium}
+## Medium — a greedy scheduler, measured
+Simulate a greedy scheduler with $W$ workers (an event queue of finishing
+times) on 200 random DAGs of 30 tasks (each task depends on each earlier one
+with probability 0.1; durations uniform in $[1, 10]$). For $W = 1, 2, 4, 8$
+report how close the makespan is to the lower bound $\max(T_1/W, T_\infty)$,
+and check that it never exceeds $T_1/W + T_\infty$.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Keep a heap of (finish time, task) for running tasks; when one finishes,
+decrement its successors' in-degrees and start ready tasks on the free
+workers.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def greedy_makespan(up, w, W):
+    down = {t: [] for t in up}
+    indeg = {t: len(u) for t, u in up.items()}
+    for t, us in up.items():
+        for u in us:
+            down[u].append(t)
+    ready = [t for t in up if indeg[t] == 0]
+    running, now = [], 0.0
+    while ready or running:
+        while ready and len(running) < W:
+            t = ready.pop(0)
+            heapq.heappush(running, (now + w[t], t))
+        now, t = heapq.heappop(running)
+        for v in down[t]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                ready.append(v)
+    return now
+
+rng = np.random.default_rng(14)
+for W in (1, 2, 4, 8):
+    ratios, violations = [], 0
+    for _ in range(200):
+        n = 30
+        up = {i: [j for j in range(i) if rng.random() < 0.1] for i in range(n)}
+        w = {i: float(rng.uniform(1, 10)) for i in range(n)}
+        fin = {}
+        for i in range(n):
+            fin[i] = w[i] + max((fin[j] for j in up[i]), default=0)
+        T1, Tinf = sum(w.values()), max(fin.values())
+        m = greedy_makespan(up, w, W)
+        ratios.append(m / max(T1 / W, Tinf))
+        violations += m > T1 / W + Tinf + 1e-9
+    print(f"W = {W}: makespan / lower bound: mean {np.mean(ratios):.3f}, max {np.max(ratios):.3f}; "
+          f"upper bound violated {violations} times")
+```
+With one worker the makespan is exactly the work; with more workers the
+greedy schedule stays within about 15 % of the lower bound on average and
+never violates the upper bound, as @prp-ops-greedy guarantees. Beyond the
+point where the span dominates, extra workers help nothing — the shape of the
+DAG, not the cluster size, limits the pipeline.
+:::
+
+::: {#exr-ops8-dag-hard}
+## Hard — a tiny orchestrator
+Write a small orchestrator: tasks are Python functions with upstream
+dependencies and a retry policy (maximum attempts, exponential backoff); they
+run on a pool of $W$ threads as soon as their dependencies have succeeded; a
+task that exhausts its retries marks all its downstream tasks as
+**upstream failed** without running them. Test it on the pipeline of this
+section with a task that fails twice before succeeding and another that
+always fails.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A `concurrent.futures.ThreadPoolExecutor` and a loop that waits for the first
+finished future (`wait(..., return_when=FIRST_COMPLETED)`) are enough. Keep a
+state per task: pending, running, success, failed, upstream_failed.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+
+def orchestrate(tasks, upstream, W=3, max_tries=3, base_delay=0.01):
+    state = {t: "pending" for t in tasks}
+    tries = {t: 0 for t in tasks}
+    log = []
+    def attempt(t):
+        tries[t] += 1
+        if tries[t] > 1:
+            time.sleep(base_delay * 2 ** (tries[t] - 2))      # backoff before a retry
+        tasks[t]()
+    with ThreadPoolExecutor(W) as pool:
+        running = {}
+        while True:
+            for t in tasks:                                     # start every ready task
+                if state[t] == "pending" and all(state[u] == "success" for u in upstream[t]) \
+                        and len(running) < W:
+                    state[t] = "running"
+                    running[pool.submit(attempt, t)] = t
+                if state[t] == "pending" and any(state[u] in ("failed", "upstream_failed") for u in upstream[t]):
+                    state[t] = "upstream_failed"
+            if not running:
+                break
+            done, _ = wait(running, return_when=FIRST_COMPLETED)
+            for f in done:
+                t = running.pop(f)
+                if f.exception() is None:
+                    state[t] = "success"
+                elif tries[t] < max_tries:
+                    log.append(f"{t}: attempt {tries[t]} failed, retrying")
+                    running[pool.submit(attempt, t)] = t
+                else:
+                    state[t] = "failed"
+                    log.append(f"{t}: failed after {tries[t]} attempts")
+    return state, log
+
+flaky_calls = {"n": 0}
+def flaky():
+    flaky_calls["n"] += 1
+    if flaky_calls["n"] <= 2:
+        raise ConnectionError("source not reachable")
+def broken():
+    raise ValueError("schema mismatch")
+ok = lambda: time.sleep(0.01)
+tasks = {t: ok for t in pipeline}
+tasks["ingest"], tasks["train"] = flaky, broken
+state, log = orchestrate(tasks, pipeline)
+print("\n".join(log))
+print(json.dumps(state, indent=1))
+```
+`ingest` succeeds on its third attempt and the branch through `predict` and
+`monitor` runs; `train` fails three times, so `evaluate`, `gate` and `report`
+are never run but marked as **upstream failed** — distinct from failing, so
+that an operator knows where to look. Real orchestrators add what this one
+lacks: persistent state (to survive a crash of the orchestrator itself),
+per-run parameters, logs per attempt, and a UI.
+:::
+
+## Airflow: DAGs, tasks and returned values {#sec-ops-airflow}
+
+### The pieces
+
+In Airflow a **DAG** is defined in a Python file placed in the *DAGs folder*.
+The **scheduler** parses the files, creates a **DAG run** for each scheduled
+**data interval**, and hands **task instances** to an **executor**; their
+states, and the small values they exchange, live in a **metadata database**
+[@airflow2026]. With the **TaskFlow API**, a task is a decorated Python
+function, and calling one task with the result of another *declares* both the
+dependency and the data passed:
+
+- `@dag(schedule="@daily", start_date=..., catchup=False)` defines the DAG;
+  `catchup=True` would create runs for every past interval since the start
+  date (a backfill);
+- `@task(retries=2, retry_delay=timedelta(minutes=5))` defines a task with its
+  retry policy;
+- the **return value** of a task is stored as an **XCom** ("cross-
+  communication") — serialised (JSON by default) into the metadata database —
+  and passed to the downstream task that receives it as an argument;
+- context values such as `ds` (the logical date, `YYYY-MM-DD`) are injected
+  into tasks that ask for them.
+
+XComs are meant for **small** values: a path, a hash, a few metrics. Data go
+to storage (files, object stores, tables), and the XCom carries the
+reference — otherwise the metadata database fills with data frames and every
+task pays to serialise them.
+
+### A scoring DAG
+
+A daily DAG that scores the posts of its day with the local model: `ingest`
+writes the day's posts to a partition and returns its path and hash; `score`
+writes predictions next to it and returns a summary; `report` checks the
+summary against the reference class mix. Each task writes **only its
+partition**, atomically:
+
+```{python}
+#| echo: false
+#| output: asis
+af = ob.project("airflow")
+(af / "dags").mkdir()
+import joblib
+train = ob.make_posts(3000, seed=1)
+model = ob.train_model(train.text, train.label)
+joblib.dump(model, af / "model.joblib")
+ob.write("dags/score_posts.py", f'''
+    """Daily scoring of the posts of each data interval with the local sentiment model."""
+    import hashlib
+    import json
+    import os
+    import sys
+    from datetime import timedelta
+    from pathlib import Path
+
+    import pendulum
+    from airflow.sdk import dag, task
+
+    sys.path.insert(0, os.environ["OPSBOOK_DIR"])        # opsbook: the synthetic post source
+    DATA = Path(os.environ.get("PIPELINE_DATA", "data"))
+    MODEL = Path(os.environ.get("PIPELINE_MODEL", "model.joblib"))
+    REFERENCE = {{"negative": 0.30, "neutral": 0.40, "positive": 0.30}}
+
+
+    def atomic_write(path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(text)
+        tmp.replace(path)                                  # all or nothing
+
+
+    @dag(schedule="@daily", start_date=pendulum.datetime(2026, 11, 1, tz="UTC"), catchup=False,
+         default_args={{"retries": 2, "retry_delay": timedelta(seconds=1)}}, tags=["sentiment"])
+    def score_posts():
+        @task
+        def ingest(ds=None) -> dict:
+            import opsbook as ob
+
+            day = pendulum.parse(ds)
+            posts = ob.make_posts(500, seed=int(day.format("YYYYMMDD")))   # the day's posts
+            path = DATA / ds / "posts.csv"
+            atomic_write(path, posts.to_csv(index=False))
+            return {{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()[:16],
+                    "rows": len(posts)}}
+
+        @task
+        def score(batch: dict) -> dict:
+            import joblib
+            import pandas as pd
+
+            posts = pd.read_csv(batch["path"])
+            model = joblib.load(MODEL)
+            labels = ["negative", "neutral", "positive"]
+            posts["prediction"] = [labels[i] for i in model.predict(posts["text"])]
+            out = Path(batch["path"]).with_name("predictions.csv")
+            atomic_write(out, posts.to_csv(index=False))
+            shares = posts["prediction"].value_counts(normalize=True).round(4).to_dict()
+            return {{"path": str(out), "shares": shares, "input_sha256": batch["sha256"]}}
+
+        @task
+        def report(summary: dict, ds=None) -> dict:
+            gap = max(abs(summary["shares"].get(k, 0) - v) for k, v in REFERENCE.items())
+            result = {{"date": ds, "max_share_gap": round(gap, 4), "alert": gap > 0.08}}
+            atomic_write(DATA / ds / "report.json", json.dumps(result))
+            return result
+
+        report(score(ingest()))
+
+
+    score_posts()
+''', base=af)
+ob.show("dags/score_posts.py", base=af)
+```
+
+`airflow dags test` runs one DAG run in a single process, without a scheduler
+— the way to try a DAG locally. Airflow lives in its own virtual environment
+(it pins hundreds of dependencies through a constraints file), which must also
+contain what the tasks import — here scikit-learn, pandas and joblib, installed
+under the same constraints; its home directory, with a SQLite metadata
+database, is a temporary folder:
+
+```{python}
+AF_ENV = {"AIRFLOW_HOME": str(af), "AIRFLOW__CORE__DAGS_FOLDER": str(af / "dags"),
+          "AIRFLOW__CORE__LOAD_EXAMPLES": "False", "PIPELINE_DATA": str(af / "data"),
+          "PIPELINE_MODEL": str(af / "model.joblib"), "PYTHONWARNINGS": "ignore",
+          "OPSBOOK_DIR": str(Path.cwd())}
+airflow = str(Path(ob.venv_python("airflow")).parent / "airflow")
+ob.run(f"{airflow} db migrate", env=AF_ENV, check=True, timeout=600)
+
+def dags_test(dag_id, date):
+    p = ob.run(f"{airflow} dags test {dag_id} {date}", env=AF_ENV, timeout=600)
+    out = p.stdout + p.stderr
+    tasks = re.findall(r"\[DAG TEST\] starting task_id=(\w+)", out)
+    returned = re.findall(r"Returned value was: (.*?) \[airflow", out)
+    state = re.search(r"DagRun Finished: .*?state=(\w+)", out)
+    return tasks, returned, state.group(1) if state else "unknown"
+
+tasks, returned, state = dags_test("score_posts", "2026-11-17")
+for t, r in zip(tasks, returned):
+    print(f"{t:7s} returned {ob.mask(r)}")
+print("DAG run:", state)
+print(sorted(p.name for p in (af / "data" / "2026-11-17").iterdir()))
+```
+
+Each task's return value went through the metadata database to the next
+task: small dictionaries with paths, a hash and the class shares — never the
+posts themselves. The partition `data/2026-11-17/` holds the day's three
+files.
+
+### Idempotent tasks and safe backfills
+
+Retries and backfills run tasks **again**. They are harmless only if running
+a task twice has the same effect as running it once — idempotence again
+(@def-api-idempotent), now at the level of a pipeline.
+
+::: {#prp-ops-backfill}
+## Partitioned, deterministic tasks make re-runs safe
+Suppose each task (i) writes only the outputs of its own data interval
+(its **partition**), replacing them atomically, and (ii) computes them
+deterministically from its inputs (which are earlier partitions or fixed
+artefacts). Then any sequence of runs, retries and backfills in which every
+task of every interval eventually succeeds, in an order compatible with the
+DAG, leaves the storage in the same state as one clean run of every interval.
+:::
+
+*In one line:* each partition ends up as the deterministic function of its
+inputs, no matter how many times it was written or what partial attempts
+preceded it.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-backfill
+Consider the partition $P_{v,d}$ written by task $v$ for interval $d$. By
+(i), only attempts of $(v, d)$ write it, and atomically, so its final content
+is that of the **last successful** attempt (a failed attempt leaves the
+previous content, never a half-written one). By (ii) that content is
+$f_v(\text{inputs})$, and the inputs are partitions of upstream tasks (or
+fixed artefacts). The order is compatible with the DAG, so when the last
+successful attempt of $(v, d)$ ran, its upstream partitions had already reached
+their final content — by induction along a topological order — and they do
+not change afterwards (a later re-run of an upstream task rewrites the same
+content, by the same argument). Hence every partition equals what one clean
+run produces. $\blacksquare$
+:::
+
+The hypotheses are exactly the habits that break pipelines when missing: a
+task that **appends** to a shared file (not partitioned), one that reads
+"today" from the clock instead of its data interval (not deterministic in its
+inputs), one that writes in place (not atomic). The tasks above read `ds`,
+write `data/<ds>/` and replace files atomically (@sec-atomic-writes).
+
+### Practice {.unnumbered}
+
+::: {#exr-ops8-airflow-easy}
+## Easy — what goes through XCom?
+For the DAG above: (a) which values are stored in the metadata database for
+one run, and roughly how large are they? (b) A colleague changes `ingest` to
+return the posts themselves (`posts.to_dict()`): what changes, and why is it a
+bad idea at 500 000 posts per day? (c) What would happen to a backfill if
+`ingest` used `pendulum.now()` instead of `ds`?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Every returned value is serialised and written to the database; a backfill
+runs past intervals *now*.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) Three small JSON documents — `ingest`'s path, hash and row count, `score`'s
+path, shares and input hash, `report`'s verdict — a few hundred bytes each.
+(b) The XCom would hold the whole table: hundreds of megabytes serialised to
+JSON into the metadata database at 500 000 posts, deserialised again by the
+next task, slowing the scheduler for every DAG (and many deployments limit
+XCom sizes). Data go to storage; XComs carry references. (c) Every backfilled
+run would process *today's* posts and write them into the partition of a past
+day: the backfill would silently produce wrong history, and two runs for
+different days would contain the same data — @prp-ops-backfill's hypothesis
+(ii) is violated.
+:::
+
+::: {#exr-ops8-airflow-medium}
+## Medium — branch on the report
+Add to the DAG a task `@task.branch` after `report` that returns the id of a
+task `notify` when the report's `alert` is true and of a task `done`
+otherwise; `notify` writes `alert.txt` in the partition. Run the DAG with
+`airflow dags test` for a normal day and for a day whose posts are generated
+with 60 % negative posts (make `ingest` read an optional `NEGATIVE_DAYS`
+environment variable listing such days), and show which tasks ran.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A branch task returns the `task_id` (or list of ids) to follow; the others
+are skipped. In TaskFlow, wire it with `branch >> [notify(), done()]`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def patch(src, old, new):
+    """Replace a fragment of the DAG file (whose task bodies are indented by 8 spaces), or fail."""
+    old, new = textwrap.dedent(old).strip("\n"), textwrap.dedent(new).strip("\n")
+    lines = [l for l in src.splitlines() if l.strip() == old.splitlines()[0].strip()]
+    assert lines, f"fragment not found: {old.splitlines()[0]!r}"
+    indent = lines[0][: len(lines[0]) - len(lines[0].lstrip())]
+    old_i = textwrap.indent(old, indent)
+    new_i = textwrap.indent(new, indent, predicate=lambda l: True).replace(indent + "\n", "\n")
+    assert old_i in src, "fragment not found with its indentation"
+    return src.replace(old_i, new_i)
+
+dag_src = (af / "dags" / "score_posts.py").read_text()
+dag_src = patch(dag_src, '''posts = ob.make_posts(500, seed=int(day.format("YYYYMMDD")))   # the day's posts''', '''
+    shifted = ds in os.environ.get("NEGATIVE_DAYS", "").split(",")
+    prior = (0.6, 0.2, 0.2) if shifted else (0.3, 0.4, 0.3)
+    posts = ob.make_posts(500, seed=int(day.format("YYYYMMDD")), prior=prior)''')
+dag_src = patch(dag_src, "report(score(ingest()))", '''
+    @task.branch
+    def decide(result: dict) -> str:
+        return "notify" if result["alert"] else "done"
+
+    @task
+    def notify(ds=None):
+        atomic_write(DATA / ds / "alert.txt", "class mix far from the reference\\n")
+
+    @task
+    def done():
+        pass
+
+    decide(report(score(ingest()))) >> [notify(), done()]''')
+(af / "dags" / "score_posts.py").write_text(dag_src)
+AF_ENV["NEGATIVE_DAYS"] = "2026-11-12"
+for day in ("2026-11-11", "2026-11-12"):
+    tasks, returned, state = dags_test("score_posts", day)
+    files = sorted(p.name for p in (af / "data" / day).iterdir())
+    print(f"{day}: ran {tasks} -> {state}; files {files}")
+```
+On the normal day the branch chooses `done` and `notify` is skipped (it does
+not even start); on the shifted day `report` raises the alert, the branch
+chooses `notify`, and `alert.txt` appears in that day's partition. This
+"decide, then branch" shape is also how a pipeline chooses between "nothing
+to do" and "retrain" — @sec-ops-retrain discusses what the decision should be
+based on.
+:::
+
+::: {#exr-ops8-airflow-hard}
+## Hard — prove a backfill idempotent
+Run the DAG for five consecutive days. Then make `score` fail on its first
+attempt for one of the days (a flag file it deletes before raising, so the
+retry succeeds), delete one day's `report.json`, and run all five days again.
+Show, by hashing every file of every partition, that the final state is
+identical to the first run — and then show what goes wrong if `score` appends
+to a single shared `all_predictions.csv` instead of writing its partition.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Hash the files with `ob.sha256` into a dictionary `{relative path: hash}` and
+compare the dictionaries. For the counterexample, count rows in the shared
+file after the two rounds.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+days = [f"2026-11-0{d}" for d in range(1, 6)]
+AF_ENV["NEGATIVE_DAYS"] = ""
+def snapshot():
+    root = af / "data"
+    return {str(p.relative_to(root)): ob.sha256(p) for p in sorted(root.rglob("*")) if p.is_file() and p.parent.name in days}
+
+for d in days:
+    dags_test("score_posts", d)
+first = snapshot()
+
+flaky_src = patch(dag_src, '''posts = pd.read_csv(batch["path"])''', '''
+    flag = Path(batch["path"]).with_name("fail-once")
+    if flag.exists():
+        flag.unlink()
+        raise RuntimeError("transient failure")
+    posts = pd.read_csv(batch["path"])''')
+(af / "dags" / "score_posts.py").write_text(flaky_src)
+(af / "data" / days[2] / "fail-once").write_text("")
+(af / "data" / days[3] / "report.json").unlink()
+attempts = []
+for d in days:
+    p = ob.run(f"{airflow} dags test score_posts {d}", env=AF_ENV, timeout=600)
+    attempts.append(len(re.findall(r"transient failure", p.stdout + p.stderr)) > 0)
+second = snapshot()
+print(f"{len(first)} files; a retry happened in run(s): {[d for d, a in zip(days, attempts) if a]}")
+print("identical to the first run:", first == second)
+
+# Counterexample: appending to a shared file
+shared = af / "data" / "all_predictions.csv"
+append_src = patch(flaky_src, '''
+    out = Path(batch["path"]).with_name("predictions.csv")
+    atomic_write(out, posts.to_csv(index=False))''', '''
+    out = DATA / "all_predictions.csv"
+    posts.to_csv(out, mode="a", header=not out.exists(), index=False)''')
+(af / "dags" / "score_posts.py").write_text(append_src)
+for round_ in range(2):
+    for d in days:
+        dags_test("score_posts", d)
+    print(f"after round {round_ + 1}: {sum(1 for _ in open(shared)) - 1} rows in the shared file for {5 * 500} posts")
+_ = (af / "dags" / "score_posts.py").write_text(dag_src)
+```
+With partitioned, atomic, deterministic tasks, a failure followed by a retry,
+a missing output and a full re-run of five days leave every file
+byte-identical to the first run (@prp-ops-backfill). With an appending task,
+every re-run duplicates the rows: after two rounds the shared file holds twice
+the posts there are, and every downstream statistic is silently wrong — the
+classic way backfills corrupt data.
+:::
+
+## When to retrain {#sec-ops-retrain}
+
+### Triggers and their costs
+
+A model is retrained on a **schedule** (every week), on a **trigger** (a drift
+or quality monitor fires, @sec-ch-ops-monitor), or when enough **new labels**
+have accumulated. Retraining has costs — compute, labelling, validation,
+the risk and churn of a release (@prp-ops-churn) — and benefits: the
+accuracy lost to drift is regained. A simple model makes the trade-off
+explicit.
+
+::: {#prp-ops-retrain-period}
+## The square-root law for periodic retraining
+Suppose that after each retraining the model's accuracy decays linearly,
+$a(t) = a_0 - d\,t$, that each point of lost accuracy costs $L$ per unit of
+time, and that each retraining costs $K$. Retraining every $T$ units of time
+costs on average
+$$
+c(T) = \frac{K}{T} + \frac{L\,d\,T}{2}
+$$ {#eq-ops-retrain-cost}
+per unit of time, minimised by
+$$
+T^\star = \sqrt{\frac{2K}{L\,d}}, \qquad c(T^\star) = \sqrt{2KLd} .
+$$
+:::
+
+*In one line:* frequent retraining wastes retraining costs, rare retraining
+wastes accuracy; the balance point grows only with the square root of the cost
+ratio — the economic order quantity of inventory theory [@harris1913].
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-retrain-period
+Over one period the lost accuracy at time $t$ is $dt$, costing $L\,d\,t$ per
+unit time; integrated over $[0, T]$ it is $L d T^2/2$. Adding $K$ and dividing
+by $T$ gives @eq-ops-retrain-cost. On $T > 0$, $c'(T) = -K/T^2 + Ld/2$
+vanishes at $T^\star$, and $c''(T) = 2K/T^3 > 0$, so $T^\star$ is the
+minimum; substituting gives $c(T^\star) = K/T^\star + LdT^\star/2 =
+2\sqrt{KLd/2} = \sqrt{2KLd}$. $\blacksquare$
+:::
+
+Accuracy rarely decays linearly: a model often holds steady and then drops
+when the world changes — a new product, a new slang, an event. Then a fixed
+schedule retrains too often in quiet times and too late after a change, and a
+**trigger** — a change detector such as CUSUM on a monitored quantity — does
+better, at the price of false alarms (@exr-ops8-retrain-medium).
+
+### Feedback loops
+
+A retraining pipeline closes a loop: the model's predictions influence which
+data are collected and how they are labelled, and those data train the next
+model. Sculley et al. call this a **hidden feedback loop**
+[@sculley2015, §4]: a moderation model whose flagged posts are the only ones
+reviewed and labelled; a recommender trained on clicks on the items it chose
+to show; pseudo-labels taken from the model's own confident predictions. The
+loop can amplify the model's own errors. The remedies are design decisions,
+not algorithms: keep a random **holdout** of the traffic that is labelled
+regardless of the model, log what the model decided, and evaluate on data the
+model did not select (@exr-ops8-retrain-hard).
+
+### Practice {.unnumbered}
+
+::: {#exr-ops8-retrain-easy}
+## Easy — how often to retrain
+A sentiment model loses 0.5 accuracy points per week after each retraining.
+Each point of lost accuracy costs 400 € per week in wrong decisions;
+retraining (labelling a fresh sample, compute, validation, release) costs
+3 000 €. Compute the optimal period, the cost per week at that period, and the
+cost per week of retraining every week and every quarter. How does $T^\star$
+change if labelling becomes four times cheaper?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$K = 3000$, $L = 400$, $d = 0.5$ points per week; units: weeks and euros.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+K, L, d = 3000.0, 400.0, 0.5
+cost = lambda T: K / T + L * d * T / 2
+T_star = np.sqrt(2 * K / (L * d))
+print(f"T* = {T_star:.1f} weeks, cost {cost(T_star):.0f} €/week; weekly {cost(1):.0f} €/week; quarterly {cost(13):.0f} €/week")
+print(f"labelling 4x cheaper (K = {K / 4:.0f}): T* = {np.sqrt(2 * K / 4 / (L * d)):.1f} weeks")
+```
+Retraining every 5.5 weeks costs about 1 100 € per week; weekly retraining
+costs almost three times as much, quarterly retraining about 40 % more. A
+retraining four times cheaper halves the optimal period (square root of 4):
+cost reductions change *how often*, but much less than proportionally. The
+assumption of linear decay is the weak point — the next exercise drops it.
+:::
+
+::: {#exr-ops8-retrain-medium}
+## Medium — scheduled versus triggered
+Simulate 104 weeks of a model in production: each week 2 000 posts arrive;
+the world changes twice (at weeks 30 and 70, five more positive words flip to
+negative each time — a concept shift that lowers accuracy and the share of
+predicted negatives). Compare (a) retraining every 8 weeks on the last 4
+weeks of labelled posts and (b) retraining when a CUSUM on the weekly share of
+predicted negatives fires (then resetting it). Count retrainings and the
+average accuracy over the two years.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Generate each week's posts with the `swap` in force that week; "labelled
+posts" of the last weeks are those posts with their labels. Use the CUSUM of
+@sec-ops-cusum in both directions with a threshold that does not fire in quiet
+weeks.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-ops-retrain-policies
+#| fig-cap: "Weekly accuracy over two years with two concept shifts (grey lines), for retraining every eight weeks and for retraining triggered by a CUSUM on the share of predicted negatives."
+wave1 = ("cheap", "fast", "smooth", "perfect", "awesome")
+wave2 = ("great", "amazing", "happy", "brilliant", "helpful")
+def world(week):
+    swap = {}
+    if week >= 30:
+        swap.update({w: 0 for w in wave1})
+    if week >= 70:
+        swap.update({w: 0 for w in wave2})
+    return swap
+
+weeks = [ob.make_posts(2000, seed=3000 + w, swap=world(w)) for w in range(104)]
+
+def simulate(policy):
+    model_ = ob.train_model(train.text, train.label)
+    ref = np.mean(model_.predict(weeks[0].text) == 0)
+    s_up = s_down = 0.0
+    accs, retrains = [], 0
+    for w in range(104):
+        pred = model_.predict(weeks[w].text)
+        accs.append(accuracy_score(weeks[w].label, pred))
+        share = np.mean(pred == 0)
+        s_up, s_down = max(0, s_up + share - ref - 0.01), max(0, s_down - share + ref - 0.01)
+        due = (policy == "every 8 weeks" and w % 8 == 7) or (policy == "CUSUM" and max(s_up, s_down) > 0.06)
+        if due and w >= 3:
+            recent = pd.concat(weeks[w - 3: w + 1])
+            model_ = ob.train_model(recent.text, recent.label)
+            ref = np.mean(model_.predict(weeks[w].text) == 0)
+            s_up = s_down = 0.0
+            retrains += 1
+    return np.array(accs), retrains
+
+fig, ax = plt.subplots()
+for i, policy in enumerate(("every 8 weeks", "CUSUM")):
+    accs, n = simulate(policy)
+    ax.plot(accs, color=ob.COLORS[i], label=f"{policy}: {n} retrainings, mean accuracy {accs.mean():.3f}")
+    print(f"{policy:14s} retrainings {n:2d}, mean accuracy {accs.mean():.4f}, worst week {accs.min():.3f}")
+ax.axvline(30, color="#c8c7c2"); ax.axvline(70, color="#c8c7c2")
+ax.set_xlabel("week"); ax.set_ylabel("weekly accuracy"); ax.legend(fontsize=8)
+plt.show()
+```
+The schedule retrains thirteen times, mostly when nothing has changed; the
+CUSUM trigger retrains half as often, the first times right after each change,
+for an average accuracy only about half a point lower — here the schedule
+happens to retrain soon after the changes too, at twice the cost. Its weakness
+is the one of @sec-ch-ops-monitor: it watches the class mix, so a concept
+shift that leaves the mix unchanged would never trigger it — combine it with a
+labelled accuracy check.
+:::
+
+::: {#exr-ops8-retrain-hard}
+## Hard — a feedback loop and its fix
+A moderation team reviews only the posts that the model predicts as
+**negative**. Compare three ways of turning a month of traffic into training
+data for the monthly retraining: (a) reviewed posts get their true label and
+**unreviewed posts keep the model's own label** ("nobody complained, so the
+label is right"); (b) only reviewed posts are used; (c) as (b), plus a **random
+holdout** of 10 % of all posts reviewed regardless of the prediction. Start
+from a model trained on 1 500 posts, use 3 000 posts per month for ten
+months, and let the world change at month 3: eight positive words become
+negative (a concept shift). Track the accuracy on fresh, unselected posts.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+After the change, posts containing the flipped words are negative but are
+predicted positive: who ever corrects that prediction in each pipeline?
+Evaluate every month on a fresh sample from the same month's world.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+wave = ("cheap", "fast", "smooth", "perfect", "awesome", "great", "amazing", "happy")
+world_m = lambda m: {w: 0 for w in wave} if m >= 2 else {}
+
+def moderation(mode, holdout=0.10, months=10):
+    rng_ = np.random.default_rng(0)
+    pool = [ob.make_posts(1500, seed=4000)]
+    model_ = ob.train_model(pool[0].text, pool[0].label)
+    accs = []
+    for m in range(months):
+        month = ob.make_posts(3000, seed=4100 + m, swap=world_m(m)).reset_index(drop=True)
+        pred = model_.predict(month.text)
+        flagged = pred == 0
+        if mode == "self-labelled":                       # (a) unreviewed posts keep the model's label
+            pool.append(month.assign(label=np.where(flagged, month.label, pred)))
+        elif mode == "flagged only":                      # (b) only what the model selected
+            pool.append(month[flagged])
+        else:                                             # (c) plus a random holdout
+            pool.append(month[flagged | (rng_.random(len(month)) < holdout)])
+        data = pd.concat(pool)
+        model_ = ob.train_model(data.text, data.label)
+        test_ = ob.make_posts(3000, seed=4200 + m, swap=world_m(m))
+        accs.append(accuracy_score(test_.label, model_.predict(test_.text)))
+    return accs
+
+table = pd.DataFrame({mode: moderation(mode) for mode in ("self-labelled", "flagged only", "with 10 % holdout")},
+                     index=pd.RangeIndex(1, 11, name="month")).round(3)
+print(table.T.to_string())
+```
+Before the change the three pipelines are similar. After it, the
+**self-labelled** pipeline is stuck: posts that became negative are predicted
+positive, nobody reviews them, and they enter the training data *with the
+model's wrong label* — every retraining confirms the error, and the accuracy
+stays several points down for good. Training only on reviewed posts avoids
+feeding the model its own mistakes, and it recovers — slowly, because it
+learns the new meaning only from the few posts that were flagged anyway. The
+random holdout recovers fastest: a tenth of the traffic is reviewed whatever
+the model says, so the new negatives reach the training data at their true
+rate, and the same holdout gives the only unbiased estimate of the model's
+accuracy in production. The price is 10 % more reviews — the cost of knowing
+what the model misses.
+:::
+
+::: {.project-link}
+**In the project.** The project asks for an Airflow DAG describing the
+periodic cycle — collecting new data, evaluating the model, and relaunching
+training when needed — where the tasks may be simple as long as the logic and
+the hand-over of information between them are right. This chapter gives the
+ingredients: a DAG whose tasks read their **data interval** and write their
+**partition** atomically (@prp-ops-backfill), **returned values** that carry
+paths, hashes and metrics rather than data (@sec-ops-airflow), a **branch**
+that decides whether to retrain (@exr-ops8-airflow-medium), a decision based
+on a monitor with known false-alarm behaviour rather than on a fixed date
+(@exr-ops8-retrain-medium), and a promotion gate after retraining
+(@sec-ops-cd). Test the DAG with `airflow dags test` on a few dates and on a
+re-run, and write down how labels would reach it without creating a feedback
+loop (@exr-ops8-retrain-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Cron for multi-step pipelines**: no dependencies, no retries, no
+  backfills.
+- **Tasks that read the clock** instead of their data interval; tasks that
+  append instead of replacing their partition.
+- **Data in XComs**: pass references.
+- **Retries on non-idempotent tasks**: duplicates (@prp-ops-backfill).
+- **Retraining on a calendar only**: too often in quiet times, too late after
+  a change.
+- **Training only on what the model selected**: feedback loops; keep a random
+  holdout.
+:::
+
+## Summary
+
+- Orchestrators run DAGs of tasks with dependencies, retries, data intervals,
+  backfills and state. Kahn's algorithm orders a DAG in $O(V + E)$ and detects
+  cycles; with $W$ workers the makespan lies between $\max(T_1/W, T_\infty)$
+  and $T_1/W + T_\infty$ for a greedy scheduler.
+- Airflow: DAG files, scheduler, executor, metadata database; TaskFlow tasks
+  whose returned values travel as XComs (small values only); branches;
+  `airflow dags test` for local runs.
+- Partitioned, atomic, deterministic tasks make retries and backfills
+  converge to the state of one clean run.
+- Periodic retraining under linear decay has the optimal period $T^\star =
+  \sqrt{2K/(Ld)}$; under sudden changes a drift trigger retrains when it
+  matters. Retraining on data the model selected creates feedback loops; a
+  random holdout breaks them.
+
+## Exercises
+
+::: {#exr-ops8-pools}
+**A backfill that does not overload.** A backfill of 90 days must run a
+`score` task that queries a database allowing at most 3 concurrent
+connections, while `ingest` tasks are free. With 10 workers, each `ingest`
+taking 1 minute and each `score` 4 minutes, compute the makespan with and
+without a pool of size 3 for `score` (greedy scheduling), and explain why the
+pool is still necessary.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def makespan_with_pool(n_days, W, pool):
+    # events: (time, kind, day); greedy: start ingests and scores whenever workers (and pool slots) allow
+    now, running, ready_ingest, ready_score = 0.0, [], list(range(n_days)), []
+    busy_pool = 0
+    while ready_ingest or ready_score or running:
+        while len(running) < W and (ready_score and busy_pool < pool or ready_ingest):
+            if ready_score and busy_pool < pool:
+                heapq.heappush(running, (now + 4, "score", ready_score.pop(0))); busy_pool += 1
+            else:
+                heapq.heappush(running, (now + 1, "ingest", ready_ingest.pop(0)))
+        now, kind, day = heapq.heappop(running)
+        if kind == "ingest":
+            ready_score.append(day)
+        else:
+            busy_pool -= 1
+    return now
+
+print(f"without a pool (10 concurrent scores possible): {makespan_with_pool(90, 10, 10):.0f} min")
+print(f"with a pool of 3 for score: {makespan_with_pool(90, 10, 3):.0f} min (lower bound 90 x 4 / 3 = {90 * 4 / 3:.0f})")
+```
+Without a pool the backfill finishes sooner — but by opening up to ten
+connections to a database that accepts three: in reality most `score` tasks
+would fail and be retried, or overload a production system. With the pool,
+the makespan is set by the bottleneck resource ($90 \cdot 4/3 = 120$ minutes,
+a work bound like @prp-ops-greedy's with $W = 3$), and the remaining workers
+run the ingests in the meantime.
+:::
+
+::: {#exr-ops8-dates}
+**Data intervals.** A DAG scheduled `@daily` with `start_date` 2026-11-01
+processes, in each run, the posts of its data interval. On 2026-11-18 at
+10:00, which interval does the most recent scheduled run process, and which
+intervals would `catchup=True` create if the DAG had been paused since
+2026-11-10? Why do pipelines process the *previous* day rather than the
+current one?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+A daily run for the interval [2026-11-17 00:00, 2026-11-18 00:00) is
+scheduled at the *end* of that interval, on 2026-11-18 at 00:00 — so on
+2026-11-18 at 10:00 the latest scheduled run processes 2026-11-17. With
+`catchup=True` after a pause since 2026-11-10, the scheduler creates one run
+per missed interval, from the 10th to the 17th, each processing its own day
+(which is why tasks must read their interval, @exr-ops8-airflow-easy). A day
+is processed after it ends because its data are complete only then; processing
+"today" would read a partial day and give a different answer at each re-run —
+not deterministic in the sense of @prp-ops-backfill.
+:::
+
+::: {#exr-ops8-churn-retrain}
+**Retraining and churn.** In @exr-ops8-retrain-medium, measure for each
+retraining of the CUSUM policy the churn between the old and the new model on
+the week's posts, and the share of the flips that are corrections
+(wrong → right). Relate the numbers to @prp-ops-churn.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+model_ = ob.train_model(train.text, train.label)
+ref = np.mean(model_.predict(weeks[0].text) == 0)
+s_up = s_down = 0.0
+for w in range(104):
+    pred = model_.predict(weeks[w].text)
+    share = np.mean(pred == 0)
+    s_up, s_down = max(0, s_up + share - ref - 0.01), max(0, s_down - share + ref - 0.01)
+    if max(s_up, s_down) > 0.06 and w >= 3:
+        recent = pd.concat(weeks[w - 3: w + 1])
+        new = ob.train_model(recent.text, recent.label)
+        y = weeks[w].label.to_numpy(); p_old, p_new = pred, new.predict(weeks[w].text)
+        churn = np.mean(p_old != p_new)
+        fixes = np.sum((p_old != y) & (p_new == y)) / max(np.sum(p_old != p_new), 1)
+        print(f"week {w:3d}: churn {churn:.3f}, accuracy {np.mean(p_old == y):.3f} -> {np.mean(p_new == y):.3f}, "
+              f"share of flips that are corrections {fixes:.2f}")
+        model_, ref, s_up, s_down = new, np.mean(p_new == 0), 0.0, 0.0
+```
+Retrainings triggered by a real change flip several percent of the answers,
+and most flips are corrections: the churn is close to its lower bound, the
+accuracy gain (@eq-ops-churn-bounds). A retraining in a quiet period would
+show the opposite profile — churn with no gain — which is the cost a schedule
+pays for nothing.
+:::
+
+## Further reading {.unnumbered}
+
+- @airflow2026 — "Core concepts" (DAGs, tasks, XComs, DAG runs and data
+  intervals, backfill), "TaskFlow", "Best practices" (idempotent tasks, not
+  passing large data through XCom), "Testing a DAG" (`airflow dags test`).
+- @kahn1962 — topological sorting; @graham1969 and @brent1974 — bounds for
+  list scheduling and parallel evaluation; @cormen2022, §20.4 — topological
+  sort with depth-first search.
+- @kleppmann2017, ch. 10 — batch processing, immutable inputs and
+  deterministic outputs, which make re-runs safe.
+- @sculley2015, §4, and @gama2014 — feedback loops and strategies for
+  adapting to drift; @harris1913 — the original square-root (economic order
+  quantity) argument.

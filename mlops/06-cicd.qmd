@@ -1,0 +1,1148 @@
+# Continuous integration and delivery {#sec-ch-ops-cicd}
+
+> *"Continuous Integration is a software development practice where members
+> of a team integrate their work frequently… Each integration is verified by
+> an automated build (including test) to detect integration errors as
+> quickly as possible."* — Martin Fowler, 2006 [@fowler2006]
+
+```{python}
+#| echo: false
+import opsbook as ob
+ob.setup()
+import json, os, re, sys, shutil, itertools, time
+from pathlib import Path
+from importlib.metadata import version
+import numpy as np
+import joblib
+from scipy.stats import binom, norm
+from sklearn.metrics import accuracy_score
+sys.path.insert(0, str(Path("..") / "containers"))
+import ctrbook as cb
+PY = sys.executable
+GITENV = {"GIT_AUTHOR_DATE": "2026-01-01T12:00:00+0000", "GIT_COMMITTER_DATE": "2026-01-01T12:00:00+0000",
+          "GIT_AUTHOR_NAME": "Ada", "GIT_AUTHOR_EMAIL": "a@example.org",
+          "GIT_COMMITTER_NAME": "Ada", "GIT_COMMITTER_EMAIL": "a@example.org"}
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain **continuous integration**, **continuous delivery** and
+  **continuous deployment** (and continuous training for ML), and the metrics
+  used to judge a delivery process;
+- design a pipeline as a DAG of stages, **prove** the order of sequential
+  stages that minimises the expected cost (fail fast: by cost over failure
+  probability) and compute the wall-clock time of parallel jobs (the critical
+  path);
+- write **GitHub Actions** workflows — triggers, jobs, steps, `needs`,
+  matrices, caches, permissions, secrets — validate them with **actionlint**
+  and run them locally with **act**;
+- separate CI from CD, publish an image tagged by commit, and describe a
+  deployment to Hugging Face Spaces;
+- gate the promotion of a model with **McNemar's test** on paired
+  predictions, proved from the binomial distribution.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What CI/CD is and what it is for; the stages of a CI/CD pipeline; services
+that run pipelines; GitHub Actions in practice; continuous delivery.
+:::
+
+## CI/CD: what and why {#sec-ops-ci-what}
+
+### Three practices, one pipeline
+
+**Continuous integration** (CI) is the practice of merging every developer's
+work into the shared main branch often — at least daily — with each merge
+verified automatically by a build and the tests [@fowler2006]. Small, frequent
+integrations keep conflicts small and make a failing test point at a small
+change. **Continuous delivery** (CD) extends it: every change that passes the
+pipeline produces an artefact that *could* be released, and releasing is a
+button [@humble2010, ch. 1]. **Continuous deployment** goes one step further:
+every passing change *is* released, automatically. ML adds **continuous
+training** (CT): the pipeline that trains, validates and registers models runs
+automatically on new data (@sec-ops-maturity).
+
+Research on software delivery measures a team's process with four numbers —
+**deployment frequency**, **lead time for changes** (commit to production),
+**change failure rate** and **time to restore** service — and finds that
+teams good at one tend to be good at all four: speed and stability are not
+traded off but come together from small batches and automation
+[@forsgren2018, ch. 2].
+
+A pipeline is a set of **stages** with dependencies — a directed acyclic
+graph. For the model service of this part:
+
+```{mermaid}
+%%| echo: false
+%%| label: fig-ops-pipeline
+%%| fig-cap: "The pipeline of the sentiment service. CI (left) runs on every push and pull request; CD (right) runs on the main branch only, after CI succeeds. Stages in the same column can run in parallel."
+flowchart LR
+  subgraph CI["CI: every push / pull request"]
+    F[format check] --> T[unit + contract tests]
+    L[lint] --> T
+    T --> B[build image]
+    B --> S[smoke test the container]
+  end
+  subgraph CD["CD: main branch only"]
+    G[model gate:<br/>challenger vs champion] --> P[push image<br/>tagged by commit]
+    P --> D[deploy to staging,<br/>then production]
+  end
+  S --> P
+```
+
+### The order of stages
+
+Sequential stages stop at the first failure — there is no point building an
+image whose tests fail. Each stage has a cost (minutes of runner time, or of
+waiting) and a probability of failing. Which order minimises the expected
+cost?
+
+::: {#prp-ops-stage-order}
+## Fail fast by cost over failure probability
+Let stages $1, \dots, m$, independent, have costs $c_i > 0$ and failure
+probabilities $p_i > 0$, and let a pipeline run them in an order $\pi$,
+stopping at the first failure. Its expected cost is
+$$
+E[C_\pi] = \sum_{k=1}^{m} c_{\pi_k}\prod_{j<k}(1 - p_{\pi_j}),
+$$ {#eq-ops-stage-cost}
+and it is minimised by running the stages in increasing order of $c_i / p_i$
+[@garey1973].
+:::
+
+*In one line:* run first what is cheap and likely to fail; an expensive check
+that rarely fails goes last.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-stage-order
+Stage $\pi_k$ runs if and only if all previous stages passed, which has
+probability $\prod_{j<k}(1 - p_{\pi_j})$ by independence; linearity of
+expectation gives @eq-ops-stage-cost. Consider two adjacent stages $i$ then
+$j$ at positions $k, k+1$, and let $Q$ be the probability of reaching
+position $k$. Their contribution is $Q(c_i + (1 - p_i)c_j)$; swapped,
+$Q(c_j + (1 - p_j)c_i)$; the other terms do not change, since stages after
+$k+1$ are reached with probability $Q(1 - p_i)(1 - p_j)$ in both orders. The
+first order is no worse iff $c_i + c_j - p_ic_j \le c_j + c_i - p_jc_i$, i.e.
+$c_i p_j \le c_j p_i$, i.e. $c_i/p_i \le c_j/p_j$. If an order is not sorted
+by $c/p$, some adjacent pair is inverted and swapping it does not increase the
+cost; repeating (bubble sort) reaches the sorted order without ever increasing
+the cost, so the sorted order is optimal. $\blacksquare$
+:::
+
+Independent stages need not wait for each other: in a DAG, with enough
+runners, a stage starts as soon as its predecessors finish.
+
+::: {#prp-ops-critical-path}
+## With parallel runners, time is the critical path
+If every stage $v$ of an acyclic pipeline takes time $w_v$ and starts as soon
+as all its predecessors have finished, and runners are unlimited, the pipeline
+finishes at time
+$$
+T = \max_{\text{paths } P}\; \sum_{v \in P} w_v ,
+$$ {#eq-ops-critical-path}
+the weight of the heaviest (critical) path.
+:::
+
+*In one line:* each stage finishes at its own duration plus the latest finish
+among its predecessors, so the finish times propagate along the longest
+chain.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-critical-path
+Let $f(v)$ be the finish time of $v$; then $f(v) = w_v + \max_{u \to v}
+f(u)$ (with the maximum over an empty set equal to 0). By induction along a
+topological order (@sec-ch-ops-orch proves one exists), $f(v)$ is the
+heaviest weight of a path ending at $v$: true for sources, and if true for all
+predecessors, the heaviest path to $v$ is $v$ appended to the heaviest path to
+one of them. The pipeline ends at $\max_v f(v)$, the heaviest path overall.
+$\blacksquare$
+:::
+
+```{python}
+stages = {  # name: (minutes, failure probability) — rough figures for the service's pipeline
+    "format check": (0.2, 0.15), "lint": (0.3, 0.20), "tests": (2.0, 0.10),
+    "build image": (4.0, 0.03), "smoke test": (1.0, 0.02),
+}
+def expected_cost(order):
+    total, reach = 0.0, 1.0
+    for s in order:
+        c, p = stages[s]
+        total += reach * c
+        reach *= 1 - p
+    return total
+
+best = sorted(stages, key=lambda s: stages[s][0] / stages[s][1])
+worst = max(itertools.permutations(stages), key=expected_cost)
+print("c/p order :", " -> ".join(best), f"= {expected_cost(best):.2f} min")
+print("worst     :", " -> ".join(worst), f"= {expected_cost(worst):.2f} min")
+print("brute-force optimum:", f"{min(expected_cost(o) for o in itertools.permutations(stages)):.2f} min")
+```
+
+Real pipelines also have *precedence* (the smoke test needs the image), so
+the ratio rule is applied among the stages that are free to move — here
+format check, lint and tests — and the critical path decides how many of them
+should run in parallel instead.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops6-ci-easy}
+## Easy — two orders by hand
+A pipeline has two independent checks: a lint that takes 0.5 minutes and
+fails 20 % of the time, and a test suite that takes 6 minutes and fails 10 %
+of the time. Compute the expected cost of both orders and check the $c/p$
+rule. What if the tests failed 40 % of the time?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Lint first: $0.5 + 0.8 \cdot 6$. Tests first: $6 + 0.9 \cdot 0.5$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+for p_test in (0.10, 0.40):
+    lint_first = 0.5 + (1 - 0.2) * 6
+    tests_first = 6 + (1 - p_test) * 0.5
+    print(f"tests fail {p_test:.0%}: lint first {lint_first:.2f} min, tests first {tests_first:.2f} min; "
+          f"c/p lint {0.5 / 0.2:.1f}, tests {6 / p_test:.1f}")
+```
+Lint first costs 5.3 minutes on average against 6.45; the ratios agree (2.5
+against 60). Even if the tests failed 40 % of the time, lint first would
+still win (2.5 against 15): a cheap check should almost always come first.
+:::
+
+::: {#exr-ops6-ci-medium}
+## Medium — the rule against brute force
+Generate 500 random pipelines of 6 independent stages (costs uniform in
+$[0.1, 10]$, failure probabilities uniform in $[0.01, 0.5]$), and check that
+the $c/p$ order always matches the brute-force optimum over the $6! = 720$
+orders. Then measure how much worse, on average, the order "by cost only"
+and "by failure probability only" are.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Compare expected costs, not orders: ties between equal ratios give several
+optimal orders.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+rng = np.random.default_rng(6)
+def cost(order, c, p):
+    total, reach = 0.0, 1.0
+    for i in order:
+        total += reach * c[i]
+        reach *= 1 - p[i]
+    return total
+
+worse_c, worse_p, mismatches = [], [], 0
+for _ in range(500):
+    c, p = rng.uniform(0.1, 10, 6), rng.uniform(0.01, 0.5, 6)
+    opt = min(cost(o, c, p) for o in itertools.permutations(range(6)))
+    rule = cost(np.argsort(c / p), c, p)
+    mismatches += not np.isclose(rule, opt)
+    worse_c.append(cost(np.argsort(c), c, p) / opt - 1)
+    worse_p.append(cost(np.argsort(-p), c, p) / opt - 1)
+print(f"c/p rule not optimal in {mismatches} of 500 pipelines")
+print(f"by cost only: +{np.mean(worse_c):.1%} on average; by failure probability only: +{np.mean(worse_p):.1%}")
+```
+The ratio rule matches the brute-force optimum every time, as
+@prp-ops-stage-order proves. Ordering by cost alone is the better heuristic
+of the two simple ones, but both lose several percent on average, and much more
+on unlucky pipelines.
+:::
+
+::: {#exr-ops6-ci-hard}
+## Hard — critical path of a real workflow
+A workflow has these jobs and durations (minutes): `format` 0.3, `lint` 0.5,
+`unit` 3 (needs format, lint), `contract` 2 (needs format, lint), `build` 5
+(needs unit, contract), `scan` 2 (needs build), `smoke` 1.5 (needs build),
+`push` 1 (needs scan, smoke). Compute the wall-clock time with unlimited
+runners and the critical path, and the time with a single runner. Which job
+would you speed up first, and by how much can the total shrink if that job
+became instantaneous?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Process the jobs in an order where every job comes after its `needs`, and
+keep, for each job, its finish time and the predecessor that determined it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+jobs = {"format": (0.3, []), "lint": (0.5, []), "unit": (3, ["format", "lint"]),
+        "contract": (2, ["format", "lint"]), "build": (5, ["unit", "contract"]),
+        "scan": (2, ["build"]), "smoke": (1.5, ["build"]), "push": (1, ["scan", "smoke"])}
+
+def critical_path(jobs):
+    finish, prev = {}, {}
+    for name in jobs:                       # the dict is already in a topological order
+        w, needs = jobs[name]
+        start = max((finish[n] for n in needs), default=0.0)
+        prev[name] = max(needs, key=finish.get) if needs else None
+        finish[name] = start + w
+    end = max(finish, key=finish.get)
+    path = [end]
+    while prev[path[-1]]:
+        path.append(prev[path[-1]])
+    return finish[end], path[::-1]
+
+T, path = critical_path(jobs)
+print(f"unlimited runners: {T} min along {' -> '.join(path)}; one runner: {sum(w for w, _ in jobs.values())} min")
+for j in path:
+    faster = {k: ((0.0 if k == j else w), n) for k, (w, n) in jobs.items()}
+    print(f"  if {j:6s} took 0 min: {critical_path(faster)[0]} min")
+```
+The critical path is lint → unit → build → scan → push, 11.5 minutes against
+15.3 on one runner. Only jobs on the critical path matter: making `build`
+instantaneous saves its full 5 minutes, making `unit` instantaneous saves only
+1 minute, because `contract` then becomes the bottleneck — the critical path
+moves. Speeding up `smoke` or `contract` alone saves nothing.
+:::
+
+## GitHub Actions {#sec-ops-gha}
+
+### Workflows, jobs, steps
+
+**GitHub Actions** runs pipelines defined as YAML **workflows** in
+`.github/workflows/` [@githubactions2026]. A workflow has **triggers**
+(`on:` — `push`, `pull_request`, `schedule` with a cron expression,
+`workflow_dispatch` for a manual button) and **jobs**; each job runs on a
+fresh **runner** (`runs-on: ubuntu-latest`, a virtual machine) as a sequence
+of **steps**, each either a shell command (`run:`) or a reusable **action**
+(`uses: owner/repo@version`). Jobs run in parallel unless `needs:` orders them
+— the DAG of @fig-ops-pipeline. Other essentials:
+
+- **`strategy.matrix`** runs a job once per combination of values (Python
+  versions, operating systems);
+- **caches** (`actions/cache`, or the built-in cache of `setup-python`) save
+  directories between runs under a key — typically a hash of the lock file,
+  so the cache is invalidated exactly when dependencies change (the same
+  content-addressing idea as image layers);
+- **`permissions:`** sets what the job's automatic `GITHUB_TOKEN` may do
+  (least privilege: `contents: read` unless more is needed);
+- **secrets** (`${{ secrets.NAME }}`) are encrypted values set in the
+  repository's settings, masked in logs and not available to workflows
+  triggered from forks;
+- **environments** group secrets and protection rules (required reviewers,
+  allowed branches) for deployments.
+
+This book is itself published by such a workflow: on every push to `main`, a
+job renders the book and a second job, which `needs` the first, deploys it to
+GitHub Pages (the repository's `.github/workflows/publish.yml`).
+
+### A CI workflow for the service
+
+The service, its tests and its Dockerfile from the previous chapters, in a
+repository with this workflow:
+
+```{python}
+#| echo: false
+#| output: asis
+train = ob.make_posts(3000, seed=1)
+model = ob.train_model(train.text, train.label)
+repo = ob.make_service(ob.project("sentiment-repo"), model)
+dev_pins = ["fastapi", "uvicorn", "pydantic", "scikit-learn", "numpy", "scipy", "joblib", "threadpoolctl"]
+ob.write("requirements.txt", "\n".join(f"{p}=={version(p)}" for p in dev_pins), base=repo)
+ob.write("requirements-dev.txt", "-r requirements.txt\n" + "\n".join(
+    f"{p}=={version(p)}" for p in ["pytest", "pytest-cov", "httpx", "ruff"]), base=repo)
+ob.write("pyproject.toml", """
+    [tool.ruff]
+    line-length = 100
+    [tool.ruff.lint]
+    select = ["E", "F", "W", "I", "B", "UP"]
+    [tool.pytest.ini_options]
+    pythonpath = ["."]
+    addopts = "-q -p no:cacheprovider"
+""", base=repo)
+ob.write("tests/test_api.py", '''
+    import os
+    from pathlib import Path
+
+    import pytest
+    from fastapi.testclient import TestClient
+
+    os.environ["MODEL_PATH"] = str(Path(__file__).resolve().parent.parent / "model.joblib")
+
+
+    @pytest.fixture(scope="session")
+    def client():
+        from app import app
+
+        with TestClient(app) as c:
+            yield c
+
+
+    def test_ready(client):
+        assert client.get("/ready").status_code == 200
+
+
+    @pytest.mark.parametrize("body", [{"texts": []}, {"texts": [""]}, {"texts": ["x" * 281]}])
+    def test_rejects(client, body):
+        assert client.post("/v1/predict", json=body).status_code == 422
+
+
+    def test_clear_cases(client):
+        r = client.post("/v1/predict", json={"texts": ["love the new phone", "the battery is awful"]})
+        assert [p["label"] for p in r.json()["predictions"]] == ["positive", "negative"]
+''', base=repo)
+ob.write("Dockerfile", """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    RUN useradd --create-home --uid 10001 app
+    COPY app.py model.joblib ./
+    ENV MODEL_PATH=/app/model.joblib
+    USER app
+    HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=3 \\
+      CMD ["python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+    CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+""", base=repo)
+ob.run("python -m ruff format -q .", cwd=repo)
+ob.write(".github/workflows/ci.yml", """
+    name: CI
+
+    on:
+      push:
+        branches: [main]
+      pull_request:
+
+    permissions:
+      contents: read
+
+    concurrency:                        # a newer push cancels the older run of the same branch
+      group: ci-${{ github.ref }}
+      cancel-in-progress: true
+
+    jobs:
+      quality:
+        runs-on: ubuntu-latest
+        strategy:
+          matrix:
+            python-version: ["3.12", "3.13"]
+        steps:
+          - uses: actions/checkout@v7
+          - uses: actions/setup-python@v7
+            if: ${{ !env.ACT }}           # act runs on the local machine's Python
+            with:
+              python-version: ${{ matrix.python-version }}
+              cache: pip
+              cache-dependency-path: requirements-dev.txt
+          - name: Install dependencies
+            run: python -m pip install -r requirements-dev.txt
+          - name: Format check
+            run: python -m ruff format --check .
+          - name: Lint
+            run: python -m ruff check .
+          - name: Tests
+            run: python -m pytest
+
+      image:
+        needs: quality                  # only if every quality job passed
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v7
+          - name: Build
+            run: docker build --build-arg BASE=${{ vars.BASE_IMAGE || 'python:3.12-slim' }} -t sentiment:${{ github.sha }} .
+          - name: Smoke test
+            run: |
+              docker run -d --name smoke -p 8000:8000 sentiment:${{ github.sha }}
+              for i in $(seq 60); do curl -fs localhost:8000/ready && break; sleep 1; done
+              curl -fs -X POST localhost:8000/v1/predict -H 'Content-Type: application/json' \\
+                   -d '{"texts": ["love the new phone"]}' | grep -q '"label":"positive"'
+          - name: Clean up
+            if: always()
+            run: docker rm -f smoke
+""", base=repo)
+ob.show(".github/workflows/ci.yml", base=repo)
+```
+
+Each part implements something from this part: the `quality` job runs the
+checks of @exr-ops4-lint-hard, in the fail-fast order, on two Python
+versions; the cache key is derived from the lock file; the `image` job builds
+the image of @sec-ops-image and runs a **smoke test of meaning**
+(@exr-ops5-what-hard) against the running container; `permissions` grants
+read access only; `concurrency` cancels superseded runs.
+
+### Checking and running a workflow locally
+
+A typo in a workflow is found only when it runs — after a push. Two tools
+shorten that loop. **actionlint** checks workflows statically: YAML
+structure, expression syntax, the types of contexts (`github.sha`,
+`matrix.*`), the inputs of known actions, and the shell scripts with
+ShellCheck when available [@actionlint2026]. A workflow with three typical
+mistakes:
+
+```{python}
+#| echo: false
+#| output: asis
+broken_dir = ob.project("broken-wf")
+ob.write(".github/workflows/broken.yml", """
+    name: broken
+    on: push
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/setup-python@v7
+            with:
+              python_version: "3.13"
+          - run: echo "testing ${{ github.shaa }}"
+      deploy:
+        needs: tests
+        runs-on: ubuntu-latest
+        steps:
+          - run: echo deploying
+""", base=broken_dir)
+ob.show(".github/workflows/broken.yml", base=broken_dir)
+ob.sh(f"{ob.tool('actionlint')} -no-color -oneline", cwd=broken_dir, shown="actionlint")
+ob.sh(f"{ob.tool('actionlint')} -no-color", cwd=repo, shown="actionlint   # on the service's workflow")
+```
+
+actionlint caught an unknown input name (`python_version`), a property that
+does not exist (`github.shaa`) and a dependency on a job that does not exist
+(`tests`); the service's workflow passes.
+
+**act** runs workflows locally, reading the same YAML [@act2026]. With
+`-P ubuntu-latest=-self-hosted` it runs the jobs directly on the local machine
+instead of in a runner image (the build machine cannot download runner
+images); actions are cloned from GitHub — here, from a local clone of each
+action's repository, passed with `--local-repository`. act sets the
+environment variable `ACT`, which the workflow uses to skip `setup-python`
+locally. The repository is committed first, since `push` events refer to a
+commit:
+
+```{python}
+#| echo: false
+#| output: asis
+ob.write(".gitignore", "__pycache__/\n.coverage\n", base=repo)
+ob.run("git init -q -b main && git add -A && git commit -qm 'Service, tests, Dockerfile and CI workflow'",
+       cwd=repo, env=GITENV, check=True)
+actions_dir = ob.WORK / "actions"
+for action, ref in (("actions/setup-python", "v7"), ("actions/cache", "v6")):
+    target = actions_dir / action.replace("/", "_")
+    if not target.exists():
+        ob.run(f"git clone -q --depth 1 -b {ref} https://github.com/{action} {target}", check=True)
+cb.ensure_base_images()
+
+def act(cwd, *extra, event="push"):
+    cmd = (f"{ob.tool('act')} {event} -P ubuntu-latest=-self-hosted --no-cache-server "
+           f"--local-repository actions/setup-python@v7={actions_dir / 'actions_setup-python'} "
+           f"--local-repository actions/cache@v6={actions_dir / 'actions_cache'} "
+           f"--var BASE_IMAGE={cb.LOCAL['python']} " + " ".join(extra))
+    return cmd
+
+def act_summary(text):
+    keep = []
+    for line in text.splitlines():
+        if re.search(r"⭐ Run Main|✅  Success - Main|❌  Failure - Main|🏁|\| (\d+ passed|\d+ failed|All checks|.*would be reformatted|TOTAL)", line):
+            keep.append(re.sub(r" \[[\d.]+[µm]?s\]", "", line))
+    return "\n".join(keep)
+
+ob.sh(act(repo), cwd=repo, shown="act push -P ubuntu-latest=-self-hosted --var BASE_IMAGE=local/python:3.12-slim",
+      filt=act_summary, timeout=1800, max_lines=80)
+```
+
+```{python}
+#| echo: false
+ACT_OK = ob.LAST.returncode == 0
+```
+
+Both matrix entries of `quality` ran the format check, lint and tests, and
+`image` started only after both had succeeded, built the image and passed the
+smoke test`{python} "" if ACT_OK else " (see the output: the run failed)"`. On
+GitHub the same file runs on fresh virtual machines; the matrix entries then
+really use Python 3.12 and 3.13, whereas locally both used the build
+machine's Python.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops6-gha-easy}
+## Easy — read a workflow
+For the service's `ci.yml`: (a) how many jobs run for a push to a feature
+branch with an open pull request, and for a push to `main`? (b) Which jobs
+run in parallel? (c) What happens to the `image` job if the Python 3.12 tests
+fail but the 3.13 ones pass? (d) What can a step of this workflow do with the
+repository through `GITHUB_TOKEN`? (e) When is the pip cache invalidated?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A matrix job counts once per combination; `needs` waits for *all* of them.
+Look at the `on:` filters and at the `permissions:` block.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) A push to a feature branch does not match `push: branches: [main]`, but
+the pull request's update triggers `pull_request`: two `quality` jobs (the
+matrix) and, if they pass, `image` — three jobs. A push to `main` triggers the
+same three. (b) The two matrix entries of `quality` run in parallel; `image`
+waits. (c) `image` is skipped: `needs` requires every matrix job to succeed
+(unless `fail-fast` and `if:` conditions say otherwise; by default the other
+matrix job is also cancelled). (d) Only read the repository's contents
+(`contents: read`): it cannot push, comment or publish packages. (e) When
+`requirements-dev.txt` changes, since the cache key includes its hash.
+:::
+
+::: {#exr-ops6-gha-medium}
+## Medium — break it and watch it fail
+Introduce, in turn, (a) an unformatted line, (b) an unused import, (c) a
+failing test, into the service repository, commit each, and run the workflow
+with act. Report which step fails and whether the `image` job runs. Then
+restore the repository.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Run only the `quality` job (`act push -j quality`) to save time, and look at
+the first failing step in act's output.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def break_and_run(edit, message):
+    original = (repo / "app.py").read_text()
+    edit()
+    ob.run(f"git commit -qam '{message}'", cwd=repo, env=GITENV)
+    p = ob.run(act(repo), cwd=repo, timeout=1800)
+    out = p.stdout + p.stderr
+    failed = sorted(set(re.findall(r"❌  Failure - Main ([^\[\n]+)", out)))
+    ran_image = "[CI/image" in out
+    ob.run("git reset -q --hard HEAD~1", cwd=repo)
+    (repo / "app.py").write_text(original)
+    return failed, ran_image
+
+edits = {
+    "unformatted": lambda: (repo / "app.py").write_text((repo / "app.py").read_text() + "\nx = [1,2]\n"),
+    "unused import": lambda: (repo / "app.py").write_text((repo / "app.py").read_text().replace("import os\n", "import os\nimport sys\n")),
+    "failing test": lambda: (repo / "tests" / "test_api.py").write_text(
+        (repo / "tests" / "test_api.py").read_text().replace('== ["positive", "negative"]', '== ["negative", "positive"]')),
+}
+for name, edit in edits.items():
+    failed, ran_image = break_and_run(edit, name)
+    print(f"{name:14s} failing steps: {', '.join(s.strip() for s in failed) or 'none'}; image job ran: {ran_image}")
+_ = ob.run("git checkout -q -- .", cwd=repo)
+```
+Each defect stops `quality` at its own step — format check, lint, tests — and
+`image` never runs, so no image is built from a commit that fails its checks.
+The order of the steps is the fail-fast order of @prp-ops-stage-order. A
+common anti-pattern is `continue-on-error: true` on the lint step "to see all
+problems at once", which then lets unlinted code through.
+:::
+
+::: {#exr-ops6-gha-hard}
+## Hard — a scheduled job and a cache key
+Add to the workflow a second trigger, `schedule` (every night at 02:17 UTC),
+under which a job `nightly` runs an extended test suite (marked `slow`) that
+does not run on pushes. Use a cache for a downloaded evaluation file, keyed by
+its expected SHA-256, so the file is downloaded only when the expected hash
+changes. Validate with actionlint and run the `nightly` job locally with act
+(the `schedule` event).
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`if: github.event_name == 'schedule'` selects jobs by trigger; `pytest -m
+slow` and `-m "not slow"` split the suite. Pick an odd minute for the cron
+(many workflows run at :00, which delays them). The cache key can be any
+string — put the hash in it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+wf = (repo / ".github/workflows/ci.yml").read_text()
+wf = wf.replace("  pull_request:\n", "  pull_request:\n  schedule:\n    - cron: \"17 2 * * *\"     # every night, 02:17 UTC\n")
+wf = wf.replace("            run: python -m pytest\n", "            run: python -m pytest -m \"not slow\"\n")
+wf = wf.replace("  quality:\n    runs-on: ubuntu-latest", "  quality:\n    if: github.event_name != 'schedule'\n    runs-on: ubuntu-latest")
+wf += """
+  nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      EVAL_SHA256: 3f0c5e4f0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a69788796a5b4c3d2e1f0a9b8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        if: ${{ !env.ACT }}
+        with:
+          path: data/eval.csv
+          key: eval-${{ env.EVAL_SHA256 }}
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Extended tests
+        run: python -m pytest -m slow
+"""
+(repo / ".github/workflows/ci.yml").write_text(wf)
+ob.write("tests/test_slow.py", '''
+    import sys
+
+    import pytest
+
+
+    @pytest.mark.slow
+    def test_many_posts(client):
+        texts = ["the camera is brilliant"] * 64
+        for _ in range(20):
+            r = client.post("/v1/predict", json={"texts": texts})
+            assert {p["label"] for p in r.json()["predictions"]} == {"positive"}
+''', base=repo)
+(repo / "tests/conftest.py").write_text("")
+(repo / "pyproject.toml").write_text((repo / "pyproject.toml").read_text().replace(
+    'addopts = "-q -p no:cacheprovider"', 'addopts = "-q -p no:cacheprovider"\nmarkers = ["slow: extended tests run nightly"]'))
+(repo / "tests/test_slow.py").write_text((repo / "tests/test_slow.py").read_text().replace("import sys\n\n", ""))
+# the session fixture lives in test_api.py: move it to conftest.py so both modules can use it
+api = (repo / "tests/test_api.py").read_text()
+fixture = api[api.index("import os"):api.index("def test_ready")]
+(repo / "tests/conftest.py").write_text(fixture)
+(repo / "tests/test_api.py").write_text("import pytest\n\n\n" + api[api.index("def test_ready"):])
+ob.run(f"{PY} -m ruff format -q . && {PY} -m ruff check -q --fix .", cwd=repo)
+ob.run("git add -A && git commit -qm 'Nightly extended tests'", cwd=repo, env=GITENV, check=True)
+ob.sh(f"{ob.tool('actionlint')} -no-color && echo 'actionlint: no problems'", cwd=repo, shown="actionlint")
+ob.sh(act(repo, event="schedule"), cwd=repo, shown="act schedule -P ubuntu-latest=-self-hosted",
+      filt=act_summary, timeout=1800)
+```
+Under `schedule`, only `nightly` runs (the other jobs are skipped by their
+`if:`), and it runs only the slow tests; on pushes the `-m "not slow"` filter
+keeps them out of the fast loop. The cache key contains the expected hash of
+the evaluation file, so changing the file means changing the hash in the
+workflow, which changes the key — a cache can never serve a stale file under a
+new name. (The hash in the workflow is a placeholder: in a real pipeline the
+download step must also *verify* it, @exr-ops1-stack-hard.) Moving the
+session fixture into `conftest.py` was needed for two test modules to share
+it.
+:::
+
+## Continuous delivery and promotion gates {#sec-ops-cd}
+
+### Separate CI from CD
+
+CD runs only for commits that passed CI, usually only on the main branch,
+and needs credentials that CI must not have. GitHub Actions expresses this
+with a separate job (or workflow) that `needs` the CI jobs, runs `if:
+github.ref == 'refs/heads/main'`, requests `packages: write` only for itself,
+and reads its credentials from secrets or from an **environment** with
+protection rules:
+
+```yaml
+  publish:
+    needs: image
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write                    # push to the GitHub Container Registry
+    environment: production              # protection rules, environment secrets
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository }}/sentiment:${{ github.sha }}
+```
+
+The image is tagged with the **commit id**: every image can be traced to the
+exact code that built it (@prp-ops-commit), and a deployment refers to it by
+digest (@exr-ops5-rollback-digest).
+
+**Hugging Face Spaces** can host a containerised demo: a Space of type Docker
+is a Git repository whose `README.md` starts with a YAML header such as
+`sdk: docker` and `app_port: 8000`; the platform builds the Dockerfile at the
+root and runs it [@huggingface2026hub]. A CD job deploys by pushing the
+repository's files to the Space's Git remote, authenticated by a token stored
+as a repository secret (`HF_TOKEN`), e.g. `git push
+https://user:$HF_TOKEN@huggingface.co/spaces/user/sentiment main`. The build
+machine of this book cannot reach Hugging Face, so this step is described, not
+run.
+
+### A statistical gate for models
+
+Before a retrained model (the **challenger**) replaces the one in production
+(the **champion**), the pipeline should check that it is not worse. Both
+models are evaluated on the **same** examples, so the comparison is *paired*:
+only the examples on which they disagree carry information.
+
+::: {#prp-ops-mcnemar}
+## McNemar's exact test
+On $n$ examples, let $b$ be the number the challenger gets right and the
+champion wrong, and $c$ the number the champion gets right and the challenger
+wrong. If the two models have the same accuracy on the population — more
+precisely, if each discordant example is equally likely to be of either kind
+— then, conditionally on $d = b + c$,
+$$
+c \sim \mathrm{Binomial}(d, \tfrac12),
+$$
+so the one-sided p-value for "the challenger is worse" is $P(X \ge c)$ with
+$X \sim \mathrm{Binomial}(d, \frac12)$ [@mcnemar1947].
+:::
+
+*In one line:* examples on which both models agree say nothing about which is
+better; among the disagreements, a fair coin decides who wins if they are
+equally good.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-mcnemar
+Each example independently falls in one of four cells (both right, both
+wrong, only challenger right, only champion right) with probabilities
+$\pi_{11}, \pi_{00}, \pi_{10}, \pi_{01}$. The accuracies are $\pi_{11} +
+\pi_{10}$ and $\pi_{11} + \pi_{01}$; they are equal iff $\pi_{10} = \pi_{01}$.
+Given that an example is discordant, it is of the "champion right" kind with
+probability $\pi_{01}/(\pi_{10} + \pi_{01}) = \frac12$ under equality. The
+$d$ discordant examples are independent, so the number $c$ of the second kind
+is $\mathrm{Binomial}(d, \frac12)$ conditionally on $d$. The p-value of the
+observed $c$ for the alternative "champion better" is the probability of a
+value at least as large under the null. $\blacksquare$
+:::
+
+The test uses $d$, not $n$: two models that agree on 95 % of the examples
+are compared on the remaining 5 %, which is why a paired comparison detects
+small differences with far fewer examples than comparing two independently
+estimated accuracies (@exr-ops6-cd-medium).
+
+```{python}
+def mcnemar_worse(y, p_champion, p_challenger):
+    """b, c and the one-sided exact p-value for 'the challenger is worse'."""
+    right_ch, right_new = p_champion == y, p_challenger == y
+    b = int(np.sum(right_new & ~right_ch))     # challenger right, champion wrong
+    c = int(np.sum(right_ch & ~right_new))     # champion right, challenger wrong
+    p = binom.sf(c - 1, b + c, 0.5) if b + c else 1.0
+    return b, c, float(p)
+
+evaluation = ob.make_posts(4000, seed=300)
+y_ev = evaluation.label.to_numpy()
+champion = model
+candidates = {
+    "retrained on a new sample": ob.train_model(ob.make_posts(3000, seed=5).text, ob.make_posts(3000, seed=5).label),
+    "unigrams only": ob.train_model(train.text, train.label, ngram=(1, 1)),
+}
+p_champ = champion.predict(evaluation.text)
+for name, ch in candidates.items():
+    p_new = ch.predict(evaluation.text)
+    b, c, p = mcnemar_worse(y_ev, p_champ, p_new)
+    print(f"{name:26s} acc {np.mean(p_new == y_ev):.4f} vs {np.mean(p_champ == y_ev):.4f}; "
+          f"b = {b:3d}, c = {c:3d}, p(worse) = {p:.2g} -> {'BLOCK' if p < 0.05 else 'pass'}")
+```
+
+The retrained model differs from the champion on about ninety posts, with
+no significant difference — it may be promoted (if, say, it was trained on newer
+data). The unigram model loses many more disagreements than it wins, and the
+gate blocks it.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops6-cd-easy}
+## Easy — McNemar by hand
+On 1 000 posts, a challenger and a champion agree on 960. Of the 40
+disagreements, the challenger is right on 14 and the champion on 26. Compute
+the one-sided p-value for "the challenger is worse" with the binomial
+distribution (and its normal approximation $z = (c - b)/\sqrt{b + c}$). Would
+a gate at 5 % block the challenger? What do the 960 agreements contribute?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$c = 26$, $d = 40$: $P(X \ge 26)$ for $X \sim \mathrm{Binomial}(40, 0.5)$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+b_, c_ = 14, 26
+print(f"exact p = {binom.sf(c_ - 1, b_ + c_, 0.5):.4f}; normal z = {(c_ - b_) / np.sqrt(b_ + c_):.2f}, "
+      f"p = {norm.sf((c_ - b_) / np.sqrt(b_ + c_)):.4f}")
+```
+The exact p-value is about 0.04: a gate at 5 % blocks the challenger,
+although its accuracy (0.948 against 0.960) differs by 1.2 points only. The
+960 agreements contribute nothing to the test — they would be the same
+whichever model is better.
+:::
+
+::: {#exr-ops6-cd-medium}
+## Medium — paired versus unpaired
+A challenger is truly 1 point worse than the champion. By simulation (on the
+synthetic posts, or with binomial draws), compare how often a 5 % gate catches
+it with (a) McNemar's test on a shared evaluation set of $n$ posts and (b) a
+two-proportion test on two separate evaluation sets of $n$ posts each, for $n
+\in \{500, 2000, 8000\}$. Explain the difference.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Model the pair of outcomes per example: with probability $\pi_{11}$ both
+right, $\pi_{10}$ only the champion, $\pi_{01}$ only the challenger,
+$\pi_{00}$ neither, chosen so that the accuracies are 0.93 and 0.92 and the
+models disagree on, say, 5 % of the examples.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+rng = np.random.default_rng(8)
+acc_old, acc_new, disagree = 0.93, 0.92, 0.05
+pi10 = (disagree + (acc_old - acc_new)) / 2          # champion right only
+pi01 = disagree - pi10                               # challenger right only
+pi11 = acc_old - pi10
+probs = [pi11, pi10, pi01, 1 - pi11 - pi10 - pi01]
+for n in (500, 2000, 8000):
+    caught_paired = caught_unpaired = 0
+    for _ in range(2000):
+        cells = rng.multinomial(n, probs)
+        b, c = cells[2], cells[1]
+        caught_paired += (b + c) > 0 and binom.sf(c - 1, b + c, 0.5) < 0.05
+        k_old, k_new = rng.binomial(n, acc_old), rng.binomial(n, acc_new)
+        pool = (k_old + k_new) / (2 * n)
+        z = (k_old - k_new) / n / np.sqrt(2 * pool * (1 - pool) / n)
+        caught_unpaired += norm.sf(z) < 0.05
+    print(f"n = {n:5d}: paired (McNemar) {caught_paired / 2000:.2f}, unpaired {caught_unpaired / 2000:.2f}")
+```
+The paired test has much higher power at every size: the unpaired comparison
+must see a 1-point difference through the full binomial noise of two
+accuracies near 0.93 (variance $\approx 2 \cdot 0.93 \cdot 0.07/n$), while
+McNemar looks only at the 5 % of examples where the models differ, where the
+1-point gap is a 30/70 split. Evaluating both models on the same examples is
+free — and the right design for a gate.
+:::
+
+::: {#exr-ops6-cd-hard}
+## Hard — the gate in the pipeline
+Add to the service repository a script `gate.py` that loads the champion
+(`model.joblib`) and a challenger (`challenger.joblib`), evaluates both on a
+fixed evaluation set, prints a report and exits with status 1 when McNemar's
+test says the challenger is worse at the 5 % level, 0 otherwise. Add a job
+`gate` to the workflow that runs it, and a job `publish` that `needs` it.
+Run the workflow with act twice: once with a challenger retrained on a new
+sample, once with the unigram challenger. Show that only in the first run the
+`publish` job runs.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`publish` can be a placeholder that prints what it would push (it needs
+credentials on GitHub). The evaluation set must be fixed — by seed here, by a
+pinned file with a hash in practice — or the gate's decision would change from
+run to run.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+ob.write("gate.py", f'''
+    """Block a challenger that is significantly worse than the champion (McNemar, one-sided)."""
+    import sys
+
+    import joblib
+    import numpy as np
+    from scipy.stats import binom
+
+    sys.path.insert(0, {str(Path.cwd())!r})          # opsbook: the fixed evaluation set
+    import opsbook as ob  # noqa: E402
+
+    ALPHA = 0.05
+    evaluation = ob.make_posts(4000, seed=300)
+    y = evaluation.label.to_numpy()
+    champion, challenger = joblib.load("model.joblib"), joblib.load("challenger.joblib")
+    right_old = champion.predict(evaluation.text) == y
+    right_new = challenger.predict(evaluation.text) == y
+    b, c = int(np.sum(right_new & ~right_old)), int(np.sum(right_old & ~right_new))
+    p = binom.sf(c - 1, b + c, 0.5) if b + c else 1.0
+    print(f"champion {{right_old.mean():.4f}}, challenger {{right_new.mean():.4f}}")
+    print(f"b = {{b}}, c = {{c}}, one-sided p = {{p:.3g}}")
+    sys.exit(1 if p < ALPHA else 0)
+''', base=repo)
+wf = (repo / ".github/workflows/ci.yml").read_text()
+wf += """
+  gate:
+    needs: image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Challenger vs champion
+        run: python gate.py
+
+  publish:
+    needs: gate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "would push ghcr.io/${{ github.repository }}/sentiment:${{ github.sha }}"
+"""
+(repo / ".github/workflows/ci.yml").write_text(wf)
+ob.run(f"{PY} -m ruff format -q . && {PY} -m ruff check -q --fix .", cwd=repo)   # keep the quality job green
+ob.sh(f"{ob.tool('actionlint')} -no-color && echo 'actionlint: no problems'", cwd=repo, shown="actionlint")
+challengers = {"retrained on a new sample": candidates["retrained on a new sample"],
+               "unigrams only": candidates["unigrams only"]}
+def gate_summary(text):
+    return "\n".join(l for l in act_summary(text).splitlines()
+                     if "gate" in l or "publish" in l or "champion" in l or "would push" in l
+                     or "Failure" in l)
+for name, ch in challengers.items():
+    joblib.dump(ch, repo / "challenger.joblib")
+    ob.run(f"git add -A && git commit -qm 'Challenger: {name}'", cwd=repo, env=GITENV, check=True)
+    print(f"\n**Challenger: {name}**\n")
+    ob.sh(act(repo), cwd=repo, shown="act push -P ubuntu-latest=-self-hosted", filt=gate_summary, timeout=1800)
+```
+With the retrained challenger the gate passes and `publish` runs; with the
+unigram challenger `gate.py` exits with status 1, the job fails, and
+`publish` — which `needs` it — never starts. The decision is reproducible
+because the evaluation set is fixed; its power to detect a given degradation
+can be planned as in @exr-ops6-cd-medium. A gate that only compares two
+accuracy numbers would block good challengers by chance and pass bad ones on
+small evaluation sets.
+:::
+
+::: {.project-link}
+**In the project.** The project's pipeline runs tests and style checks on
+every push, builds the image, and — in a separate CD part — publishes it.
+Follow this chapter: a `quality` job (format check, lint, tests, in the
+fail-fast order) and an `image` job with a smoke test of meaning, linked by
+`needs`; least-privilege `permissions`; a CD job restricted to the main branch
+whose credentials come only from secrets; images tagged by commit. Validate
+the workflow with actionlint before pushing. If the deployment to Hugging Face
+Spaces is not done, describe it as in @sec-ops-cd (Docker Space,
+`app_port`, token secret). When the pipeline retrains a model, gate its
+promotion with a paired test on a fixed evaluation set (@exr-ops6-cd-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Long-lived branches** and integration once a week: not CI, whatever the
+  tooling.
+- **Expensive stages first**, or everything sequential when it could run in
+  parallel.
+- **`continue-on-error`** on checks that should block.
+- **Secrets in workflow files** or echoed in logs; `permissions` left at the
+  default write access.
+- **Unpinned actions** (`@main`): pin at least the major version, ideally the
+  commit.
+- **Rebuilding the image in CD** instead of promoting the one CI tested.
+- **Model gates on two accuracy numbers**: use a paired test on a fixed set.
+:::
+
+## Summary
+
+- CI integrates small changes often, each verified automatically; continuous
+  delivery keeps every passing change releasable; continuous deployment
+  releases it; continuous training retrains on new data. Delivery
+  performance: deployment frequency, lead time, change failure rate, time to
+  restore.
+- Sequential stages in increasing $c_i/p_i$ minimise the expected cost;
+  parallel jobs finish at the weight of the critical path.
+- GitHub Actions: workflows of jobs of steps; triggers, `needs`, matrices,
+  caches keyed by lock-file hashes, least-privilege permissions, secrets,
+  environments. actionlint checks workflows; act runs them locally.
+- CD: separate jobs, main branch only, images tagged by commit, credentials
+  from secrets; Hugging Face Docker Spaces as a deployment target.
+- Model gates: McNemar's test uses only the disagreements, $c \sim
+  \mathrm{Binomial}(b + c, \frac12)$ under equal accuracy, and is far more
+  powerful than comparing two accuracies.
+
+## Exercises
+
+::: {#exr-ops6-noninferiority}
+**Non-inferiority.** A gate that blocks only *significantly* worse
+challengers lets through any challenger tested on too few examples. Write a
+**non-inferiority** gate instead: promote only if the data show, at the 5 %
+level, that the challenger is *not worse by more than 1 point* — using the
+normal approximation to the paired difference $(b - c)/n$, with variance
+estimated by $(b + c)/n^2 - ((b - c)/n)^2/n$. Apply it to the two challengers
+above with evaluation sets of 1 000 and 4 000 posts.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def noninferior(y, p_old, p_new, margin=0.01, alpha=0.05):
+    n = len(y)
+    b = np.sum((p_new == y) & (p_old != y)); c = np.sum((p_old == y) & (p_new != y))
+    diff = (b - c) / n
+    var = (b + c) / n**2 - diff**2 / n
+    lower = diff - norm.ppf(1 - alpha) * np.sqrt(var)
+    return diff, lower, lower > -margin
+
+for n in (1000, 4000):
+    ev = ob.make_posts(n, seed=301)
+    y = ev.label.to_numpy(); p_old = champion.predict(ev.text)
+    for name, ch in candidates.items():
+        d, lo, ok = noninferior(y, p_old, ch.predict(ev.text))
+        print(f"n = {n}: {name:26s} difference {d:+.4f}, lower bound {lo:+.4f} -> {'promote' if ok else 'hold'}")
+```
+The burden of proof is now on the challenger: with 1 000 posts the evidence
+may not suffice even for a good challenger (it is *held*, not promoted),
+whereas the "not significantly worse" gate would have let it through by
+default. With 4 000 posts the good challenger is shown non-inferior and the
+unigram model is held. Choosing between the two gates is a policy decision:
+non-inferiority is the safer default for automatic promotion.
+:::
+
+::: {#exr-ops6-dora}
+**Delivery metrics from a log.** From a list of deployments with their commit
+times, deployment times and whether they caused an incident (and when it was
+resolved), compute the four delivery metrics. Write the function and apply it
+to a small invented log; say which number you would try to improve first if
+lead time were three days and the change failure rate 30 %.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from datetime import datetime as dt, timedelta as td
+log = [  # (commit time, deploy time, incident resolved after, or None)
+    (dt(2026, 11, 2, 9), dt(2026, 11, 5, 10), None), (dt(2026, 11, 3, 15), dt(2026, 11, 6, 11), td(hours=5)),
+    (dt(2026, 11, 9, 10), dt(2026, 11, 12, 9), None), (dt(2026, 11, 10, 8), dt(2026, 11, 13, 16), td(hours=20)),
+    (dt(2026, 11, 16, 11), dt(2026, 11, 19, 10), None), (dt(2026, 11, 17, 9), dt(2026, 11, 20, 15), td(hours=2)),
+    (dt(2026, 11, 23, 14), dt(2026, 11, 26, 9), None), (dt(2026, 11, 24, 10), dt(2026, 11, 27, 12), None),
+    (dt(2026, 11, 30, 9), dt(2026, 12, 3, 10), None), (dt(2026, 12, 1, 16), dt(2026, 12, 4, 9), None),
+]
+days = (max(d for _, d, _ in log) - min(d for _, d, _ in log)).days
+lead = [d - c for c, d, _ in log]
+failures = [r for _, _, r in log if r is not None]
+print(f"deployment frequency {len(log) / days * 7:.1f} per week; median lead time "
+      f"{sorted(lead)[len(lead) // 2]}; change failure rate {len(failures) / len(log):.0%}; "
+      f"median time to restore {sorted(failures)[len(failures) // 2]}")
+```
+Lead times of three days with a 30 % failure rate point at large, infrequent
+batches: the first lever is usually to make changes smaller and the pipeline
+faster (CI on every change, automated tests and gates), which tends to lower
+the failure rate too — the observation behind @forsgren2018's finding that
+speed and stability improve together.
+:::
+
+## Further reading {.unnumbered}
+
+- @fowler2006 — the original description of continuous integration and its
+  practices; @humble2010, ch. 1–5 — the deployment pipeline.
+- @forsgren2018, ch. 1–2 — measuring delivery performance; the four metrics.
+- @githubactions2026 — workflow syntax (`on`, `jobs`, `needs`, `strategy`,
+  `permissions`, `concurrency`), contexts and expressions, caching, secrets
+  and environments; @actionlint2026 and @act2026 for checking and running
+  workflows locally.
+- @mcnemar1947 — the test for paired proportions; @dietterich1998 — why
+  McNemar's test is recommended for comparing two classifiers on one test set.
+- @garey1973 — optimal sequencing of tests, of which the $c/p$ rule is the
+  simplest case.

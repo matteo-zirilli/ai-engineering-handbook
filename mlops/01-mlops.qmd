@@ -1,0 +1,1246 @@
+# What MLOps is {#sec-ch-ops-intro}
+
+> *"It may be surprising to the academic community to know that only a tiny
+> fraction of the code in many ML systems is actually devoted to learning or
+> prediction."* — D. Sculley et al., 2015 [@sculley2015]
+
+```{python}
+#| echo: false
+import opsbook as ob
+ob.setup()
+import json, hashlib, shutil
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, classification_report
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- describe the **life cycle** of a machine-learning system and the roles of
+  the people who build and run it, and say what makes it different from
+  ordinary software;
+- define and measure **prediction churn** between two versions of a model,
+  and prove that it is bounded below by their difference in accuracy and
+  above by the sum of their errors;
+- recognise the main kinds of **technical debt** specific to ML systems —
+  entanglement, hidden feedback loops, undeclared consumers, glue code,
+  configuration — and demonstrate entanglement in code;
+- place a system on the **maturity** scales used in industry, and compute
+  its **ML Test Score**, including the cheapest plan to raise it;
+- find your way around the **tool stack** of MLOps, read a **model card**,
+  write one, and download model files **pinned by revision and content hash**.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What MLOps is and why it exists; the roles of the ML engineer and of the data
+scientist; maturity models for MLOps; the tools used across the life cycle;
+working with a code-hosting platform and with a model hub.
+:::
+
+## From a model to a system {#sec-ops-lifecycle}
+
+### The life cycle
+
+A notebook that trains a classifier and prints its test accuracy answers one
+question: *can* this problem be learnt from these data? A **system** answers
+a different one, every second, for months: *what is the sentiment of this
+post?* — for posts nobody has seen, arriving through a network, while the
+people writing them, the code around the model and the model itself keep
+changing. Between the two lies a cycle of activities, drawn in
+@fig-ops-lifecycle:
+
+```{mermaid}
+%%| echo: false
+%%| label: fig-ops-lifecycle
+%%| fig-cap: "The life cycle of an ML system. The inner loop (data → training → evaluation) is the one of Parts III and IV; MLOps adds the outer loop through deployment and monitoring back to the data, and the automation that makes it repeatable."
+flowchart LR
+  P[Problem<br/>and metrics] --> D[Data<br/>collection,<br/>labelling]
+  D --> T[Training and<br/>experiments]
+  T --> E[Evaluation<br/>and tests]
+  E -->|not good enough| T
+  E --> R[Registry:<br/>versioned model]
+  R --> S[Deployment<br/>and serving]
+  S --> M[Monitoring:<br/>service, data,<br/>predictions]
+  M -->|drift, new data,<br/>new labels| D
+  M -->|incident| S
+```
+
+1. **Problem and metrics** — what decision the model supports, how success is
+   measured, what an error costs (@thm-cost-threshold showed how costs move
+   the optimal threshold).
+2. **Data** — collection, labelling, validation, versioning.
+3. **Training and experiments** — many runs with different data, features,
+   models and hyperparameters; each run must be recorded to be comparable
+   and repeatable (@sec-ch-ops-repro).
+4. **Evaluation and tests** — held-out metrics (@sec-classification-metrics),
+   behavioural tests, comparison with the model in production
+   (@sec-ch-ops-testing).
+5. **Registry** — the chosen model, with its version, lineage and metadata,
+   becomes an artefact that can be deployed and rolled back.
+6. **Deployment and serving** — the model behind an API or in a batch job,
+   packaged in a container, released gradually (@sec-ch-ops-serving,
+   @sec-ch-ops-deploy).
+7. **Monitoring** — of the service (latency, errors), of the inputs and of the
+   predictions (drift), and of quality when labels arrive
+   (@sec-ch-ops-monitor) — which feeds back into new data and new training
+   runs, scheduled by an orchestrator (@sec-ch-ops-orch).
+
+**MLOps** is the set of practices, roles and tools that make this cycle
+reliable, repeatable and fast: the application to machine learning of the
+ideas of DevOps — version everything, automate the path from a commit to
+production, test at every step, observe what runs — extended to the two
+artefacts that ordinary software does not have, **data** and **trained
+models**. Kreuzberger, Kühl and Hirschl, after a literature review and
+interviews with practitioners, define it as a paradigm spanning best
+practices, concepts and a development culture for the end-to-end
+conceptualisation, implementation, monitoring, deployment and scalability of
+ML products, built on CI/CD, workflow orchestration, reproducibility,
+versioning of data, models and code, collaboration, continuous training and
+evaluation, metadata tracking and monitoring [@kreuzberger2023, §IV–V].
+
+### Who does what
+
+The cycle needs several skills, which organisations distribute over
+different roles [@kreuzberger2023, §V.C]:
+
+| Role | Main responsibility | Typical artefacts |
+|---|---|---|
+| **data scientist** | framing the problem, exploring data, choosing and evaluating models | analyses, experiments, a candidate model and its evaluation |
+| **ML engineer** | turning the candidate into a dependable component: training pipelines, packaging, serving, tests, monitoring | pipelines, services, images, tests, dashboards |
+| **data engineer** | getting data in and keeping it correct: ingestion, storage, transformations, quality checks | data pipelines, schemas, tables |
+| **platform / DevOps engineer, SRE** | the infrastructure everything runs on: CI/CD, clusters, observability, on-call | runners, clusters, alerting |
+| **domain expert, product owner** | what the model is for and what counts as good enough | requirements, labelling guidelines, acceptance criteria |
+
+The line between data scientist and ML engineer is the one this part is about.
+A data scientist optimises a metric on a dataset; an ML engineer is
+responsible for that metric staying true when the dataset is replaced by the
+world. In small teams one person plays every role — which is exactly the
+situation of the project of this part.
+
+### What is different about ML systems
+
+Three properties set ML systems apart from the software of Parts I and II.
+
+1. **Behaviour comes from data.** The logic of a classifier is not written
+   by anyone; it is estimated. Changing the training data, or merely its
+   order or the random seed, changes the logic — without any change in the
+   code that a code review would see.
+2. **Failures are silent.** A bug in ordinary code usually raises an
+   exception or returns something visibly wrong. A model whose inputs have
+   drifted keeps returning well-formed, confident, wrong answers. Detecting
+   that needs statistics, not stack traces (@sec-ch-ops-monitor).
+3. **Everything is coupled.** Sculley et al. call it the CACE principle:
+   *changing anything changes everything* [@sculley2015, §2.1]. Inputs are
+   not isolated: add a feature, drop a word from a vocabulary, change a
+   regularisation constant, and every weight moves — so every prediction may
+   move.
+
+The simplest measurement of the first and third points is how many answers
+change between two versions of a model.
+
+::: {#def-ops-churn}
+## Prediction churn
+For two classifiers $f$ and $g$ and inputs $X$ drawn from a distribution
+$\mathcal D$, the **churn** between them is
+$$
+C(f, g) = P_{X \sim \mathcal D}\bigl(f(X) \ne g(X)\bigr),
+$$ {#eq-ops-churn}
+estimated on a sample by the fraction of inputs on which their predictions
+differ [@milanifard2016].
+:::
+
+Churn needs no labels. It is what users experience when a model is replaced:
+the fraction of identical requests that now get a different answer. Its
+relation to accuracy is simple and useful.
+
+::: {#prp-ops-churn}
+## Churn is sandwiched by accuracies
+Let $\mathrm{err}(f) = P(f(X) \ne Y)$ and $\mathrm{acc}(f) = 1 -
+\mathrm{err}(f)$, for $(X, Y) \sim \mathcal D$. Then
+$$
+\bigl|\mathrm{acc}(f) - \mathrm{acc}(g)\bigr| \;\le\; C(f, g) \;\le\;
+\mathrm{err}(f) + \mathrm{err}(g).
+$$ {#eq-ops-churn-bounds}
+The same inequalities hold exactly for the empirical quantities on any finite
+sample.
+:::
+
+*In one line:* two models can differ in accuracy only on inputs where they
+disagree, and they can disagree only where at least one of them is wrong.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-churn
+Write $A = \{f(X) = Y\}$ and $B = \{g(X) = Y\}$. Then $\mathrm{acc}(f) -
+\mathrm{acc}(g) = P(A) - P(B) = P(A \setminus B) - P(B \setminus A)$, so
+$|\mathrm{acc}(f) - \mathrm{acc}(g)| \le \max\{P(A \setminus B), P(B
+\setminus A)\} \le P(A \setminus B) + P(B \setminus A)$. On $A \setminus B$
+we have $f(X) = Y \ne g(X)$, and on $B \setminus A$ we have $g(X) = Y \ne
+f(X)$: both are inside $\{f(X) \ne g(X)\}$ and disjoint, so their total
+probability is at most $C(f, g)$. For the upper bound: if $f(X) \ne g(X)$
+the two cannot both equal $Y$, so $\{f \ne g\} \subseteq A^c \cup B^c$ and
+$C(f, g) \le P(A^c) + P(B^c) = \mathrm{err}(f) + \mathrm{err}(g)$. On a
+finite sample, replace $P$ with the empirical distribution: every step is the
+same. $\blacksquare$
+:::
+
+The lower bound says that two models with **the same accuracy** may still
+churn a lot — up to the sum of their error rates. Let us measure it on the
+synthetic posts of this part (introduced on the part's overview page): two
+models trained on two samples of 3 000 posts from the *same* distribution,
+compared on 5 000 fresh posts.
+
+```{python}
+posts = ob.make_posts(3, seed=0)
+print(posts.to_string())
+```
+
+```{python}
+test = ob.make_posts(5000, seed=100)
+train_a = ob.make_posts(3000, seed=1)
+train_b = ob.make_posts(3000, seed=2)            # same distribution, another sample
+f = ob.train_model(train_a.text, train_a.label)
+g = ob.train_model(train_b.text, train_b.label)
+
+pf, pg = f.predict(test.text), g.predict(test.text)
+acc_f, acc_g = accuracy_score(test.label, pf), accuracy_score(test.label, pg)
+churn = np.mean(pf != pg)
+print(f"accuracy f = {acc_f:.4f}, accuracy g = {acc_g:.4f}")
+print(f"churn       = {churn:.4f}")
+print(f"bounds      : {abs(acc_f - acc_g):.4f} <= {churn:.4f} <= {(1 - acc_f) + (1 - acc_g):.4f}")
+```
+
+```{python}
+#| echo: false
+CHURN_PCT = f"{100 * churn:.1f}"
+DIFF_PCT = f"{100 * abs(acc_f - acc_g):.1f}"
+```
+
+The two models differ in accuracy by `{python} DIFF_PCT` points, yet
+`{python} CHURN_PCT` % of the posts get a different label from them. Nobody
+changed a line of code: only the sample. Which posts flip? Mostly the
+ambiguous ones, where both models are unsure:
+
+```{python}
+flipped = test[pf != pg].assign(f=pf[pf != pg], g=pg[pf != pg])
+conf_all = f.predict_proba(test.text).max(axis=1)
+print(f"mean confidence of f: all posts {conf_all.mean():.3f}, "
+      f"flipped posts {conf_all[pf != pg].mean():.3f}")
+print(flipped.head(6).to_string())
+```
+
+The mean confidence of the first model on the flipped posts is far below its
+average: churn concentrates near the decision boundaries — and so does most
+of the work of monitoring and testing later in the part.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops1-lifecycle-easy}
+## Easy — churn by hand
+Two sentiment models label ten posts whose true labels are
+`[2, 0, 1, 1, 2, 0, 0, 1, 2, 2]`. Model $f$ predicts
+`[2, 0, 1, 2, 2, 0, 1, 1, 2, 0]`, model $g$ predicts
+`[2, 0, 1, 1, 2, 1, 1, 1, 0, 2]`. Compute both accuracies and the churn, and
+check @eq-ops-churn-bounds. Then build, by hand, two predictors on these ten
+posts with the **same** accuracy and the **largest possible** churn.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For the second part, the upper bound $\mathrm{err}(f) + \mathrm{err}(g)$ is
+attained when the two models are never wrong on the same post.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+y10 = np.array([2, 0, 1, 1, 2, 0, 0, 1, 2, 2])
+f10 = np.array([2, 0, 1, 2, 2, 0, 1, 1, 2, 0])
+g10 = np.array([2, 0, 1, 1, 2, 1, 1, 1, 0, 2])
+acc = lambda p: np.mean(p == y10)
+print(f"acc f = {acc(f10):.1f}, acc g = {acc(g10):.1f}, churn = {np.mean(f10 != g10):.1f}")
+print(f"{abs(acc(f10) - acc(g10)):.1f} <= {np.mean(f10 != g10):.1f} <= {(1 - acc(f10)) + (1 - acc(g10)):.1f}")
+
+# Same accuracy (0.7), wrong on disjoint posts: churn = 0.3 + 0.3
+h1 = y10.copy(); h1[[0, 1, 2]] = (y10[[0, 1, 2]] + 1) % 3
+h2 = y10.copy(); h2[[3, 4, 5]] = (y10[[3, 4, 5]] + 1) % 3
+print(f"acc h1 = {acc(h1):.1f}, acc h2 = {acc(h2):.1f}, churn = {np.mean(h1 != h2):.1f}")
+```
+Both $f$ and $g$ have accuracy 0.7 but disagree on 4 posts out of 10: the
+lower bound $|0.7 - 0.7| = 0$ is far from tight. Two models wrong on three
+posts each, never the same ones, reach the upper bound $0.3 + 0.3 = 0.6$:
+"same accuracy" says nothing about whether users see the same answers. A
+frequent slip is to compare accuracies and conclude that a retrained model
+"behaves the same".
+:::
+
+::: {#exr-ops1-lifecycle-medium}
+## Medium — where does churn come from?
+With the synthetic posts, separate the sources of churn: train pairs of models
+that differ (a) only in the training sample (same size), (b) only in the
+regularisation constant `C` (same sample), (c) only in the vocabulary (unigrams
+versus uni- and bigrams). Measure the churn on 5 000 test posts for each, and
+the accuracy of each model.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`ob.train_model` takes `C=` and `ngram=`; keep everything else fixed when you
+change one factor. Logistic regression is fitted by a deterministic solver, so
+the seed alone does not change it — the sample does.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def pair_churn(m1, m2):
+    p1, p2 = m1.predict(test.text), m2.predict(test.text)
+    return (np.mean(p1 != p2), accuracy_score(test.label, p1), accuracy_score(test.label, p2))
+
+base = ob.train_model(train_a.text, train_a.label)
+cases = {
+    "(a) another sample":        ob.train_model(train_b.text, train_b.label),
+    "(b) C = 0.5 instead of 4":  ob.train_model(train_a.text, train_a.label, C=0.5),
+    "(c) unigrams only":         ob.train_model(train_a.text, train_a.label, ngram=(1, 1)),
+}
+for name, other in cases.items():
+    c, a1, a2 = pair_churn(base, other)
+    print(f"{name:26s} churn {c:.4f}   acc {a1:.4f} -> {a2:.4f}")
+```
+Each change alone flips some of the answers: a new sample about 2 %, a
+stronger regularisation about 3 % (and costs two points of accuracy), the
+loss of bigrams nearly 8 % (and six points). The vocabulary change (c) is the
+one that changes what the model can *express*: without bigrams, "not great" and
+"great" share their only informative feature. The typical mistake is to
+change two things at once and attribute the churn to one of them.
+:::
+
+::: {#exr-ops1-lifecycle-hard}
+## Hard — should the retrained model replace the old one?
+A model trained on 3 000 posts is in production. A month later, 3 000 newer
+posts are available, in which the share of negative posts has grown to 45 %
+and a few words have shifted polarity (`swap={"cheap": 0, "fast": 0}`).
+Train a challenger on the new posts and compare it with the champion on a
+fresh sample of the *new* distribution: accuracies, churn, and the posts whose
+answer changes from right to wrong. Propose a rule, using churn and accuracy,
+to decide whether to promote the challenger, and apply it.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Split the churn into four kinds: right → right (impossible), right → wrong,
+wrong → right, wrong → wrong (a different wrong label). The net gain in
+accuracy is (wrong → right) − (right → wrong). A rule might require a
+positive net gain *and* bound the right → wrong flips, which are the visible
+regressions.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+NEW = dict(prior=(0.45, 0.30, 0.25), swap={"cheap": 0, "fast": 0})
+champion = ob.train_model(train_a.text, train_a.label)
+new_train = ob.make_posts(3000, seed=21, **NEW)
+challenger = ob.train_model(new_train.text, new_train.label)
+new_test = ob.make_posts(5000, seed=22, **NEW)
+
+y_new = new_test.label.to_numpy()
+p_old, p_new = champion.predict(new_test.text), challenger.predict(new_test.text)
+right_old, right_new = p_old == y_new, p_new == y_new
+kinds = {
+    "right -> wrong": np.mean(right_old & ~right_new),
+    "wrong -> right": np.mean(~right_old & right_new),
+    "wrong -> other wrong": np.mean(~right_old & ~right_new & (p_old != p_new)),
+}
+print(f"accuracy champion {right_old.mean():.4f}, challenger {right_new.mean():.4f}, "
+      f"churn {np.mean(p_old != p_new):.4f}")
+for k, v in kinds.items():
+    print(f"  {k:22s} {v:.4f}")
+
+def promote(gain, regressions, min_gain=0.01, max_regressions=0.02):
+    """Promote if the net gain is at least 1 point and at most 2 % of answers regress."""
+    return gain >= min_gain and regressions <= max_regressions
+
+gain = right_new.mean() - right_old.mean()
+print("net gain", round(gain, 4), "-> promote" if promote(gain, kinds["right -> wrong"]) else "-> keep champion")
+```
+The net gain equals "wrong → right" minus "right → wrong", as the proof of
+@prp-ops-churn decomposes it. The challenger, trained on data that reflects
+the new world, gains several points; the price is a smaller fraction of posts
+that were right and become wrong. The thresholds in `promote` are a policy
+choice, not a statistical test — @sec-ch-ops-cicd replaces "at least one
+point" with a paired test that accounts for the sample size, and
+@sec-ch-ops-orch with a cost model. Comparing the two models on the *old*
+distribution would be the classic mistake: it measures how well the
+challenger imitates the past.
+:::
+
+## Technical debt in ML systems {#sec-ops-debt}
+
+### Debt that compounds
+
+**Technical debt** is Ward Cunningham's metaphor for the future cost of a
+shortcut taken now: like a loan, it buys speed today and charges interest on
+every later change, until it is repaid by refactoring. Sculley et al. argued
+that ML systems are unusually prone to it, because on top of the debt of
+ordinary code they accumulate debt at the *system* level, which no code
+review sees [@sculley2015]. Their catalogue, restated:
+
+| Kind of debt | What it looks like | Remedy (chapter) |
+|---|---|---|
+| **entanglement (CACE)** | one change in data, features or hyperparameters moves every prediction | version and compare models, measure churn (@sec-ops-lifecycle), test behaviours (@sec-ch-ops-testing) |
+| **correction cascades** | model B is trained to fix the output of model A; A can no longer be improved without breaking B | model A's output as an explicit, versioned interface |
+| **undeclared consumers** | other systems silently read the model's outputs or logs | access through an API with a contract (@sec-ch-ops-serving) |
+| **unstable data dependencies** | an input signal produced by another team changes meaning | data validation, versioned inputs (@sec-ch-ops-repro), drift monitoring (@sec-ch-ops-monitor) |
+| **hidden feedback loops** | the model's decisions shape the data it will be retrained on | holdout traffic, logging of decisions (@sec-ch-ops-orch) |
+| **glue code and pipeline jungles** | most of the code adapts formats between packages and scripts | reusable components, an orchestrated DAG (@sec-ch-ops-orch) |
+| **dead experimental code paths** | flags for experiments that never ended | delete them; tests for configurations |
+| **configuration debt** | more lines of configuration than of model code, unreviewed | configuration in version control, validated by schemas |
+| **changes in the external world** | thresholds and assumptions that held at training time | monitoring and alerts (@sec-ch-ops-monitor) |
+
+The rest of the part is a set of tools against these rows. One of them can
+be seen at once in code.
+
+### Entanglement, measured
+
+```{python}
+#| echo: false
+N_FEAT = len(ob.train_model(train_a.text, train_a.label)[0].vocabulary_)
+```
+
+The model of this part has a few thousand features (`{python} N_FEAT` for the
+first training sample): one per word and word pair. Suppose an engineer decides that emojis are noise and removes them from
+the input. The posts *without* emojis are, apparently, untouched — their
+features are the same. Are their predictions the same?
+
+```{python}
+import re
+strip = lambda texts: [re.sub(r"[^\w\s]", "", t).strip() for t in texts]
+
+with_emoji = ob.train_model(train_a.text, train_a.label)
+without_emoji = ob.train_model(strip(train_a.text), train_a.label)
+
+no_emoji = test[~test.text.str.contains(r"[^\w\s]", regex=True)]
+p1 = with_emoji.predict(no_emoji.text)
+p2 = without_emoji.predict(no_emoji.text)
+prob_shift = np.abs(with_emoji.predict_proba(no_emoji.text) - without_emoji.predict_proba(no_emoji.text)).max(axis=1)
+print(f"{len(no_emoji)} test posts contain no emoji")
+print(f"churn on them: {np.mean(p1 != p2):.4f}; "
+      f"median change of the largest class probability: {np.median(prob_shift):.4f}")
+```
+
+The predictions of posts that never contained an emoji change too — few of
+them, `{python} f"{100 * np.mean(p1 != p2):.2f}"` %, but not zero, and almost
+every probability moves a little. The reason is that the weights are estimated **jointly**: with an L2 penalty the
+optimiser trades the weight of every feature against every other, and the
+TF-IDF normalisation divides each post's vector by its length, so removing a
+feature changes the scale of the others. No feature is an island — this is
+CACE. The practical consequence is a rule of this part: *any* change to data,
+features, preprocessing or hyperparameters produces a **new model version**,
+evaluated and released as such.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops1-debt-easy}
+## Easy — name the debt
+For each situation, name the kind of debt from the table and the remedy.
+(a) The marketing team reads the model's daily CSV of predictions from a
+shared folder to build its own report. (b) A second model "corrects"
+the first model's labels for posts about one product. (c) The production
+service uses a different tokeniser from the training notebook. (d) A
+`USE_EXPERIMENTAL_FEATURES` flag, last switched on two years ago, still
+guards 300 lines of code. (e) The model is retrained every week on posts
+that the previous model had flagged as negative and sent to human review.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Ask for each: who depends on what, and does anyone know? Does the model
+influence its own future data? Is there code no one runs?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) **Undeclared consumer**: the CSV became an API without a contract; any
+change of column or meaning breaks the report silently. Remedy: expose the
+predictions through a documented, versioned interface and know who uses it.
+(b) **Correction cascade**: improving the first model now changes the input
+of the second. Remedy: train one model with the product as a feature, or make
+the first model's output an explicit, versioned interface. (c) **Training–
+serving skew**, a form of glue-code and unstable-dependency debt: the same
+preprocessing must be one artefact — the scikit-learn pipeline of
+`ob.train_model` stores vectoriser and classifier together precisely so that
+the server cannot use another one. (d) **Dead experimental code path**:
+delete it (version control remembers it). (e) **Hidden feedback loop**: only
+posts the model already flagged get labels, so its errors on the other posts
+are never corrected; @sec-ch-ops-orch simulates the effect and the remedy (a
+random holdout sent to review regardless of the prediction).
+:::
+
+::: {#exr-ops1-debt-medium}
+## Medium — how far does a change reach?
+Measure the reach of a small vocabulary change: retrain the model ignoring
+**one** word (`"recommend"`, by deleting it from the training and test
+posts), and report the churn on the posts that do **not** contain that word.
+Repeat for five different words and for a change of `C` from 4 to 3.5. Which
+changes reach further?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Delete the word with a regular expression on word boundaries (`\bword\b`),
+then compare the original and the retrained model on the same set of posts
+that never contained it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def drop(texts, word):
+    return [re.sub(rf"\b{word}\b", "", t).replace("  ", " ").strip() for t in texts]
+
+base = ob.train_model(train_a.text, train_a.label)
+for word in ["recommend", "rude", "today", "camera", "not"]:
+    m = ob.train_model(drop(train_a.text, word), train_a.label)
+    untouched = test[~test.text.str.contains(rf"\b{word}\b", regex=True)]
+    c = np.mean(base.predict(untouched.text) != m.predict(untouched.text))
+    print(f"without {word!r:12s} churn on {len(untouched):4d} posts without it: {c:.4f}")
+m = ob.train_model(train_a.text, train_a.label, C=3.5)
+print(f"C = 3.5 instead of 4     churn on all posts:                {np.mean(base.predict(test.text) != m.predict(test.text)):.4f}")
+```
+Removing a rare, mildly informative word moves few predictions; removing
+`"not"` — the word that carries negation — reaches much further, even on posts
+without it, because the weights of the polar words were estimated *together
+with* it. A tiny change of the regularisation constant also changes answers.
+A common mistake is to measure churn on all posts: the point of the exercise
+is the change on inputs that the edit did not touch.
+:::
+
+::: {#exr-ops1-debt-hard}
+## Hard — a configuration that cannot lie
+Configuration debt grows when settings live in several places (a notebook, a
+script's defaults, environment variables) and nobody can say which values a
+model was trained with. Design a small configuration object for the training
+of the local model — vocabulary (`ngram`), `C`, data seed and size — that is
+(i) validated (impossible values rejected), (ii) serialised canonically, and
+(iii) identified by a hash, stored **inside** the trained model, so that a
+model can always tell which configuration produced it. Show that two
+configurations equal in content but written in a different order get the
+same identifier.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A frozen dataclass with checks in `__post_init__` is enough; a canonical JSON
+(`sort_keys=True`, fixed separators) is the input of the hash. Attach the
+hash to the fitted pipeline as an attribute, or save it next to it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from dataclasses import dataclass, asdict
+
+@dataclass(frozen=True)
+class TrainConfig:
+    ngram_max: int = 2          # 1 = unigrams, 2 = uni + bigrams
+    C: float = 4.0
+    data_seed: int = 1
+    n_train: int = 3000
+
+    def __post_init__(self):    # (i) reject impossible values early
+        if self.ngram_max not in (1, 2, 3):
+            raise ValueError("ngram_max must be 1, 2 or 3")
+        if not self.C > 0:
+            raise ValueError("C must be positive")
+        if self.n_train < 100:
+            raise ValueError("at least 100 training posts")
+
+    def canonical(self) -> str:  # (ii) one byte sequence per content
+        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+
+    @property
+    def id(self) -> str:         # (iii) content identifier
+        return ob.sha256(self.canonical())[:12]
+
+def train(cfg: TrainConfig):
+    data = ob.make_posts(cfg.n_train, seed=cfg.data_seed)
+    model = ob.train_model(data.text, data.label, C=cfg.C, ngram=(1, cfg.ngram_max))
+    model.config_ = cfg          # the model carries its configuration
+    return model
+
+c1 = TrainConfig(C=4.0, ngram_max=2)
+c2 = TrainConfig(**json.loads('{"n_train": 3000, "data_seed": 1, "C": 4.0, "ngram_max": 2}'))
+print(c1.canonical(), c1.id, c2.id, c1.id == c2.id)
+m = train(c1)
+print("model trained with config", m.config_.id)
+try:
+    TrainConfig(C=0)
+except ValueError as e:
+    print("rejected:", e)
+```
+The identifier depends on the content only, so a configuration read from a
+file in another order is recognised as the same one; any change of value
+gives another identifier (a collision would need the hash to collide,
+@thm-ctr-collision). Storing the configuration inside the model makes the
+artefact self-describing — @sec-ch-ops-repro extends the idea to data and
+code. Typical mistakes: hashing `str(dict)` (its order depends on insertion),
+and validating only when the value is used, hours into a run.
+:::
+
+## Maturity: levels and the ML Test Score {#sec-ops-maturity}
+
+### Maturity levels
+
+A **maturity model** is a ladder of levels describing how much of the life
+cycle is automated and reliable. Two are widely quoted. Google's architecture
+guide has three levels [@google2024mlops]:
+
+- **level 0 — manual process**: data analysis, training and validation are
+  run by hand (often in notebooks); the model is handed over to be deployed;
+  releases are rare; no monitoring;
+- **level 1 — ML pipeline automation**: the training pipeline is automated,
+  so the model is retrained in production on new data (**continuous
+  training**), with automated data and model validation, a feature store and
+  metadata; the pipeline itself is still deployed by hand;
+- **level 2 — CI/CD pipeline automation**: changes to the *pipeline code* are
+  built, tested and deployed automatically, so that new ideas reach
+  production as fast as new data do.
+
+Microsoft's model has five levels, from **0 — no MLOps** through **1 —
+DevOps but no MLOps** (application releases automated, models still handed
+over), **2 — automated training**, **3 — automated model deployment**, to
+**4 — full MLOps automated operations**, where monitoring can trigger
+retraining and promotion [@microsoft2024maturity]. The two ladders say the
+same thing with different granularity: the first step automates *training*,
+the next automates the path to *production*, the last closes the loop from
+*monitoring* back to training. They are qualitative; Breck et al. proposed a
+number.
+
+### The ML Test Score
+
+Breck et al. collected, from experience with production systems at Google,
+**28 tests and monitoring practices** in four sections of seven — **data**,
+**model**, **ML infrastructure**, **monitoring** — and a rubric to score a
+system [@breck2017]:
+
+::: {#def-ops-mltestscore}
+## ML Test Score
+Each test earns **0** points if not done, **½** point if done manually with
+the results documented and shared, **1** point if automated and run
+repeatedly. The score of a section is the sum of its tests' points (between 0
+and 7). The **ML Test Score** of the system is the **minimum** of the four
+section scores.
+:::
+
+The minimum is deliberate: a system with perfect data tests and no monitoring
+is as fragile as its weakest side. The paper reads the score roughly as: 0 —
+a research project rather than a production system; up to 1 — not untested,
+but probably with serious holes; up to 2 — a first pass at productionisation;
+up to 3 — reasonably tested, with room for more automation; up to 5 — strong
+automated testing and monitoring, fit for critical systems; above 5 —
+exceptional [@breck2017, §VI]. One consequence of the minimum shapes any plan
+to improve.
+
+::: {#prp-ops-mltestscore}
+## Raising the minimum decomposes by section
+(i) The score is at least $s$ if and only if every section scores at least
+$s$; improving a section that is already at or above $s$ does not help reach
+$s$. (ii) If test $t$ of section $k$ costs $c_t$ to bring from its current
+points to $1$, the cheapest way to reach score $s$ costs
+$$
+\sum_{k=1}^{4} \mathrm{cost}_k(s),
+$$ {#eq-ops-mts-cost}
+where $\mathrm{cost}_k(s)$ is the cheapest way to raise section $k$ alone to
+$s$ — the four problems can be solved separately.
+:::
+
+*In one line:* with a minimum, only the weakest sections matter, and each of
+them can be fixed on its own budget.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-mltestscore
+(i) $\min_k S_k \ge s \iff S_k \ge s$ for every $k$, by definition of the
+minimum; a section with $S_k \ge s$ imposes no constraint. (ii) A plan is a
+set of tests to upgrade; its cost is the sum of their costs, which splits as
+a sum over sections of the cost of the tests chosen in each. By (i) the plan
+reaches $s$ if and only if, for every $k$, the tests chosen in section $k$
+raise it to $s$ — a condition involving section $k$ only. The constraints
+and the cost are therefore separable, and the minimum of a separable sum
+over a product of independent choice sets is the sum of the minima.
+$\blacksquare$
+:::
+
+```{python}
+SECTIONS = ["data", "model", "infrastructure", "monitoring"]
+
+def ml_test_score(points: dict[str, list[float]]) -> tuple[float, dict]:
+    """points[section] = seven values in {0, 0.5, 1}; returns (score, section sums)."""
+    sums = {k: float(sum(v)) for k, v in points.items()}
+    return min(sums.values()), sums
+
+example = {                      # a typical "notebook in production" system
+    "data":           [1, 0.5, 0, 0, 0.5, 0, 0],
+    "model":          [1, 1, 0.5, 0, 0, 0, 0],
+    "infrastructure": [1, 1, 1, 0.5, 0, 0, 0],
+    "monitoring":     [0.5, 0, 0, 0, 0, 0, 0],
+}
+score, sums = ml_test_score(example)
+print(sums, "-> ML Test Score", score)
+```
+
+Three good sections and an almost absent monitoring: the score is ½. By
+@prp-ops-mltestscore, the next improvement must come from monitoring, whatever
+the other sections do.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops1-maturity-easy}
+## Easy — score a system
+A team runs these practices. Data: a schema check is automated, feature
+distributions are compared by hand once per release and documented, nothing
+else. Model: the model is compared with a baseline by an automated test, and
+hyperparameters were tuned by hand with documented results. Infrastructure:
+training is reproducible by an automated script, the model is tested in a
+staging environment by hand. Monitoring: latency and errors are alerted on
+automatically, prediction distributions are inspected by hand every week.
+Compute the section scores, the ML Test Score, and say at which level of
+Google's ladder the team is.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Automated = 1, manual and documented = ½. The final score is the minimum,
+not the mean.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+team = {"data": [1, 0.5], "model": [1, 0.5], "infrastructure": [1, 0.5], "monitoring": [1, 0.5]}
+print(ml_test_score(team))
+```
+Every section scores 1.5, so the ML Test Score is 1.5: a first pass at
+productionisation. Training is scripted but deployment and comparisons with
+production are manual: closest to Google's **level 0**, on the way to level 1
+(the next step is a training pipeline that runs on new data with automated
+validation). Averaging the sections would give the same number here, but only
+because they happen to be balanced.
+:::
+
+::: {#exr-ops1-maturity-medium}
+## Medium — the cheapest plan
+Write a function that, given for each section the current points of its seven
+tests and the cost of bringing each test to 1 point, finds the cheapest set of
+upgrades that reaches a target score $s$. Use @prp-ops-mltestscore to solve the
+sections separately, and check the result against a brute-force search over
+all sets of upgrades on a small instance.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Within one section, the problem is a small knapsack: choose a subset of tests
+whose gains $1 - p_t$ add up to at least $s - S_k$, at minimum cost. With
+seven tests, $2^7 = 128$ subsets per section can be enumerated; brute force
+over all four sections at once is $2^{28}$ — too many — so check it on two
+sections of four tests.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from itertools import combinations, product
+
+def section_plan(points, costs, target):
+    """Cheapest subset of tests raising sum(points) to >= target (exhaustive, 2^n subsets)."""
+    best = (0.0, ()) if sum(points) >= target else (np.inf, None)
+    n = len(points)
+    for r in range(1, n + 1):
+        for subset in combinations(range(n), r):
+            gain = sum(1 - points[i] for i in subset)
+            cost = sum(costs[i] for i in subset)
+            if sum(points) + gain >= target - 1e-12 and cost < best[0]:
+                best = (cost, subset)
+    return best
+
+def plan(points, costs, target):
+    parts = {k: section_plan(points[k], costs[k], target) for k in points}
+    return sum(c for c, _ in parts.values()), parts
+
+rng = np.random.default_rng(3)
+pts = {k: [float(p) for p in rng.choice([0, 0.5, 1], size=4)] for k in ["data", "monitoring"]}
+cst = {k: [int(c) for c in rng.integers(1, 10, size=4)] for k in pts}
+total, parts = plan(pts, cst, target=3.0)
+
+# brute force over all pairs of subsets of the two sections
+brute = np.inf
+for sa, sb in product(*[[s for r in range(5) for s in combinations(range(4), r)]] * 2):
+    ok = all(sum(pts[k]) + sum(1 - pts[k][i] for i in s) >= 3.0 for k, s in zip(pts, (sa, sb)))
+    if ok:
+        brute = min(brute, sum(cst["data"][i] for i in sa) + sum(cst["monitoring"][i] for i in sb))
+print("points", pts, "\ncosts", cst)
+print("separable plan:", total, {k: v[1] for k, v in parts.items()}, "| brute force:", brute)
+```
+The separable plan and the brute force agree, as @eq-ops-mts-cost predicts,
+and the separable search is exponentially cheaper ($4 \cdot 2^7$ subsets
+instead of $2^{28}$). A typical mistake is a greedy choice by cost per point
+across sections: it can spend budget on a section that is already above the
+target.
+:::
+
+::: {#exr-ops1-maturity-hard}
+## Hard — a maturity plan for a sentiment service
+You must bring the local sentiment model of this part to production. List,
+for each of the four sections of the ML Test Score, the practices you would
+implement, which chapter of this part teaches each, whether it would be manual
+(½) or automated (1) in a first version, and the resulting score. Then say
+which single addition would raise the score most, and why.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Think of the service of @sec-ch-ops-serving, the tests of
+@sec-ch-ops-testing, the pipeline of @sec-ch-ops-cicd, the monitors of
+@sec-ch-ops-monitor. Be honest about what a first version automates.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+first_version = {
+    "data": {"schema and length checks on inputs (ch. 3)": 1,
+             "training data versioned by hash (ch. 2)": 1,
+             "feature/label distributions compared with a reference (ch. 7)": 0.5},
+    "model": {"behavioural tests: invariance and direction (ch. 4)": 1,
+              "comparison with the production model by a paired test (ch. 6)": 1,
+              "accuracy test sized for its false-failure rate (ch. 4)": 1,
+              "calibration checked (ch. 3)": 0.5},
+    "infrastructure": {"reproducible training, pinned environment (ch. 2)": 1,
+                       "CI runs lint and tests on every push (ch. 6)": 1,
+                       "image built and smoke-tested in CI (ch. 5-6)": 1,
+                       "staged release with rollback (ch. 5)": 0.5},
+    "monitoring": {"latency, errors, traffic alerts (ch. 7)": 1,
+                   "input length and unknown-word rate monitored (ch. 7)": 1,
+                   "predicted-class distribution drift (ch. 7)": 1,
+                   "label-shift estimate without labels (ch. 7)": 0.5},
+}
+sums = {k: sum(v.values()) for k, v in first_version.items()}
+print(sums, "-> ML Test Score", min(sums.values()))
+```
+With these choices the minimum is the data section (2.5), the only one
+below 3: by
+@prp-ops-mltestscore, the most valuable single addition is a data test — for
+example automating the comparison of input distributions with the training
+reference (½ → 1) or adding a test that the training data contain no
+duplicates of evaluation posts (leakage, @sec-leakage). Adding a fifth
+monitoring practice would leave the score unchanged. The mistake to avoid is
+counting a dashboard someone *could* look at as a monitoring test: the rubric
+asks for alerts or documented, repeated checks.
+:::
+
+## The tool stack, hubs and model cards {#sec-ops-stack}
+
+### A map of the tools
+
+Every step of the life cycle has tools; their landscape changes every year,
+but the categories are stable. The ones used in this part are open-source and
+run on a laptop:
+
+| Need | What the tool does | Used in this part |
+|---|---|---|
+| isolated, pinned environments | one interpreter and set of packages per project | `venv`, `pip` with hashes (@sec-ch-ops-repro) |
+| version control | history of code and configuration, collaboration | Git, GitHub |
+| data and model versioning | content-addressed storage of large files | hashes and a small registry; Git LFS, DVC as alternatives |
+| experiment tracking and registry | parameters, metrics, artefacts of runs; named model versions | MLflow (@sec-ch-ops-repro) |
+| serving | an HTTP API in front of the model | FastAPI, uvicorn (@sec-ch-ops-serving) |
+| testing and code quality | tests, linting, formatting | pytest, Ruff (@sec-ch-ops-testing) |
+| packaging and deployment | images, containers, clusters | Docker, Kubernetes (@sec-ch-ops-deploy, Part V) |
+| CI/CD | automated checks, builds and releases on every change | GitHub Actions (@sec-ch-ops-cicd) |
+| monitoring | metrics, dashboards, alerts | Prometheus, Grafana, Alertmanager (@sec-ch-ops-monitor) |
+| orchestration | scheduled DAGs of tasks with retries | Apache Airflow (@sec-ch-ops-orch) |
+| model hubs | sharing pre-trained models with their documentation | Hugging Face Hub |
+
+Two platforms recur. **GitHub** hosts Git repositories with pull requests,
+issues, the **Actions** CI/CD service, a container registry, and
+**Codespaces** — development environments in the cloud, defined by a
+`.devcontainer/devcontainer.json` file in the repository that names an image
+and the tools to install, so that every contributor starts from the same
+environment [@devcontainers2025]. **Hugging Face Hub** hosts models, datasets
+and small demo applications (*Spaces*) as Git repositories: a model is a
+repository with weights, configuration, tokenizer files and a `README.md`
+that is its **model card** [@huggingface2026hub].
+
+### Pinning what you download
+
+A model on a hub is a moving target: its owner can push new weights to the
+same name. Two identifiers make a download reproducible:
+
+- the **revision** — a Git commit hash of the model repository — fixes *which
+  version* of every file;
+- the **content hash** of each file fixes *which bytes*: large files are
+  stored through Git LFS, whose pointer files record the SHA-256 of the
+  content [@gitlfs2024spec], and a downloader can verify it.
+
+A download pinned by revision and checked by hash either gives exactly the
+bytes that were tested, or fails loudly. The same idea — content addresses —
+identifies image layers (@prp-ctr-merkle) and, in @sec-ch-ops-repro, Git
+objects and model versions.
+
+### Model cards and datasheets
+
+Mitchell et al. proposed that every released model come with a short document,
+the **model card**, stating what the model is, how it was trained and
+evaluated, and where it should *not* be used [@mitchell2019]. Their sections:
+model details (who, when, version, type, licence, citation); intended use and
+out-of-scope uses; factors (groups, environments, instruments that affect
+performance); metrics; evaluation data; training data; quantitative analyses
+(disaggregated by factor); ethical considerations; caveats and
+recommendations. **Datasheets for datasets** do the same for data: motivation,
+composition, collection process, preprocessing, uses, distribution,
+maintenance [@gebru2021]. On the Hugging Face Hub the card is the repository's
+`README.md`, with a YAML header of machine-readable metadata (licence,
+languages, datasets, tags) [@huggingface2026hub].
+
+The project of this part starts from a public model card. Its main facts, as
+published: the model is a RoBERTa-base [@liu2019roberta] further pre-trained
+on about 124 million tweets from January 2018 to December 2021 and fine-tuned
+for sentiment on the TweetEval benchmark [@barbieri2020]; it is described in
+the TimeLMs paper [@loureiro2022] and integrated in the TweetNLP library
+[@camachocollados2022]; its labels are 0 = negative, 1 = neutral,
+2 = positive; it is meant for English; it is released under the CC BY 4.0
+licence [@cardiffnlp2022card]. The card is short: it says little about
+evaluation by group, about irony, or about how the model behaves on text that
+is not a tweet — gaps that the project's own card must fill.
+
+A model card can be generated from the evaluation itself, so that its numbers
+cannot drift away from the model's. For the local model:
+
+```{python}
+card_model = ob.train_model(train_a.text, train_a.label)
+report = classification_report(test.label, card_model.predict(test.text),
+                               target_names=ob.LABELS, output_dict=True)
+
+def model_card(model, report, train, config) -> str:
+    rows = "\n".join(f"| {c} | {report[c]['precision']:.3f} | {report[c]['recall']:.3f} | "
+                     f"{report[c]['f1-score']:.3f} | {int(report[c]['support'])} |" for c in ob.LABELS)
+    return f"""---
+license: cc-by-4.0
+language: [en]
+tags: [text-classification, sentiment]
+---
+# Local sentiment model (TF-IDF + logistic regression)
+
+**Model details.** {config}. Trained on {len(train)} synthetic posts
+(generator `opsbook.make_posts`, seed 1). Labels: 0 negative, 1 neutral, 2 positive.
+
+**Intended use.** Teaching examples of Part VII. **Out of scope:** any real text.
+
+**Evaluation** (5 000 synthetic posts from the training distribution, accuracy {report['accuracy']:.3f}):
+
+| class | precision | recall | F1 | support |
+|---|---|---|---|---|
+{rows}
+
+**Caveats.** Bag of words and word pairs: negation is captured only
+inside adjacent pairs; unseen words are ignored; no calibration check yet.
+"""
+
+card = model_card(card_model, report, train_a, "TF-IDF (1-2-grams) + logistic regression, C = 4")
+print(card)
+```
+
+### Practice {.unnumbered}
+
+::: {#exr-ops1-stack-easy}
+## Easy — read a model card
+From the facts of the project model's card summarised above, answer: (a) What
+input does the model expect, and in which language? (b) How must the
+integer output be mapped to a sentiment? (c) Can the model be redistributed,
+and on which condition? (d) Name two questions an operator would want
+answered that the card does not answer, and which section of Mitchell et al.'s
+template they belong to.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For (c), recall what the "BY" in CC BY means. For (d), think of who writes the
+posts the service will see, and what the card says about evaluation.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) English tweets — short social-media texts, written between 2018 and 2021
+for the pre-training data. (b) 0 → negative, 1 → neutral, 2 → positive; the
+service must apply this mapping, and a test should check it
+(@sec-ch-ops-testing). (c) Yes: CC BY 4.0 allows copying, redistribution and
+adaptation, commercially too, provided the authors are credited (attribution,
+a link to the licence, and an indication of changes). (d) For instance: how
+accurate is the model on posts written after 2021 or on other platforms
+(*evaluation data*, *quantitative analyses*); how does it perform by topic,
+dialect or for ironic posts (*factors*); what it should not be used for
+(*intended use*). The typical mistake is to treat the card's benchmark score
+as the accuracy the service will have on its own traffic.
+:::
+
+::: {#exr-ops1-stack-medium}
+## Medium — a card that stays true
+Extend `model_card` so that it also reports (i) the accuracy on a sample with
+the class priors changed to `(0.6, 0.2, 0.2)`, and (ii) the accuracy on posts
+with slang (`slang_rate=1.0`), as "factors" in Mitchell et al.'s sense, and
+writes the card next to the saved model with the SHA-256 of the model file in
+it.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Save the model with `joblib.dump` into a temporary folder first, hash the
+file with `ob.sha256(path)`, then write `README.md` in the same folder.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+import joblib
+
+def factors(model) -> str:
+    rows = []
+    for name, kw in [("training distribution", {}), ("class priors 0.6 / 0.2 / 0.2", {"prior": (0.6, 0.2, 0.2)}),
+                     ("every post with unseen slang", {"slang_rate": 1.0})]:
+        d = ob.make_posts(3000, seed=7, **kw)
+        rows.append(f"| {name} | {accuracy_score(d.label, model.predict(d.text)):.3f} |")
+    return "| factor | accuracy |\n|---|---|\n" + "\n".join(rows)
+
+folder = ob.project("card_demo")
+joblib.dump(card_model, folder / "model.joblib")
+digest = ob.sha256(folder / "model.joblib")
+(folder / "README.md").write_text(card + "\n**Factors.**\n\n" + factors(card_model)
+                                  + f"\n\n**Artefact.** `model.joblib`, SHA-256 `{digest[:16]}…`\n")
+print((folder / "README.md").read_text().split("**Factors.**")[1])
+```
+The card now says, from measurements, that the class mix barely matters here
+while unseen slang costs a little — and it names the exact bytes it describes.
+Generating the card in the same run that saves the model is what keeps the two
+consistent; hand-edited cards drift. A typical mistake is to hash the model
+object in memory (its pickle can vary between runs and versions) instead of
+the file actually shipped.
+:::
+
+::: {#exr-ops1-stack-hard}
+## Hard — a pinned downloader
+Simulate a model hub with a local folder: a repository has revisions (commit
+ids), each mapping file names to contents. Write
+`download(repo, filename, revision, sha256, cache)` that (i) returns the
+cached file if a file with that content hash is already cached, (ii)
+otherwise fetches the file at that revision, verifies its SHA-256 and stores
+it in the cache under its hash, and (iii) refuses a file whose hash does not
+match. Show a second call served from the cache, a new revision of the same
+file name not being picked up, and a tampered file being rejected.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Store cached files as `cache/<sha256>`: the name *is* the check. Write the
+file under a temporary name and rename it only after verification, so an
+interrupted download never leaves a wrong file under a right name
+(@sec-atomic-writes).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+hub = ob.project("hub")
+def publish(repo, revision, files):
+    for name, content in files.items():
+        ob.write(f"{repo}/{revision}/{name}", content, base=hub)
+
+publish("acme/sentiment", "a1b2c3", {"config.json": '{"labels": ["negative", "neutral", "positive"]}'})
+publish("acme/sentiment", "d4e5f6", {"config.json": '{"labels": ["neg", "neu", "pos"]}'})
+
+class HashMismatch(Exception):
+    pass
+
+def download(repo, filename, revision, sha256, cache: Path) -> tuple[Path, str]:
+    cache.mkdir(exist_ok=True)
+    target = cache / sha256
+    if target.exists():                                   # (i) content already here
+        return target, "cache"
+    data = (hub / repo / revision / filename).read_bytes()   # (ii) "network" fetch
+    if hashlib.sha256(data).hexdigest() != sha256:         # (iii) verify before keeping
+        raise HashMismatch(f"{repo}@{revision}/{filename}")
+    tmp = cache / (sha256 + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(target)                                    # atomic rename
+    return target, "hub"
+
+cache = ob.project("cache")
+expected = ob.sha256((hub / "acme/sentiment/a1b2c3/config.json").read_text())
+for _ in range(2):
+    path, origin = download("acme/sentiment", "config.json", "a1b2c3", expected, cache)
+    print(origin, path.read_text().strip())
+publish("acme/sentiment", "a1b2c3", {"config.json": '{"labels": ["positive", "neutral", "negative"]}'})  # tampering
+shutil.rmtree(cache)
+try:
+    download("acme/sentiment", "config.json", "a1b2c3", expected, cache)
+except HashMismatch as e:
+    print("rejected:", e)
+```
+The second call is served from the cache because the content address is
+known; the new revision `d4e5f6` is never seen because the revision is pinned;
+and when the bytes behind a pinned revision change — here by tampering, in
+reality by a corrupted transfer or a rewritten history — the hash check
+refuses them. Note the tampered labels: swapping the order of two class names
+would silently invert the meaning of every prediction. Typical mistakes: pinning
+the revision but not checking the content, or checking it after the file has
+been moved into its final place.
+:::
+
+::: {.project-link}
+**In the project.** The project starts from a pre-trained model on a hub, so
+its first decisions belong to this chapter: pin the model by revision and
+check its files by SHA-256 (@exr-ops1-stack-hard); write the project's own
+model card, starting from the published one and adding what an operator needs
+— the evaluation on the project's data, the label mapping, limits (English,
+tweets of 2018–2021, irony, other platforms); compute an honest ML Test Score
+of the delivery and say which section is weakest (@exr-ops1-maturity-hard);
+and, when the model is retrained, measure the churn against the version in
+production before promoting it (@exr-ops1-lifecycle-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **"Same accuracy, same model"**: two versions with equal accuracy can
+  disagree on many inputs (@prp-ops-churn). Measure churn.
+- **Changing two things at once**: with entanglement, the effect of each
+  change cannot be separated afterwards.
+- **Training–serving skew**: preprocessing reimplemented in the service.
+  Ship one artefact containing preprocessing and model.
+- **Undeclared consumers** of predictions, logs or files.
+- **Averaging the ML Test Score**: it is a minimum on purpose.
+- **Downloading by name**: a model name is not a version. Pin the revision
+  and verify content hashes.
+- **Trusting a benchmark score** as the accuracy on your own traffic.
+:::
+
+## Summary
+
+- An ML system is code + data + model + configuration + infrastructure; its
+  life cycle closes a loop from monitoring back to data. MLOps applies
+  DevOps practices to that loop, adding versioning and testing of data and
+  models, continuous training, and monitoring of predictions.
+- Retraining changes answers even when accuracy does not: churn satisfies
+  $|\mathrm{acc}(f) - \mathrm{acc}(g)| \le C(f, g) \le \mathrm{err}(f) +
+  \mathrm{err}(g)$ and concentrates on low-confidence inputs.
+- ML systems accumulate system-level technical debt: entanglement (CACE),
+  correction cascades, undeclared consumers, unstable data dependencies,
+  feedback loops, glue code, configuration debt.
+- Maturity ladders (Google 0–2, Microsoft 0–4) describe how much of the loop
+  is automated; the ML Test Score is the minimum over four sections of 0/½/1
+  points, and the cheapest plan to raise it decomposes by section.
+- Hubs distribute models as repositories with model cards; reproducible use
+  pins the revision and verifies content hashes.
+
+## Exercises
+
+::: {#exr-ops1-churn-confidence}
+**Churn and confidence.** Using two models trained on different samples (as in
+@sec-ops-lifecycle), group the test posts into ten bins by the first model's
+confidence (largest predicted probability) and plot the churn in each bin.
+Then propose a rule that predicts which posts will change answer when the
+model is retrained, and measure its precision.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| label: fig-ops-churn-confidence
+#| fig-cap: "Churn between two models trained on different samples of the same distribution, by the first model's confidence. Answers change almost only where the model is unsure."
+conf = f.predict_proba(test.text).max(axis=1)
+bins = np.quantile(conf, np.linspace(0, 1, 11))
+idx = np.clip(np.digitize(conf, bins[1:-1]), 0, 9)
+rates = [np.mean((pf != pg)[idx == b]) for b in range(10)]
+mids = [np.mean(conf[idx == b]) for b in range(10)]
+fig, ax = plt.subplots()
+ax.plot(mids, rates, marker="o", color=ob.COLORS[0])
+ax.set_xlabel("confidence of model f (decile mean)")
+ax.set_ylabel("churn in the decile")
+plt.show()
+
+rule = conf < np.quantile(conf, 0.2)            # "the 20 % least confident posts will flip"
+print(f"precision of the rule {np.mean((pf != pg)[rule]):.3f}, "
+      f"share of all flips it catches {np.sum((pf != pg) & rule) / np.sum(pf != pg):.3f}")
+```
+Churn falls steeply with confidence. Flagging the least confident fifth of
+the posts catches most of the flips with a precision several times the base
+churn rate: low-confidence inputs are where retraining, and drift, show
+first — a reason to monitor the confidence distribution (@sec-ch-ops-monitor).
+:::
+
+::: {#exr-ops1-debt-feedback}
+**A loop in miniature.** A service hides posts it predicts as negative, and
+labels for retraining are collected only on the posts that remain visible.
+Explain, without code, why the next model's estimated share of negative posts
+will be biased, in which direction, and what minimal change in the data
+collection removes the bias.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+The training data of the next model are a sample selected by the current
+model: posts predicted negative are missing, so negative posts are
+under-represented — those that remain are mostly the current model's false
+negatives, labelled correctly but few. The next model learns a lower prior
+for the negative class and, through its intercept, predicts it less often,
+which hides even fewer posts next time, and so on: a self-reinforcing loop.
+The minimal fix is a **random holdout**: a small fraction of posts is shown
+(or labelled) regardless of the prediction, giving an unbiased sample of the
+traffic on which priors and accuracy can be estimated. @sec-ch-ops-orch
+simulates such a loop.
+:::
+
+::: {#exr-ops1-card-review}
+**Review a card.** Take the model card generated in @sec-ops-stack and check
+it against Mitchell et al.'s nine sections: which are present, which are
+missing, and what would you need to *measure* (not just write) to fill each
+missing one for the local model?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+Present: model details (type, configuration, labels, licence), intended use
+and out-of-scope use, metrics and evaluation data (per-class precision,
+recall, F1 on a stated sample), training data (size, generator, seed),
+caveats. Missing or thin: **factors** and **quantitative analyses** —
+performance disaggregated by topic, by post length, by presence of negation or
+slang, which needs evaluation sets built per factor (@exr-ops1-stack-medium
+started this); **ethical considerations** — for synthetic data, little, but
+for real posts the risks of misclassifying dialects or minority languages;
+**metrics** could add calibration (@sec-ch-ops-serving) and the uncertainty of
+each number (an interval, @sec-ch-ops-testing). Writing these sections without
+measuring them would turn the card into marketing.
+:::
+
+## Further reading {.unnumbered}
+
+- @sculley2015 — the technical-debt catalogue (§2–8); short and still the best
+  first read on why ML systems are hard to maintain.
+- @kreuzberger2023 — a definition of MLOps from a literature review and
+  interviews: principles (§IV), components and roles (§V), architecture (§VI).
+- @amershi2019 — nine stages of the ML workflow at Microsoft and the
+  challenges teams report at each; @paleyes2022 — a survey of deployment case
+  studies organised by stage of the life cycle.
+- @breck2017 — the 28 tests and the scoring rubric (§II–VI); a checklist worth
+  keeping next to every project.
+- @google2024mlops and @microsoft2024maturity — the two maturity ladders,
+  with the characteristics of each level.
+- @milanifard2016 — prediction churn and methods to reduce it when models are
+  retrained.
+- @mitchell2019 and @gebru2021 — model cards and datasheets; @huggingface2026hub
+  for how cards and metadata work on the Hub.
+- @liu2019roberta, @barbieri2020, @loureiro2022 and @camachocollados2022 — the
+  model family, benchmark and libraries behind the project's model.

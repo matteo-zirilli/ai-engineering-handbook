@@ -70,7 +70,8 @@ each part is always the same:
 | IV | [Machine learning: models and algorithms](mlalg/index.qmd) | ✅ available |
 | V | [Introduction to containers](containers/index.qmd) | ✅ available |
 | VI | [Introduction to REST APIs](rest/index.qmd) | ✅ available |
-| VII–XII | the remaining courses of the master | 🛠 in preparation |
+| VII | [MLOps: machine learning in production](mlops/index.qmd) | ✅ theory chapters; 🛠 project chapter in preparation |
+| VIII–XII | the remaining courses of the master | 🛠 in preparation |
 
 ## Conventions {.unnumbered}
 

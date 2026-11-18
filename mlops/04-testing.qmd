@@ -1,0 +1,1397 @@
+# Testing ML systems {#sec-ch-ops-testing}
+
+> *"Program testing can be used to show the presence of bugs, but never to
+> show their absence!"* — Edsger W. Dijkstra, 1970 [@dijkstra1970, §3]
+
+```{python}
+#| echo: false
+import opsbook as ob
+ob.setup()
+import json, sys, time, ast, re, subprocess, textwrap
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import joblib
+from scipy.stats import norm, binom
+from sklearn.metrics import accuracy_score
+PY = sys.executable
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain why tests are written while developing, distinguish **unit,
+  integration, end-to-end, contract, regression** and **property-based**
+  tests, and map the tests of an ML system onto the **data / model /
+  infrastructure** categories of the ML Test Score;
+- write and run tests with **pytest**: discovery, assertions, fixtures and
+  their scopes, parametrisation, markers, temporary directories, coverage;
+  test a FastAPI service's **contract**;
+- use a **linter** and a **formatter** (Ruff), configure them in
+  `pyproject.toml`, and check the two properties that make a formatter safe in
+  CI: **idempotence** and **preservation of the program**;
+- test a model's **behaviour** — minimum functionality, invariance and
+  directional expectations — and write **statistical** quality tests whose
+  false-failure rate and power are chosen, using the **Wilson** interval and
+  a sample-size formula proved from the normal approximation.
+:::
+
+::: {.callout-tip}
+## Topics covered
+Why tests belong to development; the kinds of tests; linting and formatting;
+pytest in practice; testing a machine-learning model.
+:::
+
+## Why test, and which tests {#sec-ops-test-kinds}
+
+### Tests as executable specifications
+
+A test is a small program that runs a piece of the system on chosen inputs and
+checks the outputs against an expectation. Tests do not prove correctness —
+Dijkstra's point — but they make three things cheap that are otherwise
+expensive: **finding** a defect close to the change that introduced it,
+**changing** code without fear (a refactoring that keeps the tests green kept
+the specified behaviour), and **documenting** the intended behaviour in a form
+that cannot go stale, because it runs. Written *during* development, they also
+shape the code: a function that is hard to test usually does too much.
+
+The usual taxonomy, by the size of what is exercised:
+
+| Kind | What it exercises | Speed | Example in a sentiment service |
+|---|---|---|---|
+| **unit** | one function or class, in isolation | ms | the text normaliser maps `@someone` to `@user` |
+| **integration** | several components together | ms–s | the service loads the model file and answers a request |
+| **end-to-end / system** | the deployed system, from outside | s–min | `curl` on the running container returns a label |
+| **contract** | the interface others rely on | ms | the request schema and response fields do not change by accident |
+| **regression** | a bug that once happened | any | the empty string that crashed version 1.2 is rejected |
+| **smoke** | "does it start at all" after a deploy | s | `/ready` returns 200 |
+| **property-based** | a property over many generated inputs | s | normalising twice equals normalising once |
+
+The **test pyramid** recommends many fast unit tests, fewer integration tests
+and few slow end-to-end tests [@cohn2009, ch. 16], because the cost of
+running and maintaining a test grows with what it touches, while its ability
+to pinpoint a defect shrinks.
+
+### Tests of an ML system
+
+An ML system has two more things to test than ordinary software — the data
+and the trained model — and its code includes training pipelines as well as
+services. The ML Test Score (@def-ops-mltestscore) organises the tests in four
+sections [@breck2017]:
+
+- **data**: schemas and expectations on features, the cost and value of each
+  feature, privacy controls, tests for the code that produces inputs;
+- **model**: specifications reviewed and versioned, offline metrics that
+  correlate with online impact, hyperparameters tuned, comparison with a
+  simple baseline, quality on important slices, tests for fairness;
+- **infrastructure**: reproducible training, unit tests for model code, an
+  integration test of the whole pipeline, model quality validated before
+  serving, debuggability, canary releases, rollback;
+- **monitoring**: dependency changes, training–serving skew, staleness,
+  numerical stability, performance (latency, throughput, memory), prediction
+  quality.
+
+This chapter writes tests of the first three kinds for the local model and
+the service of @sec-ch-ops-serving; monitoring is @sec-ch-ops-monitor.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops4-kinds-easy}
+## Easy — classify the tests
+Classify each test by kind (unit, integration, end-to-end, contract,
+regression, smoke, property-based) **and** by ML Test Score section (data,
+model, infrastructure, monitoring): (a) the training data contain no posts
+longer than 280 characters; (b) the model's accuracy on a fixed test set is at
+least that of a majority-class baseline plus 30 points; (c) `POST /v1/predict`
+with 65 texts returns 422; (d) retraining twice with the same inputs gives
+identical model files; (e) for 1 000 random strings, the normaliser never
+returns a longer string; (f) the model trained by the pipeline can be loaded
+by the service image.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The two classifications are independent: "kind" is about the size and style
+of the test, "section" about what the test protects.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) A **data** test — a schema/expectation check, run as a unit-sized test on
+the dataset. (b) A **model** test (comparison with a simple baseline), an
+integration-sized test (data + training + evaluation). (c) A **contract**
+test of the service — **infrastructure** in the rubric's terms (the serving
+system). (d) An **infrastructure** test of reproducible training
+(@exr-ops2-envs-hard); integration-sized. (e) A **property-based** unit test
+of data-processing code (**data** section: tests for the code that produces
+inputs). (f) An **integration** test across the pipeline and the serving
+image (**infrastructure**: model validated before serving) — it catches,
+for instance, a scikit-learn version mismatch between training and serving.
+A common confusion is to call (b) a unit test because it is one `assert`.
+:::
+
+::: {#exr-ops4-kinds-medium}
+## Medium — unit tests for a normaliser
+Social-media posts are usually normalised before a model sees them: user
+mentions replaced by a placeholder, links by another, white space collapsed.
+Write `normalise(text)` that maps every `@handle` to `@user`, every
+`http(s)://…` link to `http`, collapses runs of white space and strips the
+ends — and unit tests for it covering normal cases and edge cases (empty
+string, only spaces, a mention at the end, an e-mail address, punctuation
+attached to a link). Run them with pytest.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Decide first what *should* happen to `alice@example.org` — a mention or not?
+Write that decision down as a test. `pytest.mark.parametrize` turns a table of
+(input, expected) pairs into one test per row.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+norm_dir = ob.project("normaliser")
+ob.write("textnorm.py", r'''
+    """Normalisation of social-media posts before classification."""
+    import re
+
+    _MENTION = re.compile(r"(?<![\w.])@\w+")      # not preceded by a word character: excludes e-mails
+    _LINK = re.compile(r"https?://\S+?(?=[)\].,!?;:]*(?:\s|$))")
+    _SPACE = re.compile(r"\s+")
+
+
+    def normalise(text: str) -> str:
+        text = _MENTION.sub("@user", text)
+        text = _LINK.sub("http", text)
+        return _SPACE.sub(" ", text).strip()
+''', base=norm_dir)
+ob.write("tests/test_textnorm.py", r'''
+    import pytest
+    from textnorm import normalise
+
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("love it @acme_support", "love it @user"),
+        ("@a @b thanks", "@user @user thanks"),
+        ("see https://example.org/x?y=1 now", "see http now"),
+        ("link (https://example.org/a).", "link (http)."),
+        ("write to alice@example.org", "write to alice@example.org"),   # e-mail: not a mention
+        ("  too   many\tspaces \n", "too many spaces"),
+        ("", ""),
+        ("   ", ""),
+    ])
+    def test_normalise(raw, expected):
+        assert normalise(raw) == expected
+
+
+    def test_unicode_is_kept():
+        assert normalise("perfetto 😍") == "perfetto 😍"
+''', base=norm_dir)
+ob.write("pyproject.toml", '[tool.pytest.ini_options]\npythonpath = ["."]\n', base=norm_dir)
+ob.show("textnorm.py", base=norm_dir)
+ob.show("tests/test_textnorm.py", base=norm_dir)
+ob.sh(f"{PY} -m pytest -q", cwd=norm_dir, shown="python -m pytest -q")
+```
+The table of cases *is* the specification; the e-mail case records a decision
+(a lookbehind keeps `alice@example.org` intact) that a later edit of the
+regular expression could silently reverse. The trailing punctuation case
+shows why links need care: `\S+` alone would swallow `).` and change the
+text around the link. A typical mistake is to test only the happy path; the
+empty string and all-whitespace input are exactly what the service's
+validation must also handle (@exr-ops3-fastapi-easy).
+:::
+
+::: {#exr-ops4-kinds-hard}
+## Hard — properties instead of examples
+Example-based tests check the cases you thought of. With the **Hypothesis**
+library, state properties of `normalise` that must hold for *every* string —
+idempotence (normalising twice changes nothing), no leading or trailing white
+space, no double spaces, no `@` followed by a word character except `@user` — and let
+Hypothesis search for counterexamples. Report any property that fails and fix
+either the code or the property.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`@given(st.text())` generates arbitrary Unicode, including characters that
+`\s` treats as white space and `str.strip()` does not, or the other way
+round. When a property fails, Hypothesis *shrinks* the input to a minimal
+counterexample: read it carefully.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+ob.write("tests/test_properties.py", r'''
+    import re
+    from hypothesis import given, settings, strategies as st
+    from textnorm import normalise
+
+    # posts: sequences of arbitrary characters and of tricky fragments (mentions, links, spaces)
+    pieces = st.characters(min_codepoint=0x20, max_codepoint=0x2FFF) | st.sampled_from(
+        ["@", "@bob", "http://x.io/a", "https://e.org", " ", "\t", "\n", ".", ")", "\u00a0"])
+    posts = st.lists(pieces, max_size=30).map("".join)
+
+
+    @settings(max_examples=500, deadline=None)
+    @given(posts)
+    def test_idempotent(text):
+        once = normalise(text)
+        assert normalise(once) == once
+
+
+    @settings(max_examples=500, deadline=None)
+    @given(posts)
+    def test_spacing(text):
+        out = normalise(text)
+        assert out == out.strip() and "  " not in out
+
+
+    @settings(max_examples=500, deadline=None)
+    @given(posts)
+    def test_no_handles_left(text):
+        assert all(h == "@user" for h in re.findall(r"(?<![\w.])@\w+", normalise(text)))
+''', base=norm_dir)
+ob.show("tests/test_properties.py", base=norm_dir)
+ob.sh(f"{PY} -m pytest -q -p no:cacheprovider tests/test_properties.py", cwd=norm_dir,
+      shown="python -m pytest -q tests/test_properties.py",
+      filt=lambda s: "\n".join(l for l in s.splitlines() if not l.startswith("  File")))
+```
+```{python}
+#| echo: false
+PROP_OK = ob.LAST.returncode == 0
+```
+Hypothesis ran 500 generated posts per property. `{python} "All three properties held" if PROP_OK else "At least one property failed, and Hypothesis printed a minimal counterexample above"`,
+including idempotence: replacing a mention by `@user` produces a mention that
+maps to itself, and a link by `http`, which is not a link any more — a fixed
+point by design. Writing the properties forced a precise decision on what a
+"handle" is (the same regular expression as the code — a property test that
+copies the implementation tests little; here it is acceptable because the
+property is about the *output* containing no other handles). Typical
+counterexamples found by such tests in practice: non-breaking spaces, which
+`\s` matches but a hand-written `" "` does not; a handle immediately after
+a link; Unicode letters in handles.
+:::
+
+## pytest in practice {#sec-ops-pytest}
+
+### The mechanics
+
+**pytest** collects tests by convention: files named `test_*.py` (or
+`*_test.py`), functions named `test_*`, classes named `Test*` [@pytest2026].
+A test passes if it returns without raising; a plain `assert` is enough,
+because pytest **rewrites** assertions at import time so that a failure
+reports the values of both sides. Four features carry most of the work:
+
+- **fixtures** — functions decorated with `@pytest.fixture` that build
+  something a test needs (a model, a client, a temporary directory); a test
+  asks for one by naming it as a parameter. The **scope** (`function`,
+  `module`, `session`) says how often it is rebuilt; code after a `yield` in
+  the fixture is the teardown. Fixtures shared by several files go in
+  `conftest.py`;
+- **parametrisation** — `@pytest.mark.parametrize` runs one test function on
+  a table of inputs, each row reported separately;
+- **markers** — labels such as `@pytest.mark.slow` select or skip groups of
+  tests (`-m "not slow"`);
+- **built-in fixtures** — `tmp_path` (a fresh directory), `monkeypatch`
+  (set environment variables or attributes for one test), `capsys`, and more.
+
+### A test suite for the service
+
+Here is the service of @sec-ch-ops-serving with a test suite: a
+session-scoped fixture starts the application **once** (loading the model is
+the expensive part, @prp-ops-load-once), contract tests check the schema and
+the error codes, and a few tests check that the answers make sense.
+
+```{python}
+#| echo: false
+#| output: asis
+train = ob.make_posts(3000, seed=1)
+model = ob.train_model(train.text, train.label)
+proj = ob.make_service(ob.project("svc_tests"), model)
+ob.write("pyproject.toml", """
+    [tool.pytest.ini_options]
+    pythonpath = ["."]
+    markers = ["slow: tests that train or evaluate a model"]
+""", base=proj)
+ob.write("tests/conftest.py", '''
+    import os
+    from pathlib import Path
+
+    import pytest
+    from fastapi.testclient import TestClient
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+
+    @pytest.fixture(scope="session")
+    def client():
+        """One application (and one model load) for the whole test session."""
+        os.environ["MODEL_PATH"] = str(ROOT / "model.joblib")
+        os.environ["MODEL_VERSION"] = "test"
+        from app import app
+        with TestClient(app) as c:      # entering runs the lifespan: the model is loaded here
+            yield c
+''', base=proj)
+ob.write("tests/test_api.py", '''
+    import pytest
+
+    LABELS = {"negative", "neutral", "positive"}
+
+
+    def test_health_and_ready(client):
+        assert client.get("/health").json() == {"status": "ok"}
+        assert client.get("/ready").json()["model_version"] == "test"
+
+
+    def test_predict_shape(client):
+        texts = ["the battery is awful", "got the camera today", "love the new phone"]
+        r = client.post("/v1/predict", json={"texts": texts})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["model_version"] == "test"
+        assert len(body["predictions"]) == len(texts)
+        for p in body["predictions"]:
+            assert p["label"] in LABELS
+            assert set(p["probabilities"]) == LABELS
+            assert abs(sum(p["probabilities"].values()) - 1) < 1e-3
+            assert p["label"] == max(p["probabilities"], key=p["probabilities"].get)
+
+
+    @pytest.mark.parametrize("body", [
+        {"texts": []},
+        {"texts": [""]},
+        {"texts": ["   "]},
+        {"texts": ["x" * 281]},
+        {"texts": ["ok"] * 65},
+        {"texts": "not a list"},
+        {"wrong": ["field"]},
+    ])
+    def test_invalid_requests_are_rejected(client, body):
+        assert client.post("/v1/predict", json=body).status_code == 422
+
+
+    def test_contract_of_request_schema(client):
+        schema = client.get("/openapi.json").json()["components"]["schemas"]["PredictRequest"]
+        texts = schema["properties"]["texts"]
+        assert (texts["minItems"], texts["maxItems"]) == (1, 64)
+        assert (texts["items"]["minLength"], texts["items"]["maxLength"]) == (1, 280)
+
+
+    @pytest.mark.parametrize("text, expected", [
+        ("love the new phone, brilliant camera", "positive"),
+        ("the battery is awful and the app crashes", "negative"),
+    ])
+    def test_clear_cases(client, text, expected):
+        r = client.post("/v1/predict", json={"texts": [text]})
+        assert r.json()["predictions"][0]["label"] == expected
+''', base=proj)
+ob.show("tests/conftest.py", base=proj)
+ob.show("tests/test_api.py", base=proj)
+ob.sh(f"{PY} -m pytest -q --cov=app --cov-report=term-missing", cwd=proj,
+      shown="python -m pytest -q --cov=app --cov-report=term-missing")
+```
+
+Twelve test cases from five test functions, one model load. The coverage
+report — produced by `coverage.py` through the `pytest-cov` plug-in — lists
+the lines of `app.py` that no test executed: typically the readiness error
+branch, which needs a test that starts the application *without* a model.
+Coverage measures what was **run**, not what was **checked**; 100 % coverage
+with weak assertions proves little, and a low coverage points at untested
+code.
+
+When a test fails, assertion rewriting shows the values involved:
+
+```{python}
+#| echo: false
+#| output: asis
+ob.write("tests/test_failing.py", '''
+    def test_label_of_negation(client):
+        r = client.post("/v1/predict", json={"texts": ["the delivery is not bad"]})
+        assert r.json()["predictions"][0]["label"] == "positive"
+''', base=proj)
+ob.sh(f"{PY} -m pytest -q tests/test_failing.py", cwd=proj, shown="python -m pytest -q tests/test_failing.py",
+      filt=lambda s: "\n".join(l for l in s.splitlines() if l.strip() and not l.startswith("tests/conftest")),
+      max_lines=30)
+(proj / "tests/test_failing.py").unlink()
+```
+
+```{python}
+#| echo: false
+NOT_BAD = ob.LAST.returncode == 0
+```
+
+`{python} "The test passes: the model reads 'not bad' as positive (the bigram is in its vocabulary)." if NOT_BAD else "The test fails, and the report shows the label actually returned: a model of words and word pairs does not always handle negation."`
+Such behaviours are what the model tests of @sec-ops-model-tests examine
+systematically.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops4-pytest-easy}
+## Easy — read the report
+Without running it, say how pytest reports each of these tests (passed,
+failed, error, skipped) and how many test cases it collects:
+```python
+import pytest
+
+@pytest.fixture
+def data():
+    raise RuntimeError("database down")
+
+def test_uses_data(data):
+    assert data
+
+@pytest.mark.parametrize("n", [1, 2, 3])
+def test_small(n):
+    assert n < 3
+
+@pytest.mark.skip(reason="model not trained yet")
+def test_model():
+    assert False
+
+def helper_test():
+    assert False
+```
+Then run it to check.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+pytest distinguishes a failing **assertion** in a test (failed) from an
+exception while **setting up** a fixture (error). Which functions does it
+collect?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+quiz = ob.project("quiz")
+ob.write("test_quiz.py", '''
+    import pytest
+
+    @pytest.fixture
+    def data():
+        raise RuntimeError("database down")
+
+    def test_uses_data(data):
+        assert data
+
+    @pytest.mark.parametrize("n", [1, 2, 3])
+    def test_small(n):
+        assert n < 3
+
+    @pytest.mark.skip(reason="model not trained yet")
+    def test_model():
+        assert False
+
+    def helper_test():
+        assert False
+''', base=quiz)
+ob.sh(f"{PY} -m pytest -q -rA -p no:cacheprovider test_quiz.py", cwd=quiz, shown="python -m pytest -q -rA test_quiz.py",
+      filt=lambda s: "\n".join(l for l in s.splitlines() if re.match(r"(PASSED|FAILED|ERROR|SKIPPED|\d+ )", l)))
+```
+Five test cases are collected: `test_uses_data`, three cases of `test_small`
+and `test_model`; `helper_test` does not start with `test`, so it is not a
+test (a common way for a "test" to never run). `test_uses_data` is an
+**error** (its fixture raised during setup — the test itself never ran);
+`test_small[3]` **fails**; `test_small[1]` and `[2]` pass; `test_model` is
+skipped. Distinguishing errors from failures matters in CI: an error usually
+means broken infrastructure (no database, no model file), a failure a broken
+behaviour.
+:::
+
+::: {#exr-ops4-pytest-medium}
+## Medium — what a fixture's scope costs
+Make model loading artificially slow (sleep 0.5 s in the lifespan), then run
+the service's test suite with the `client` fixture at `function`, `module`
+and `session` scope. Measure the total time and explain the numbers.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+With `function` scope the fixture — and the lifespan — runs once per test
+case. Pass the scope through an environment variable read in `conftest.py` so
+the same suite can run three ways.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+conf = (proj / "tests/conftest.py").read_text()
+slow_app = ob.SERVICE_APP.replace('STATE["model"] = joblib.load(', 'time.sleep(0.5)\n    STATE["model"] = joblib.load(')
+(proj / "app.py").write_text(slow_app)
+(proj / "tests/conftest.py").write_text(conf.replace('@pytest.fixture(scope="session")',
+                                                     '@pytest.fixture(scope=os.environ.get("SCOPE", "session"))'))
+for scope in ("function", "module", "session"):
+    t = time.perf_counter()
+    p = ob.run(f"{PY} -m pytest -q -p no:cacheprovider", cwd=proj, env={"SCOPE": scope})
+    print(f"{scope:8s} {time.perf_counter() - t:5.1f} s  {p.stdout.strip().splitlines()[-1]}")
+(proj / "app.py").write_text(ob.SERVICE_APP)            # restore
+(proj / "tests/conftest.py").write_text(conf)
+```
+With `function` scope the model is loaded for each of the test cases, so the
+suite takes several seconds of pure loading; with `module` or `session`
+scope (one test module here) it is loaded once. The price of a broad scope is
+shared state: a test that mutates the application (adds a route, changes a
+global) affects the following ones — keep shared fixtures read-only.
+:::
+
+::: {#exr-ops4-pytest-hard}
+## Hard — catch a breaking change of the contract
+Clients depend on the OpenAPI document. Write a test that compares the
+current document with a stored **snapshot** and classifies each difference as
+**breaking** (a removed endpoint or response field, a new required request
+field, tighter limits) or **non-breaking** (a new endpoint, a new optional
+field, looser limits), failing only on breaking ones. Demonstrate it on two
+modified versions of the service: one that lowers the maximum text length
+to 200, one that adds an optional `language` field.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Compare dictionaries recursively, but interpret only what clients depend on:
+paths and methods, the request schema's `required` list and constraints
+(`maxLength`, `maxItems` lower = breaking), and the response schema's
+properties (removed = breaking).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from fastapi.testclient import TestClient
+import importlib
+
+def openapi_of(source: str) -> dict:
+    mod_dir = ob.project("contract_mod")
+    (mod_dir / "app_variant.py").write_text(source)
+    sys.path.insert(0, str(mod_dir))
+    sys.modules.pop("app_variant", None)
+    mod = importlib.import_module("app_variant")
+    sys.path.remove(str(mod_dir))
+    return mod.app.openapi()
+
+def breaking_changes(old: dict, new: dict) -> list[str]:
+    issues = []
+    for path, methods in old["paths"].items():
+        for m in methods:
+            if m not in new["paths"].get(path, {}):
+                issues.append(f"removed {m.upper()} {path}")
+    o_s, n_s = old["components"]["schemas"], new["components"]["schemas"]
+    for name, schema in o_s.items():
+        if name not in n_s:
+            continue
+        new_required = set(n_s[name].get("required", [])) - set(schema.get("required", []))
+        issues += [f"{name}: new required field {f!r}" for f in new_required]
+        for field, spec in schema.get("properties", {}).items():
+            if field not in n_s[name].get("properties", {}):
+                issues.append(f"{name}: removed field {field!r}")
+                continue
+            nspec = n_s[name]["properties"][field]
+            for key in ("maxLength", "maxItems"):           # tighter upper limits break clients
+                for a, b in ((spec, nspec), (spec.get("items", {}), nspec.get("items", {}))):
+                    if key in a and b.get(key, np.inf) < a[key]:
+                        issues.append(f"{name}.{field}: {key} {a[key]} -> {b[key]}")
+    return issues
+
+snapshot = openapi_of(ob.SERVICE_APP)
+tighter = ob.SERVICE_APP.replace("max_length=280", "max_length=200")
+optional = ob.SERVICE_APP.replace("texts: list[Text] = Field(min_length=1, max_length=64)",
+                                  "texts: list[Text] = Field(min_length=1, max_length=64)\n    language: str | None = None")
+print("tighter limit :", breaking_changes(snapshot, openapi_of(tighter)))
+print("optional field:", breaking_changes(snapshot, openapi_of(optional)))
+```
+The lowered limit is reported as breaking (requests that were valid are now
+rejected); the optional field is not (old requests remain valid). In a real
+suite the snapshot is a JSON file committed next to the tests, updated
+deliberately — together with a new API version — when a breaking change is
+intended. Comparing the documents textually would fail on every harmless
+reordering; the classification encodes *who* is affected by a change.
+:::
+
+## Linting and formatting {#sec-ops-lint}
+
+### Linters
+
+A **linter** analyses source code without running it and reports likely
+errors and violations of conventions: a name used but never defined (a
+`NameError` waiting for the branch that reaches it), an import never used, a
+mutable default argument shared between calls, `== None` instead of `is None`,
+a bare `except:` that swallows `KeyboardInterrupt`. **Ruff** implements the
+rules of many older tools (Pyflakes, pycodestyle, isort, flake8 plug-ins such
+as bugbear) in one fast program, configured in `pyproject.toml`
+[@ruff2026]:
+
+```{python}
+#| echo: false
+#| output: asis
+lint = ob.project("lint")
+ob.write("pyproject.toml", """
+    [tool.ruff]
+    line-length = 100
+
+    [tool.ruff.lint]
+    select = ["E", "F", "W", "I", "B", "UP"]   # pycodestyle, Pyflakes, warnings, isort, bugbear, pyupgrade
+""", base=lint)
+messy = '''import os, json
+import numpy as np
+from typing import List
+
+def predict_all(texts: List[str], cache = {}):
+    results=[]
+    for t in texts:
+        if cache.get(t) == None:
+            cache[t] = model.predict([t])[0]
+        results.append(cache[t])
+    try:
+        json.dumps(results)
+    except:
+        pass
+    return results
+'''
+(lint / "service_utils.py").write_text(messy)
+ob.show("service_utils.py", base=lint)
+ob.sh(f"{PY} -m ruff check --output-format concise .", cwd=lint, shown="ruff check --output-format concise .")
+```
+
+Each message names a rule: `F821` is a real bug (`model` is undefined), `B006`
+a subtle one (the default `cache` dictionary is created once and shared by
+every call — sometimes intended as a cache, usually a bug), `E722` a risky
+habit, `F401` and `I001` hygiene. Some rules have automatic fixes
+(`ruff check --fix`).
+
+### Formatters, idempotence and safety
+
+A **formatter** rewrites code into a canonical layout — line breaks,
+indentation, quotes, spacing — so that layout is never discussed in review and
+diffs show only meaningful changes. `ruff format` follows the style of Black
+[@black2026]. Two properties make a formatter safe to run automatically:
+
+::: {#prp-ops-formatter}
+## What makes `format --check` meaningful
+Let $F$ map source texts to source texts. (i) If $F$ is **idempotent**
+($F \circ F = F$, @def-api-idempotent), then after formatting, a check that
+compares $x$ with $F(x)$ always passes, and two developers who format the same
+code get the same text whatever its previous layout, provided they started
+from layouts with the same image under $F$. (ii) If $F$ **preserves the
+abstract syntax tree** ($\mathrm{AST}(F(x)) = \mathrm{AST}(x)$, up to
+docstring indentation), the formatted program means the same as the original.
+:::
+
+*In one line:* idempotence makes "is this file formatted?" a yes/no question
+with a stable answer; AST preservation makes answering it harmless.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-formatter
+(i) After formatting, the file is $y = F(x)$; the check compares $y$ with
+$F(y) = F(F(x)) = F(x) = y$, so it passes. Two developers with inputs $x_1,
+x_2$ and $F(x_1) = F(x_2)$ obviously agree after one pass; idempotence
+guarantees that further passes (for instance by CI) do not move them apart.
+Without it, a check could fail on code just formatted, and formatting in a
+loop could oscillate. (ii) Python's semantics are defined on the parse tree:
+two sources with the same AST compile to the same code objects (line numbers
+aside), so they behave identically. Black and Ruff verify this property on
+every file they format, by parsing before and after. $\blacksquare$
+:::
+
+Both properties can be checked directly:
+
+```{python}
+(lint / "service_utils.py").write_text(messy)
+before_ast = ast.dump(ast.parse(messy))
+ob.run(f"{PY} -m ruff format service_utils.py", cwd=lint, check=True)
+once = (lint / "service_utils.py").read_text()
+ob.run(f"{PY} -m ruff format service_utils.py", cwd=lint, check=True)
+twice = (lint / "service_utils.py").read_text()
+print(once)
+print("idempotent:", once == twice, "| same AST as the original:", ast.dump(ast.parse(once)) == before_ast)
+print("format --check exit code:", ob.run(f"{PY} -m ruff format --check service_utils.py", cwd=lint).returncode)
+```
+
+The formatter fixed the layout but not the bugs: `model` is still undefined
+and the bare `except` is still there — formatting and linting are separate
+jobs. In CI both run in **check** mode (non-zero exit code on any finding,
+@sec-ch-ops-cicd); locally, a **pre-commit hook** runs them before each commit
+so that problems never reach the repository [@precommit2026].
+
+### Practice {.unnumbered}
+
+::: {#exr-ops4-lint-easy}
+## Easy — find the problems by hand
+Without running a linter, list the problems in this function and the rule
+families that would report them (Pyflakes, pycodestyle, bugbear, pyupgrade):
+```python
+from typing import Dict
+import numpy as np
+
+def label_counts(labels, counts: Dict[str, int]={}):
+    for l in labels:
+        if l not in counts: counts[l] = 0
+        counts[l] +=1
+    total = sum(counts.values())
+    return {k: v/totl for k, v in counts.items()}
+```
+Then run Ruff to check your list.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Look for: something imported and unused, a default that persists across
+calls, a name that does not exist, a variable name easy to confuse with a
+digit, two statements on one line, and an outdated typing form.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+quiz2 = ob.project("lint_quiz")
+(quiz2 / "pyproject.toml").write_text((lint / "pyproject.toml").read_text().replace('"UP"]', '"UP", "E741"]'))
+ob.write("counts.py", '''
+    from typing import Dict
+    import numpy as np
+
+    def label_counts(labels, counts: Dict[str, int]={}):
+        for l in labels:
+            if l not in counts: counts[l] = 0
+            counts[l] +=1
+        total = sum(counts.values())
+        return {k: v/totl for k, v in counts.items()}
+''', base=quiz2)
+ob.sh(f"{PY} -m ruff check --output-format concise .", cwd=quiz2, shown="ruff check --output-format concise .")
+```
+The real bugs: `totl` is undefined (F821) — the function raises
+`NameError` on every call that reaches the return; the mutable default
+`counts={}` (B006) accumulates counts **across calls**, so a second call
+returns frequencies of both label lists; `total` is assigned and never used
+(F841), a symptom of the typo. Hygiene: unused `numpy` (F401), `l` as a name
+(E741: ambiguous with `1`), a statement after a colon (E701), `Dict` instead
+of `dict` (UP006/UP035). Linters find the two real bugs instantly — tests
+would find the first only if a test reached that line.
+:::
+
+::: {#exr-ops4-lint-medium}
+## Medium — fix, format, verify
+Fix the function of the previous exercise so that Ruff reports nothing (with
+the configuration above), format it, and verify idempotence and that the AST
+of the formatted file equals that of your fixed version. Add a unit test that
+would have caught the mutable-default bug.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+The test calls the function twice with different labels and checks that the
+second result does not depend on the first call.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+fixed = '''from collections import Counter
+
+
+def label_counts(labels):
+    """Relative frequency of each label."""
+    counts = Counter(labels)
+    total = sum(counts.values())
+    return {label: count / total for label, count in counts.items()}
+'''
+(quiz2 / "counts.py").write_text(fixed)
+ob.run(f"{PY} -m ruff format counts.py", cwd=quiz2, check=True)
+formatted = (quiz2 / "counts.py").read_text()
+print("ruff check:", ob.run(f"{PY} -m ruff check counts.py", cwd=quiz2).stdout.strip())
+print("AST preserved:", ast.dump(ast.parse(fixed)) == ast.dump(ast.parse(formatted)),
+      "| idempotent:", ob.run(f"{PY} -m ruff format --check counts.py", cwd=quiz2).returncode == 0)
+ob.write("test_counts.py", '''
+    from counts import label_counts
+
+    def test_calls_are_independent():
+        assert label_counts(["a", "a", "b"]) == {"a": 2 / 3, "b": 1 / 3}
+        assert label_counts(["c"]) == {"c": 1.0}     # the old version returned a, b and c
+''', base=quiz2)
+print(ob.run(f"{PY} -m pytest -q -p no:cacheprovider test_counts.py", cwd=quiz2).stdout.strip().splitlines()[-1])
+```
+`Counter` removes the hand-written counting and the shared default together.
+The test encodes the property the bug violated — independence of calls —
+rather than the implementation. A common half-fix is `counts=None` followed by
+`counts = counts or {}`, which is correct here but hides the same bug if a
+caller ever passes the dictionary on purpose.
+:::
+
+::: {#exr-ops4-lint-hard}
+## Hard — a quality gate in one command
+Set up a small project with `pyproject.toml` (Ruff rules, line length, pytest
+options), a `.pre-commit-config.yaml` with Ruff's hooks, and a script
+`check.sh` that runs, in order, `ruff format --check`, `ruff check` and
+`pytest`, and exits with the first non-zero status. Show that it fails on an
+unformatted file, then on a lint error, then on a failing test, and passes
+when all are fixed. Why this order?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`set -e` makes a Bash script stop at the first failing command. Order the
+checks from the cheapest and most frequent failure to the most expensive —
+@sec-ch-ops-cicd proves why this order minimises the expected cost.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+gate = ob.project("gate")
+ob.write("pyproject.toml", """
+    [tool.ruff]
+    line-length = 100
+    [tool.ruff.lint]
+    select = ["E", "F", "W", "I", "B", "UP"]
+    [tool.pytest.ini_options]
+    pythonpath = ["."]
+    addopts = "-q -p no:cacheprovider"
+""", base=gate)
+ob.write(".pre-commit-config.yaml", """
+    repos:
+      - repo: https://github.com/astral-sh/ruff-pre-commit
+        rev: v0.17.5
+        hooks:
+          - id: ruff-check
+            args: [--fix]
+          - id: ruff-format
+""", base=gate)
+ob.write("check.sh", f"""
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {PY} -m ruff format --check .
+    {PY} -m ruff check .
+    {PY} -m pytest
+""", base=gate)
+good_code = "def mean(xs):\n    return sum(xs) / len(xs)\n"
+good_test = "from stats import mean\n\n\ndef test_mean():\n    assert mean([1, 2, 3]) == 2\n"
+variants = {
+    "unformatted": ("def mean(xs):  return sum(xs)/len(xs)\n", good_test),
+    "lint error": ("import os\n\n\ndef mean(xs):\n    return sum(xs) / len(xs)\n", good_test),
+    "failing test": ("def mean(xs):\n    return sum(xs) / (len(xs) + 1)\n", good_test),
+    "all fixed": (good_code, good_test),
+}
+for name, (code, test) in variants.items():
+    (gate / "stats.py").write_text(code)
+    (gate / "test_stats.py").write_text(test)
+    p = ob.run("bash check.sh", cwd=gate)
+    last = ob.mask((p.stdout + p.stderr).strip().splitlines()[-1]) if p.returncode else "all checks passed"
+    print(f"{name:13s} exit {p.returncode}: {last}")
+```
+Each variant stops at its first failing check. The order — format, lint,
+tests — runs the cheapest checks first: they take milliseconds, fail often,
+and a failure there makes the slower stages pointless. The pre-commit file
+pins the hooks' version (`rev`) like any other dependency; installing it
+(`pre-commit install`) runs the same checks before every commit. The same
+three commands become the first job of the CI pipeline in @sec-ch-ops-cicd.
+:::
+
+## Testing the model {#sec-ops-model-tests}
+
+### Behaviour, not just accuracy
+
+A single accuracy number hides *which* inputs fail. Ribeiro et al. proposed
+testing NLP models the way software is tested — with suites of targeted
+cases organised by **capability** (vocabulary, negation, robustness to typos
+or names…) and by **test type** [@ribeiro2020]:
+
+- **minimum functionality tests (MFT)**: simple cases with a known answer
+  ("the battery is awful" is negative), like unit tests;
+- **invariance tests (INV)**: a perturbation that should **not** change the
+  prediction — replacing one product with another, adding a neutral word,
+  changing an emoji's skin tone;
+- **directional expectation tests (DIR)**: a perturbation that should change
+  the prediction **in a known direction** — adding "not" before a positive
+  word should lower the probability of "positive"; appending "and the support
+  team is rude" should not raise it.
+
+Each test type runs over many generated cases and reports a **failure rate**:
+the capability of a model is a rate, not a pass/fail bit. Let us run one test
+of each type on the local model:
+
+```{python}
+rng = np.random.default_rng(0)
+probe = ob.make_posts(600, seed=31)
+
+def p_class(texts, k):                       # probability of class k for each text
+    return model.predict_proba(list(texts))[:, k]
+
+# MFT: one polar word on a topic, no noise
+mft = [(f"{t} is {w}", 2) for t in ob.TOPICS for w in ("excellent", "brilliant", "perfect")] + \
+      [(f"{t} is {w}", 0) for t in ob.TOPICS for w in ("terrible", "useless", "awful")]
+mft_fail = np.mean(model.predict([t for t, _ in mft]) != np.array([y for _, y in mft]))
+
+# INV: swap the topic for another topic: the label should not change
+def swap_topic(text):
+    for t in ob.TOPICS:
+        if t in text:
+            others = [o for o in ob.TOPICS if o != t]
+            return text.replace(t, others[rng.integers(len(others))])
+    return text
+inv_src = [t for t in probe.text if any(tp in t for tp in ob.TOPICS)]
+inv_fail = np.mean(model.predict(inv_src) != model.predict([swap_topic(t) for t in inv_src]))
+
+# DIR: insert "not" before the first positive word: P(positive) must not increase
+pos_posts = [t for t in probe.text if any(f" {w}" in f" {t}" for w in ob.POS) and " not " not in f" {t} "]
+def negate(text):
+    for w in ob.POS:
+        if re.search(rf"\b{w}\b", text):
+            return re.sub(rf"\b{w}\b", f"not {w}", text, count=1)
+    return text
+dir_fail = np.mean(p_class([negate(t) for t in pos_posts], 2) > p_class(pos_posts, 2) + 1e-9)
+
+for name, rate, n in (("MFT clear polar posts", mft_fail, len(mft)),
+                      ("INV swap the topic", inv_fail, len(inv_src)),
+                      ("DIR insert 'not' before a positive word", dir_fail, len(pos_posts))):
+    print(f"{name:42s} failure rate {rate:6.1%} on {n} cases")
+```
+
+```{python}
+#| echo: false
+DIR_PCT = f"{100 * dir_fail:.0f}"
+```
+
+Clear cases pass and topics do not matter, as one would hope; but inserting
+"not" raises the probability of "positive" in `{python} DIR_PCT` % of the
+posts that contain a positive word — the model knows "not" only through the
+word pairs it has seen. That is a finding no accuracy number would show,
+and a regression test for the next version.
+
+### Statistical tests of quality
+
+"The accuracy on the test set is at least $\theta$" looks like a test, but
+the accuracy measured on $n$ examples is a random variable: a good model can
+fail it by bad luck, and a worse model can pass it. Two numbers make such a
+test meaningful: its **false-failure rate** $\alpha$ (it fails although the
+true accuracy is at the required level $p_0$) and its **power** $1 - \beta$
+(it fails when the true accuracy has dropped to $p_1 < p_0$). Part III gave
+Hoeffding's bound for the width of the estimate (@thm-test-set-size); here we
+need something sharper.
+
+::: {#prp-ops-wilson}
+## Wilson's score interval
+Let $\hat p = X/n$ with $X \sim \mathrm{Binomial}(n, p)$, and $z =
+z_{1-\alpha/2}$ the standard normal quantile. The set of $p$ for which the
+normal-approximation test $|\hat p - p| \le z\sqrt{p(1-p)/n}$ accepts is the
+interval
+$$
+\frac{\hat p + \frac{z^2}{2n} \pm z\sqrt{\frac{\hat p(1 - \hat p)}{n} +
+\frac{z^2}{4n^2}}}{1 + \frac{z^2}{n}} ,
+$$ {#eq-ops-wilson}
+whose coverage is approximately $1 - \alpha$ [@wilson1927].
+:::
+
+*In one line:* instead of plugging $\hat p$ into the standard error (the
+textbook "Wald" interval, poor near 0 and 1), keep the unknown $p$ in it and
+solve for the $p$ values that the data do not reject.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-wilson
+By the central limit theorem $(\hat p - p)/\sqrt{p(1-p)/n}$ is approximately
+standard normal, so $P\bigl((\hat p - p)^2 \le z^2 p(1-p)/n\bigr) \approx 1 -
+\alpha$. The inequality is quadratic in $p$: $(1 + z^2/n)p^2 - (2\hat p +
+z^2/n)p + \hat p^2 \le 0$. The leading coefficient is positive, so the
+solutions form the interval between the two roots, which the quadratic
+formula gives as
+$$
+p = \frac{(2\hat p + z^2/n) \pm \sqrt{(2\hat p + z^2/n)^2 - 4(1 +
+z^2/n)\hat p^2}}{2(1 + z^2/n)} ,
+$$
+and the discriminant simplifies to $4z^2\bigl(\hat p(1-\hat p)/n +
+z^2/(4n^2)\bigr)$, giving @eq-ops-wilson. The event "$p$ is in the interval"
+is the event "the test accepts $p$", whose probability is $\approx 1 -
+\alpha$. $\blacksquare$
+:::
+
+The same approximation sizes a test.
+
+::: {#prp-ops-test-size}
+## Size of a one-sided quality test
+A test that fails when $\hat p < \theta$ has false-failure rate $\le \alpha$
+at true accuracy $p_0$ and power $\ge 1 - \beta$ at $p_1 < p_0$ (normal
+approximation) if
+$$
+n \ge \left(\frac{z_{1-\alpha}\sqrt{p_0(1-p_0)} + z_{1-\beta}\sqrt{p_1(1-p_1)}}{p_0 - p_1}\right)^2,
+\qquad \theta = p_0 - z_{1-\alpha}\sqrt{\frac{p_0(1-p_0)}{n}} .
+$$ {#eq-ops-test-size}
+:::
+
+*In one line:* the threshold must sit $z_{1-\alpha}$ standard errors below
+the good accuracy and $z_{1-\beta}$ standard errors above the bad one; that is
+possible only when $n$ makes the two distributions far enough apart.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-test-size
+Under $p_0$, $\hat p \approx \mathcal N(p_0, p_0(1-p_0)/n)$, so $P(\hat p <
+\theta) = \Phi\bigl((\theta - p_0)/\sqrt{p_0(1-p_0)/n}\bigr) = \alpha$ exactly
+for the stated $\theta$. Under $p_1$, the power is $P(\hat p < \theta) =
+\Phi\bigl((\theta - p_1)/\sqrt{p_1(1-p_1)/n}\bigr) \ge 1 - \beta$ iff
+$\theta - p_1 \ge z_{1-\beta}\sqrt{p_1(1-p_1)/n}$. Substituting $\theta$:
+$p_0 - p_1 \ge \bigl(z_{1-\alpha}\sqrt{p_0(1-p_0)} +
+z_{1-\beta}\sqrt{p_1(1-p_1)}\bigr)/\sqrt n$, and squaring gives the bound on
+$n$. $\blacksquare$
+:::
+
+Let us check both on the local model, whose accuracy we can estimate
+precisely with a very large sample from the generator:
+
+```{python}
+def wilson(k, n, conf=0.95):
+    z = norm.ppf(1 - (1 - conf) / 2)
+    ph = k / n
+    centre = (ph + z**2 / (2 * n)) / (1 + z**2 / n)
+    half = z * np.sqrt(ph * (1 - ph) / n + z**2 / (4 * n**2)) / (1 + z**2 / n)
+    return centre - half, centre + half
+
+def test_size(p0, p1, alpha=0.01, beta=0.10):
+    za, zb = norm.ppf(1 - alpha), norm.ppf(1 - beta)
+    n = int(np.ceil(((za * np.sqrt(p0 * (1 - p0)) + zb * np.sqrt(p1 * (1 - p1))) / (p0 - p1)) ** 2))
+    return n, p0 - za * np.sqrt(p0 * (1 - p0) / n)
+
+big = ob.make_posts(50_000, seed=77)
+p_true = accuracy_score(big.label, model.predict(big.text))
+small = ob.make_posts(300, seed=78)
+k = int(np.sum(model.predict(small.text) == small.label))
+lo, hi = wilson(k, 300)
+hw = np.sqrt(np.log(2 / 0.05) / (2 * 300))                     # Hoeffding half-width (@thm-test-set-size)
+print(f"accuracy on 50 000 posts: {p_true:.4f}")
+print(f"300 posts: {k} correct, Wilson 95% [{lo:.4f}, {hi:.4f}], Hoeffding 95% [{k/300 - hw:.4f}, {k/300 + hw:.4f}]")
+n_req, theta = test_size(p_true, p_true - 0.05)
+print(f"to catch a 5-point drop with power 90% and false failures <= 1%: n = {n_req}, threshold {theta:.4f}")
+```
+
+Hoeffding's interval is distribution-free but more than twice as wide for an
+accuracy near 0.93; Wilson's is the one to use for decisions. The required
+$n$ is modest for a 5-point drop and grows like $1/\delta^2$ for a drop of
+$\delta$ points: a 1-point drop needs about 25 times as many examples.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops4-model-easy}
+## Easy — Wilson by hand
+A model labels 184 of 200 evaluation posts correctly. Compute the 95 % Wilson
+interval with the formula (z = 1.96) and compare it with the Wald interval
+$\hat p \pm z\sqrt{\hat p(1 - \hat p)/n}$. Can you claim, at this confidence,
+that the accuracy is above 0.90?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$\hat p = 0.92$, $z^2/n = 0.0192$. The claim "above 0.90" holds if the whole
+interval is above 0.90.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+k, n, z = 184, 200, 1.96
+ph = k / n
+print("Wilson:", [round(float(v), 4) for v in wilson(k, n)])
+print("Wald:  ", [round(float(ph - z * np.sqrt(ph * (1 - ph) / n)), 4), round(float(ph + z * np.sqrt(ph * (1 - ph) / n)), 4)])
+```
+Wilson gives about $[0.874, 0.950]$, Wald $[0.882, 0.958]$ — Wilson is
+shifted towards 0.5, where the binomial is less skewed. Either way the lower
+end is below 0.90: 200 posts cannot establish an accuracy above 0.90 when the
+estimate is 0.92. The mistake is to read $\hat p = 0.92 > 0.90$ as the claim.
+:::
+
+::: {#exr-ops4-model-medium}
+## Medium — invariance and direction as pytest tests
+Turn the INV and DIR tests of this section into a pytest module for the local
+model: generate the cases in fixtures, and make each test fail if the failure
+rate exceeds a tolerance (2 % for INV, 5 % for DIR). Add a DIR test of your
+own: appending "and the support team is rude" to a post must not increase its
+probability of being positive. Run the module and report which tests fail.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Save the model with `joblib` where the tests can load it, in a session
+fixture. Report the observed rate in the assertion message so that a failure
+says *how much*.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+beh = ob.project("behaviour")
+joblib.dump(model, beh / "model.joblib")
+ob.write("test_behaviour.py", f'''
+    import re
+    import sys
+    from pathlib import Path
+
+    import joblib
+    import numpy as np
+    import pytest
+
+    sys.path.insert(0, {str(Path.cwd())!r})
+    import opsbook as ob
+
+    POSITIVE = 2
+
+
+    @pytest.fixture(scope="session")
+    def model():
+        return joblib.load(Path(__file__).parent / "model.joblib")
+
+
+    @pytest.fixture(scope="session")
+    def posts():
+        return list(ob.make_posts(600, seed=31).text)
+
+
+    def rate(flags):
+        return float(np.mean(flags))
+
+
+    def test_inv_topic_swap(model, posts):
+        rng = np.random.default_rng(0)
+        src = [p for p in posts if any(t in p for t in ob.TOPICS)]
+        def swap(p):
+            t = next(t for t in ob.TOPICS if t in p)
+            others = [o for o in ob.TOPICS if o != t]
+            return p.replace(t, others[rng.integers(len(others))])
+        r = rate(model.predict(src) != model.predict([swap(p) for p in src]))
+        assert r <= 0.02, f"label changed after swapping the topic in {{r:.1%}} of {{len(src)}} posts"
+
+
+    def test_dir_negation(model, posts):
+        src = [p for p in posts if any(re.search(rf"\\b{{w}}\\b", p) for w in ob.POS) and " not " not in f" {{p}} "]
+        def negate(p):
+            w = next(w for w in ob.POS if re.search(rf"\\b{{w}}\\b", p))
+            return re.sub(rf"\\b{{w}}\\b", f"not {{w}}", p, count=1)
+        before = model.predict_proba(src)[:, POSITIVE]
+        after = model.predict_proba([negate(p) for p in src])[:, POSITIVE]
+        r = rate(after > before + 1e-9)
+        assert r <= 0.05, f"'not' raised P(positive) in {{r:.1%}} of {{len(src)}} posts"
+
+
+    def test_dir_rude_suffix(model, posts):
+        before = model.predict_proba(posts)[:, POSITIVE]
+        after = model.predict_proba([p + " and the support team is rude" for p in posts])[:, POSITIVE]
+        r = rate(after > before + 1e-9)
+        assert r <= 0.05, f"a rude remark raised P(positive) in {{r:.1%}} of {{len(posts)}} posts"
+''', base=beh)
+ob.sh(f"{PY} -m pytest -q -p no:cacheprovider --tb=line test_behaviour.py", cwd=beh,
+      shown="python -m pytest -q --tb=line test_behaviour.py",
+      filt=lambda s: "\n".join(l for l in s.splitlines() if l.strip()))
+```
+
+```{python}
+#| echo: false
+_names = {"test_inv_topic_swap": "the topic swap", "test_dir_negation": "the negation test",
+          "test_dir_rude_suffix": "the rude remark"}
+_failed = [k for k in _names if f"test_behaviour.py::{k}" in ob.LAST.stdout]
+BEH_SUMMARY = ("All three tests pass." if not _failed else
+               "Failing: " + ", ".join(_names[k] for k in _failed) + "; passing: "
+               + (", ".join(v for k, v in _names.items() if k not in _failed) or "none") + ".")
+```
+`{python} BEH_SUMMARY` A failing assertion says by how much the rate
+exceeds its tolerance — the local model's weakness with negation shows up as a
+number, not as an anecdote. Tolerances are part of the specification: a DIR
+test that tolerates 0 % failures would block every model trained on noisy
+labels; one that tolerates 50 % tests nothing. Behavioural suites are most
+useful as **regression** tests between model versions: the rate may not get
+worse.
+:::
+
+::: {#exr-ops4-model-hard}
+## Hard — a quality test with known error rates
+Design an automated test "the model's accuracy has not dropped by 5 points or
+more" with a false-failure rate of at most 1 % and a power of at least 90 %,
+using @eq-ops-test-size. Then **check the error rates by simulation**: draw
+2 000 evaluation sets of the required size for the current model, and 2 000
+for a degraded model whose accuracy is 5 points lower (build it by flipping a
+fraction of the current model's correct answers), and count how often the
+test fails in each case. Repeat with half the required sample size.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Simulate the number of correct answers directly as binomial draws once you
+know the two true accuracies — the model need not be re-run 4 000 times.
+Compare the observed failure frequencies with $\alpha$ and $1 - \beta$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+p0, p1 = p_true, p_true - 0.05
+rng_sim = np.random.default_rng(5)
+for n_eval in (n_req, n_req // 2):
+    theta_n = p0 - norm.ppf(0.99) * np.sqrt(p0 * (1 - p0) / n_eval)
+    good = rng_sim.binomial(n_eval, p0, size=2000) / n_eval
+    bad = rng_sim.binomial(n_eval, p1, size=2000) / n_eval
+    print(f"n = {n_eval:4d}, threshold {theta_n:.4f}: false failures {np.mean(good < theta_n):.3f} (target 0.01), "
+          f"power {np.mean(bad < theta_n):.3f} (target 0.90)")
+```
+With the size from @eq-ops-test-size the simulated false-failure rate is close
+to 1 % and the power close to 90 % — the normal approximation is good at these
+sizes. With half the examples, keeping $\alpha$ at 1 % forces the threshold
+lower and the power falls to about two thirds: the test would let one 5-point
+regression in three through. Note what the test needs to be *automated*: a fixed evaluation set
+(or one sampled from a fixed pool), the reference accuracy $p_0$ measured with
+far more data than the test uses, and the threshold computed, not chosen by
+feel. @sec-ch-ops-cicd compares two models on the **same** examples, which
+needs fewer of them.
+:::
+
+::: {.project-link}
+**In the project.** The project asks for tests of the API and of the model's
+behaviour. For the API: a session-scoped client fixture (the transformer is
+expensive to load), contract tests of the schema and status codes, rejection
+of empty and too long inputs, labels always in the three expected classes,
+probabilities summing to one (@sec-ops-pytest). For the model: a few clear
+positive and negative examples as minimum-functionality tests, plus invariance
+and directional tests whose tolerances are written down
+(@exr-ops4-model-medium) — and, if a quality threshold is asserted, a sample
+size and threshold computed for chosen error rates (@exr-ops4-model-hard).
+Ruff in check mode and the tests make the first stage of the pipeline
+(@exr-ops4-lint-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Tests that never run**: names not starting with `test`, files outside
+  discovery, skipped tests forgotten.
+- **Function-scoped fixtures for expensive resources** — and session-scoped
+  fixtures that tests mutate.
+- **Coverage as a goal**: lines executed are not behaviours checked.
+- **Formatting and linting confused**: the formatter fixes layout, not bugs.
+- **Accuracy thresholds chosen by feel** on small evaluation sets: flaky
+  tests or tests that cannot fail.
+- **Behavioural tests with zero tolerance** on models trained on noisy labels.
+- **Testing the model's training data**: evaluation examples must be unseen
+  (@sec-leakage).
+:::
+
+## Summary
+
+- Tests are executable specifications; the pyramid favours many fast unit
+  tests. ML systems add data and model tests to the usual infrastructure
+  tests (ML Test Score sections).
+- pytest: discovery by name, rewritten assertions, fixtures with scopes and
+  teardown, parametrisation, markers, `tmp_path`, coverage via `pytest-cov`.
+  A FastAPI service is tested in-process with `TestClient`: schema, status
+  codes, contract.
+- Ruff lints (Pyflakes, pycodestyle, bugbear, isort, pyupgrade rules) and
+  formats (Black style). A formatter is safe because it is idempotent and
+  preserves the AST; CI runs both in check mode, pre-commit runs them before
+  commits.
+- Behavioural tests (MFT, INV, DIR) measure capabilities as failure rates.
+  Quality tests are statistical: the Wilson interval
+  @eq-ops-wilson estimates accuracy; @eq-ops-test-size sizes a test for a
+  chosen false-failure rate and power.
+
+## Exercises
+
+::: {#exr-ops4-slices}
+**Accuracy by slice.** Compute the accuracy of the local model, with a Wilson
+interval, on three slices of a large evaluation set: posts with a negation,
+posts with an emoji, posts with more than ten words. Which slices are
+significantly worse than the overall accuracy?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+ev = ob.make_posts(20_000, seed=90)
+pred = model.predict(ev.text)
+ok = pred == ev.label.to_numpy()
+slices = {"all": np.ones(len(ev), bool),
+          "negation": ev.text.str.contains(r"\bnot\b", regex=True).to_numpy(),
+          "emoji": ev.text.str.contains(r"[^\w\s]", regex=True).to_numpy(),
+          "more than ten words": (ev.text.str.split().str.len() > 10).to_numpy()}
+for name, m in slices.items():
+    lo, hi = wilson(ok[m].sum(), m.sum())
+    print(f"{name:20s} n = {m.sum():5d}  accuracy {ok[m].mean():.4f}  95% [{lo:.4f}, {hi:.4f}]")
+```
+Negated posts are clearly worse — their interval lies entirely below the
+overall accuracy; emojis help (they carry the sentiment in this generator).
+Slice tests belong to the "model" section of the ML Test Score; the intervals
+keep a small slice from being declared "worse" by noise.
+:::
+
+::: {#exr-ops4-flaky}
+**Flaky suites.** A suite has 40 independent statistical tests, each with a
+false-failure rate of 1 %. What is the probability that a good model fails at
+least one of them? What per-test rate keeps the suite's false-failure rate
+below 1 %, and what does that cost in sample size for one test sized as in
+@exr-ops4-model-hard?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+m_tests = 40
+print(f"P(at least one false failure) = {1 - 0.99**m_tests:.3f}")
+alpha_each = 0.01 / m_tests                     # Bonferroni: union bound
+za_old, za_new, zb = norm.ppf(0.99), norm.ppf(1 - alpha_each), norm.ppf(0.90)
+n_old = ((za_old * np.sqrt(p0 * (1 - p0)) + zb * np.sqrt(p1 * (1 - p1))) / (p0 - p1)) ** 2
+n_new = ((za_new * np.sqrt(p0 * (1 - p0)) + zb * np.sqrt(p1 * (1 - p1))) / (p0 - p1)) ** 2
+print(f"per-test rate {alpha_each:.5f}; sample size x{n_new / n_old:.2f}")
+```
+With 40 tests at 1 % each, a good model fails at least one a third of the
+time — the suite is flaky by construction. By the union bound, a per-test rate
+of $0.01/40$ keeps the suite below 1 % (Bonferroni's correction), at the cost
+of about 1.7 times the sample size for each test. @sec-ch-ops-monitor meets the
+same problem with drift tests run on many windows.
+:::
+
+::: {#exr-ops4-baseline}
+**A baseline test.** Write a test that the local model beats a
+majority-class baseline and a keyword baseline (positive if it contains a
+word of `ob.POS`, negative if of `ob.NEG`, neutral otherwise) on the same
+evaluation set, with a paired comparison. By how much does it beat each?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def keyword(text):
+    words = set(text.split())
+    pos, neg = len(words & set(ob.POS)), len(words & set(ob.NEG))
+    return 2 if pos > neg else 0 if neg > pos else 1
+
+y_ev = ev.label.to_numpy()
+majority = np.full(len(ev), np.bincount(train.label).argmax())
+kw = np.array([keyword(t) for t in ev.text])
+for name, b in (("majority", majority), ("keyword", kw)):
+    win, loss = np.sum((pred == y_ev) & (b != y_ev)), np.sum((pred != y_ev) & (b == y_ev))
+    print(f"vs {name:8s}: baseline accuracy {np.mean(b == y_ev):.4f}; model wins {win}, loses {loss} "
+          f"-> difference {(win - loss) / len(ev):+.4f}")
+```
+The model beats the majority class by a wide margin and the keyword rule by a
+smaller but large one (the rule fails on negations and mixed posts). Counting
+wins and losses on the *same* examples is the basis of the paired test of
+@sec-ch-ops-cicd; a model that cannot beat a keyword list does not deserve the
+complexity of an ML pipeline — the "baseline" test of the ML Test Score.
+:::
+
+## Further reading {.unnumbered}
+
+- @pytest2026 — "How-to guides": fixtures (scopes, `conftest.py`),
+  parametrisation, markers, assertion introspection; @hypothesis2026 for
+  property-based testing.
+- @ruff2026 — rules and configuration; @black2026 — the style and the
+  AST-equivalence check; @precommit2026 — hooks.
+- @ribeiro2020 — CheckList: capabilities × test types (§2–3), and what it
+  found in commercial sentiment models (§4).
+- @breck2017, §II–IV — the data, model and infrastructure tests.
+- @wilson1927 and @brown2001 — the score interval and why the Wald interval
+  performs poorly; @cohn2009, ch. 16 — the test automation pyramid.

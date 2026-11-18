@@ -390,6 +390,113 @@ for style, depth and structure**: read one chapter (e.g.
   installed.
 - Rendering `01-rest-apis.qmd` ≈ 2–3 min.
 
+## Notes for Part VII (MLOps: machine learning in production, `mlops/`)
+
+- Status (2026-11-18): **phase 1 complete** — overview and the eight theory
+  chapters; the project chapter (phase 2) is pending, blocked on two
+  decisions asked to the author (below). The course has eight modules (zip:
+  intro to MLOps; venv/Git/model registry; serving with FastAPI; tests and
+  linting; Docker and deployment; CI/CD with GitHub Actions; monitoring with
+  drift, Compose, Grafana, alerts; orchestration with Airflow) — they differ
+  from the topics proposed in the author's message, and the zip was followed
+  as instructed. Files: `01-mlops` (`sec-ch-ops-intro`), `02-reproducibility`
+  (`sec-ch-ops-repro`), `03-serving` (`sec-ch-ops-serving`), `04-testing`
+  (`sec-ch-ops-testing`), `05-deployment` (`sec-ch-ops-deploy`), `06-cicd`
+  (`sec-ch-ops-cicd`), `07-monitoring` (`sec-ch-ops-monitor`),
+  `08-orchestration` (`sec-ch-ops-orch`); project to come as
+  `09-project-sentiment` (`sec-ch-ops-project`). Label stem `ops`
+  (`sec-ops-…`, `thm-ops-…`, `prp-ops-…`, `eq-ops-…`, `fig-ops-…`); exercises
+  `exr-ops<N>-<section>-easy|medium|hard` and `exr-ops<N>-<name>`.
+- Formulas proved (for later reference): churn bounds `@prp-ops-churn`, ML
+  Test Score decomposition `@prp-ops-mltestscore`, summation error
+  `@prp-ops-summation`, commit authenticates history `@prp-ops-commit`,
+  load-once `@prp-ops-load-once`, temperature scaling `@prp-ops-temperature`,
+  batching `@prp-ops-batching`, Wilson `@prp-ops-wilson`, test size
+  `@prp-ops-test-size`, formatter idempotence `@prp-ops-formatter`, canary
+  size `@prp-ops-canary`, stage order `@prp-ops-stage-order`, critical path
+  `@prp-ops-critical-path`, McNemar `@prp-ops-mcnemar`, burn rate
+  `@prp-ops-burn`, histogram quantiles `@prp-ops-hist-quantile`, PSI =
+  Jeffreys `@prp-ops-psi`, KS/DKW size `@prp-ops-ks-size`, BBSE
+  `@thm-ops-bbse`, EM priors `@prp-ops-em-prior`, CUSUM `@prp-ops-cusum`, Kahn
+  `@thm-ops-kahn`, greedy bounds `@prp-ops-greedy`, backfill idempotence
+  `@prp-ops-backfill`, retraining period `@prp-ops-retrain-period`.
+- Helper `mlops/opsbook.py`: `setup()` (Part III style), `make_posts()` —
+  synthetic posts with labels 0/1/2 and switchable shifts (`prior`, `topics`,
+  `slang_rate`, `extra_words`, `emoji_rate`, `swap` for concept shift,
+  `noise` = annotation noise 6 %; the same seed with `noise=0` gives the same
+  texts with the true labels) — `train_model()` (TF-IDF 1–2-grams + logistic
+  regression, accuracy ≈ 0.93 against noisy labels, ≈ 0.99 against true
+  ones), `SERVICE_APP`/`make_service()` (the FastAPI service reused by
+  chapters 3–7; it has an `OBSERVERS` hook for metrics; keep it Ruff-clean:
+  chapter 6 lints it in CI), `write/show/sh/run/mask/project/server`,
+  `tool(name)` (Prometheus 3.16.0, promtool, Alertmanager 0.35.0, amtool,
+  actionlint 1.7.12, act 0.2.98, CNCF Distribution registry 3.1.2, from
+  GitHub releases into `~/.cache/opsbook-tools`), `venv_python(name)`
+  (separate venvs in `~/.cache/opsbook-venvs`: `mlflow` = MLflow 3.18.0 +
+  scikit-learn 1.9.1; `airflow` = Apache Airflow 3.4.0 with its constraints
+  file for Python 3.13, plus scikit-learn/pandas/joblib for the tasks). `run`
+  uses `GIT_CONFIG_GLOBAL=/dev/null` (the sandbox's global Git config signs
+  commits — the signature leaked into an output once) and `mask` strips ANSI
+  colours. Docker builds reuse `containers/ctrbook.py` (local base images).
+- Environment (sandbox, verified 2026-11-18): huggingface.co, hf-mirror,
+  download.pytorch.org, mlflow.org, zenodo.org, dagshub.com, kaggle.com,
+  UCI, dl.grafana.com and every image registry unreachable; PyPI, npm,
+  raw.githubusercontent.com, GitHub release downloads and anonymous `git
+  clone` of public GitHub repositories work. **Grafana cannot be installed**
+  (binaries only on dl.grafana.com): its provisioning and dashboard JSON are
+  written and validated (YAML parses, data-source uids, no overlapping
+  panels, every PromQL query returns data from the live Prometheus) but not
+  rendered; the Compose file puts Grafana in a `dashboards` profile.
+  Prometheus/Alertmanager run as binaries and in Compose as local images
+  (`local/prometheus:latest`, `local/alertmanager:latest`, built from the
+  binaries on `local/ubuntu:noble`, `WORKDIR /prometheus` so Alertmanager can
+  write its data). MLflow 3.18 refuses the file store (maintenance mode) and
+  `mlflow-skinny` has no registry: the full `mlflow` with `sqlite:///` is used.
+  **act** runs workflows with `-P ubuntu-latest=-self-hosted` (on the host;
+  no runner images reachable); act's own Git client cannot clone actions
+  through the proxy ("authentication required"), so `actions/setup-python@v7`
+  and `actions/cache@v6` are cloned with plain `git` and passed with
+  `--local-repository`; `actions/checkout` is handled by act itself; the
+  workflow skips `setup-python` with `if: ${{ !env.ACT }}`. Docker push/pull
+  goes to a local `registry` on 127.0.0.1:5000 (127.0.0.0/8 is insecure by
+  default and in dockerd's NoProxy).
+- Versions: Python 3.13.18, scikit-learn 1.9.1, NumPy 2.5.3, SciPy 1.18.1,
+  pandas 3.0.5, FastAPI 0.163.2, Pydantic 2.13.5, uvicorn 0.54.0, httpx
+  0.28.1, pytest 9.1.1, pytest-cov 7.1.0, Hypothesis 6.170.15, Ruff 0.17.5
+  (use `python -m ruff`: an older `ruff` 0.16.9 is first on PATH),
+  prometheus-client 0.26.0, Docker 29.10.0, Compose 5.7.1. Pitfalls met:
+  Hypothesis `st.characters` takes `min_codepoint`/`max_codepoint` and
+  `st.text(alphabet=...)` accepts only one-character elements; FastAPI's
+  `TestClient` waits for background tasks (measure shadow latency with
+  uvicorn); `app.mount("/metrics", make_asgi_app())` redirects `/metrics` to
+  `/metrics/` (clients need `follow_redirects=True`; Prometheus follows);
+  Airflow 3 `dags test` needs `airflow db migrate` first and the tasks'
+  dependencies in Airflow's venv; patch generated DAG files with an
+  indentation-aware helper (string replaces with the wrong indentation fail
+  silently).
+- Data: only synthetic posts in the theory chapters (no real person's text).
+  **Pending decisions for phase 2 (asked 2026-11-18, no answer yet):**
+  (1) the RoBERTa weights cannot be downloaded (HF unreachable) — options:
+  the author publishes the original files as a release asset of
+  `ai-projects` (read pinned by SHA-256, exported once to ONNX and served
+  with onnxruntime + tokenizers), or publishes ONNX directly, or the service
+  uses torch; (2) project data — DynaSent v1.1 (CC BY 4.0, explicit in its
+  README, 3 classes, on raw.githubusercontent; Yelp sentences, Round 1
+  selected adversarially against RoBERTa) recommended; TweetEval sentiment
+  (in-domain, licence unclear: needs an explicit exception like
+  `fruits.csv`); GoEmotions (Apache 2.0 on the repo, Reddit, sentiment
+  derived from emotions); or DynaSent + GoEmotions as a real domain shift;
+  (3) Grafana as above (or the author publishes the OSS tarball); (4)
+  whether a real GitHub Actions workflow for `mlops/_sentiment/**` should be
+  added to this repository, or the project's workflow stays inert and is run
+  with act. The reference implementation goes to `mlops/_sentiment` (no
+  author solution in `ai-projects` yet).
+- Render times (2 CPUs): `07-monitoring` ≈ 5–6 min (Compose build + two
+  minutes of traffic for the alert), `08-orchestration` ≈ 5 min (about twenty
+  `airflow dags test` runs), `06-cicd` ≈ 1–2 min (act runs), `05-deployment`
+  ≈ 1.5 min (image builds, registry), the others < 1 min; the whole part
+  ≈ 15–20 min when re-executed.
+
 ## Pending work on earlier parts
 
 - Add the graded **Practice** blocks (Easy / Medium / Hard with Hint and

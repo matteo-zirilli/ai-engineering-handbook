@@ -1,0 +1,9 @@
+jupyter: python3
+# Part VII: ordinary Python cells, shown with their outputs. Every chapter starts
+# with a hidden setup cell that imports mlops/opsbook.py (Part III's figure
+# style, the synthetic sentiment data, helpers for files, commands and local
+# servers). Cells that print files or command transcripts as Markdown are
+# hidden and declare `output: asis`. Everything runs on the build machine:
+# servers on 127.0.0.1, Docker images built from local base images (Part V),
+# Prometheus/Alertmanager/actionlint/act downloaded from their GitHub releases,
+# MLflow and Airflow in separate virtual environments (see CLAUDE.md).

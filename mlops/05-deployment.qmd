@@ -1,0 +1,1066 @@
+# Deploying a model service {#sec-ch-ops-deploy}
+
+> *"Deployment and release are separate actions."* — Jez Humble and David
+> Farley, 2010 [@humble2010, ch. 10]
+
+```{python}
+#| echo: false
+import opsbook as ob
+ob.setup()
+import json, os, re, sys, time, threading, statistics
+from pathlib import Path
+from importlib.metadata import version
+import numpy as np
+import matplotlib.pyplot as plt
+import joblib, httpx
+from scipy.stats import norm
+sys.path.insert(0, str(Path("..") / "containers"))
+import ctrbook as cb
+cb.ensure_base_images()
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- explain what **deploying** means — environments, promotion of immutable
+  artefacts, configuration through the environment — and why deploying is not
+  the same as **releasing**;
+- write a lean, deterministic **Dockerfile** for a model service (pinned
+  dependencies installed before the code, a non-root user, a health check, the
+  exec form), choose between **baking** the model into the image and
+  **fetching** it at start, build, **push to a registry**, pull and run it;
+- compare **release strategies** — recreate, rolling, blue/green, shadow,
+  canary, A/B — and compute, with a proof, how much traffic a **canary** needs
+  to detect a given degradation;
+- implement a **shadow** deployment and a canary with **automatic rollback**
+  driven by a metric.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What it means to deploy; what containers are; Docker; writing a Dockerfile;
+building, registering and running an image.
+:::
+
+## What deploying means {#sec-ops-deploy-what}
+
+### From an artefact to a running service
+
+To **deploy** is to install a version of the software in an **environment**
+where it runs — a developer's laptop, a shared **staging** environment that
+imitates production, **production** itself — and to make it reachable. Three
+principles make deployments boring, which is the goal [@humble2010, ch. 10]:
+
+1. **Build once, promote the same artefact.** The image tested in staging is
+   the image that runs in production, identified by its digest, not rebuilt
+   from the same commit (a rebuild could pick up a different base image or
+   package — @sec-ops-envs). Environments differ in **configuration** only.
+2. **Configuration lives in the environment**, not in the code or the image:
+   the model version to load, URLs, credentials, limits come from environment
+   variables or mounted files, so that one image serves every environment
+   [@wiggins2011, §III]. Secrets are never baked into images (anyone who can
+   pull the image can read them).
+3. **Deploying is not releasing.** Deploying installs a version; releasing
+   exposes users to it. Keeping them separate — a new version deployed but
+   receiving no traffic, or a feature present but switched off by a flag —
+   makes it possible to verify before exposing, and to roll back by moving
+   traffic instead of rebuilding.
+
+Part V introduced the machinery: containers isolate a process with
+namespaces and cgroups, images are stacks of content-addressed layers, a
+Dockerfile describes how to build them, Kubernetes runs and replaces them
+(@sec-ch-ctr-containers). This chapter applies it to the model service of
+@sec-ch-ops-serving.
+
+### Configuration, validated at start
+
+The service reads two settings (`MODEL_PATH`, `MODEL_VERSION`). A service
+with more settings should read them in **one place**, validate them, and
+refuse to start with an invalid configuration — failing at start-up, where
+the rollout stops (@prp-ctr-rollout), instead of at the first request:
+
+```{python}
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Settings:
+    model_path: Path
+    model_version: str
+    max_texts: int = 64
+    log_level: str = "info"
+
+    @classmethod
+    def from_env(cls, env=os.environ) -> "Settings":
+        s = cls(model_path=Path(env.get("MODEL_PATH", "model.joblib")),
+                model_version=env.get("MODEL_VERSION", ""),
+                max_texts=int(env.get("MAX_TEXTS", "64")),
+                log_level=env.get("LOG_LEVEL", "info").lower())
+        problems = []
+        if not s.model_path.is_file():
+            problems.append(f"MODEL_PATH {s.model_path} is not a file")
+        if not re.fullmatch(r"[\w.\-]+", s.model_version):
+            problems.append("MODEL_VERSION must be a non-empty identifier")
+        if not 1 <= s.max_texts <= 1000:
+            problems.append("MAX_TEXTS must be in 1..1000")
+        if s.log_level not in {"debug", "info", "warning", "error"}:
+            problems.append(f"unknown LOG_LEVEL {s.log_level!r}")
+        if problems:
+            raise SystemExit("invalid configuration: " + "; ".join(problems))
+        return s
+
+train = ob.make_posts(3000, seed=1)
+model = ob.train_model(train.text, train.label)
+svc = ob.make_service(ob.project("service"), model)
+print(ob.mask(str(Settings.from_env({"MODEL_PATH": str(svc / "model.joblib"), "MODEL_VERSION": "2026-11-18.1"}))))
+try:
+    Settings.from_env({"MODEL_PATH": "missing.joblib", "MAX_TEXTS": "5000"})
+except SystemExit as e:
+    print(ob.mask(str(e)))
+```
+
+All problems are reported at once, before anything starts. Libraries such as
+`pydantic-settings` do the same declaratively.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops5-what-easy}
+## Easy — code, configuration or secret?
+For each item say whether it belongs in the code, in the image, in
+configuration (environment), or in a secret store — and why: (a) the label
+names `negative/neutral/positive`; (b) the model version served in
+production; (c) the token to pull images from the registry; (d) the maximum
+number of texts per request; (e) the Python dependencies; (f) the URL of the
+metrics server; (g) the model weights.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Ask: does it change between environments? Does it change without a code
+change? Would it be dangerous if everyone who can read the image could read
+it?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+(a) **Code**: the mapping is part of what the model *means*; it changes only
+with the model, and tests check it. (b) **Configuration**: the same image can
+serve different versions in staging and production (or the version is baked
+together with the weights, see (g)). (c) **Secret**: credentials go to a
+secret store and reach the process at run time, never into an image or a
+repository. (d) **Configuration** with a default in code: operators may tune
+it. (e) **Image**: dependencies are installed at build time from the lock file
+— never at start-up. (f) **Configuration**: differs per environment. (g)
+Either **image** (baked: the image is the complete, immutable artefact) or a
+**model store** referenced by configuration and verified by hash —
+@exr-ops5-image-hard compares the two. The common mistake is an image per
+environment, which breaks "build once, promote the same artefact".
+:::
+
+::: {#exr-ops5-what-medium}
+## Medium — refuse to start
+Make the service of @sec-ch-ops-serving use `Settings.from_env()` in its
+lifespan, and show with uvicorn that (i) a valid configuration starts and
+answers `/ready`, (ii) an invalid one makes the process exit at start with a
+clear message and a non-zero status, before listening on the port.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+An exception raised in the lifespan aborts start-up; uvicorn then exits. Run
+the server as a subprocess and read its exit code and output.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+cfg_dir = ob.project("cfg_service")
+joblib.dump(model, cfg_dir / "model.joblib")
+settings_src = '''
+import os, re
+from dataclasses import dataclass
+from pathlib import Path
+
+@dataclass(frozen=True)
+class Settings:
+    model_path: Path
+    model_version: str
+
+    @classmethod
+    def from_env(cls):
+        s = cls(Path(os.environ.get("MODEL_PATH", "model.joblib")), os.environ.get("MODEL_VERSION", ""))
+        problems = []
+        if not s.model_path.is_file():
+            problems.append(f"MODEL_PATH {s.model_path} is not a file")
+        if not re.fullmatch(r"[\\w.\\-]+", s.model_version):
+            problems.append("MODEL_VERSION must be a non-empty identifier")
+        if problems:
+            raise SystemExit("invalid configuration: " + "; ".join(problems))
+        return s
+'''
+(cfg_dir / "settings.py").write_text(settings_src)
+app_src = ob.SERVICE_APP.replace(
+    'STATE["model"] = joblib.load(os.environ.get("MODEL_PATH", "model.joblib"))\n    STATE["version"] = os.environ.get("MODEL_VERSION", "dev")',
+    'from settings import Settings\n    settings = Settings.from_env()\n    STATE["model"] = joblib.load(settings.model_path)\n    STATE["version"] = settings.model_version')
+assert "Settings.from_env" in app_src
+(cfg_dir / "app.py").write_text(app_src)
+
+with ob.server("app:app", cwd=cfg_dir, env={"MODEL_VERSION": "v7", "MODEL_PATH": "model.joblib"}) as (base, _):
+    print("valid:", httpx.get(f"{base}/ready").json())
+port = ob.free_port()
+p = ob.run(f"{sys.executable} -m uvicorn app:app --port {port}", cwd=cfg_dir, timeout=60,
+           env={"MODEL_VERSION": "", "MODEL_PATH": "nowhere.joblib", "PYTHONPATH": str(cfg_dir)})
+print("invalid: exit status", p.returncode)
+print("\n".join(l for l in ob.mask(p.stderr).splitlines() if "invalid configuration" in l or "startup failed" in l.lower()))
+```
+The valid configuration serves; the invalid one stops during start-up with
+both problems listed and a non-zero exit status — in Kubernetes the new pod
+would never become ready, and a rolling update would stop with the old
+version still serving (@prp-ctr-rollout). The anti-pattern is a service that
+starts "successfully" and fails on every request.
+:::
+
+::: {#exr-ops5-what-hard}
+## Hard — one image, two environments
+Simulate staging and production with two uvicorn processes started from the
+**same** directory (standing for the same image) with different
+configurations: staging serves model version `v8` (a new model), production
+`v7`. Write a **smoke test** — a few requests run after each deployment — that
+checks readiness, the served version against the expected one, the label set,
+and the answer to two unambiguous posts, and returns a pass/fail verdict per
+environment. Then "deploy" a broken configuration to staging (a model file
+whose classes are in a different order) and show that the smoke test stops
+it.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A model whose classes are permuted still returns valid JSON with valid labels:
+only checks of *meaning* — clear posts with a known answer — can catch it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+env_dir = ob.project("environments")
+(env_dir / "app.py").write_text(ob.SERVICE_APP)
+joblib.dump(model, env_dir / "v7.joblib")
+joblib.dump(ob.train_model(ob.make_posts(3000, seed=2).text, ob.make_posts(3000, seed=2).label), env_dir / "v8.joblib")
+broken = ob.train_model(train.text, (train.label + 1) % 3)       # labels shifted: classes mean something else
+joblib.dump(broken, env_dir / "v8-broken.joblib")
+
+def smoke(base, expected_version):
+    checks = {}
+    with httpx.Client(base_url=base, timeout=5) as c:
+        ready = c.get("/ready").json()
+        checks["ready"] = ready.get("status") == "ready"
+        checks["version"] = ready.get("model_version") == expected_version
+        r = c.post("/v1/predict", json={"texts": ["love the new phone, brilliant camera",
+                                                  "the battery is awful and the app crashes"]}).json()
+        labels = [p["label"] for p in r["predictions"]]
+        checks["label set"] = set(labels) <= {"negative", "neutral", "positive"}
+        checks["meaning"] = labels == ["positive", "negative"]
+    return all(checks.values()), checks
+
+for env_name, ver, file in (("production", "v7", "v7.joblib"), ("staging", "v8", "v8.joblib"),
+                            ("staging", "v8", "v8-broken.joblib")):
+    with ob.server("app:app", cwd=env_dir, env={"MODEL_PATH": file, "MODEL_VERSION": ver}) as (base, _):
+        ok, checks = smoke(base, ver)
+    print(f"{env_name:10s} {file:17s} {'PASS' if ok else 'FAIL'} {checks}")
+```
+Both correct deployments pass; the model trained with permuted classes passes
+every structural check — ready, right version, valid labels — and fails only
+the check of meaning. Smoke tests are cheap enough to run after every
+deployment, in every environment, and are the gate before any traffic is
+released to a new version. Testing only status codes is the usual gap.
+:::
+
+## A container image for the model service {#sec-ops-image}
+
+### The Dockerfile
+
+A good image for a Python service is **lean** (only what runs), **cache
+friendly** (the slow, rarely changing steps first, @thm-ctr-prefix),
+**deterministic** (pinned base and dependencies), and **safe** (no root, no
+secrets). For the service:
+
+```{python}
+#| echo: false
+#| output: asis
+img = ob.project("image")
+(img / "app.py").write_text(ob.SERVICE_APP)
+joblib.dump(model, img / "model.joblib")
+pins = ["fastapi", "uvicorn", "pydantic", "scikit-learn", "numpy", "scipy", "joblib", "threadpoolctl"]
+ob.write("requirements.txt", "\n".join(f"{p}=={version(p)}" for p in pins), base=img)
+ob.write(".dockerignore", """
+    __pycache__/
+    *.pyc
+    tests/
+    .git/
+""", base=img)
+ob.write("Dockerfile", """
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+
+    ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+    WORKDIR /app
+
+    # 1. dependencies: change rarely, slow to install -> first, cached
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+
+    # 2. an unprivileged user
+    RUN useradd --create-home --uid 10001 app
+
+    # 3. code and model: change often, cheap to copy -> last
+    COPY app.py model.joblib ./
+    ENV MODEL_PATH=/app/model.joblib MODEL_VERSION=dev
+
+    USER app
+    EXPOSE 8000
+    HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=3 \\
+      CMD ["python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+    CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+""", base=img)
+ob.show("requirements.txt", base=img)
+ob.show("Dockerfile", base=img)
+```
+
+Each choice has a reason. The **requirements are copied and installed before
+the code**: editing `app.py` invalidates only the last layers, so a rebuild
+reuses the slow `pip install` layer — Part V proved that the cache key of a
+step depends on all the steps before it (@thm-ctr-prefix). The versions in
+`requirements.txt` are **the ones the model was trained with**: a model
+pickled by scikit-learn 1.9.1 should be loaded by 1.9.1. `--no-cache-dir`
+keeps pip's download cache out of the image. The process runs as an
+**unprivileged user**. The `HEALTHCHECK` probes **readiness**, so Docker
+reports the container healthy only once the model is loaded; the `CMD` uses the
+**exec form**, so uvicorn is PID 1 and receives the stop signal directly
+(@prp-ctr-pid1). The base image is the local stand-in for
+`python:3.12-slim` built in Part V, since the build machine cannot reach a
+registry.
+
+### Build, push, pull, run
+
+```{python}
+#| echo: false
+#| output: asis
+cb.reset_ids()
+t_cold = cb.build(img, "sentiment:1", extra="--no-cache")
+```
+
+```{python}
+#| echo: false
+T_COLD = f"{t_cold[0] if isinstance(t_cold, tuple) else t_cold:.0f}"
+```
+
+The first build installs the dependencies (`{python} T_COLD` s on the build
+machine). Change one line of the service and rebuild: only the layers after
+the change are rebuilt.
+
+```{python}
+#| echo: false
+#| output: asis
+(img / "app.py").write_text(ob.SERVICE_APP.replace('version="1.0.0"', 'version="1.0.1"'))
+t_warm = cb.build(img, "sentiment:2")
+```
+
+```{python}
+#| echo: false
+T_WARM = f"{t_warm[0] if isinstance(t_warm, tuple) else t_warm:.1f}"
+SIZE_MB = f"{cb.image_size('sentiment:2') / 1e6:.0f}"
+```
+
+`{python} T_WARM` s instead of `{python} T_COLD`. The image weighs about
+`{python} SIZE_MB` MB: the local base image (Ubuntu with Python, about 500 MB)
+plus the scientific stack.
+
+To be deployed elsewhere, an image goes to a **registry**: a server that
+stores layers and manifests by digest and maps `repository:tag` names to
+them [@oci2024distribution]. The build machine cannot reach a public
+registry, so we run the reference implementation of the OCI distribution
+specification — the CNCF Distribution project's `registry` — on the loopback
+interface, push the image, delete it locally, pull it back by digest and run
+it:
+
+```{python}
+#| echo: false
+#| output: asis
+reg_dir = ob.project("registry")
+ob.write("config.yml", f"""
+    version: 0.1
+    storage:
+      filesystem:
+        rootdirectory: {reg_dir / 'data'}
+    http:
+      addr: 127.0.0.1:5000
+""", base=reg_dir)
+import subprocess
+registry = subprocess.Popen([ob.tool("registry"), "serve", str(reg_dir / "config.yml")],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+ob.wait_port(5000)
+cb.sh("docker tag sentiment:2 127.0.0.1:5000/sentiment:1.0.1 && docker push -q 127.0.0.1:5000/sentiment:1.0.1",
+      shown="docker tag sentiment:2 127.0.0.1:5000/sentiment:1.0.1 && docker push 127.0.0.1:5000/sentiment:1.0.1")
+digest = cb.run("docker image inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5000/sentiment:1.0.1").stdout.strip()
+cb.run("docker rmi -f sentiment:2 127.0.0.1:5000/sentiment:1.0.1 >/dev/null")
+cb.sh(f"docker pull -q {digest}", shown="docker pull 127.0.0.1:5000/sentiment@sha256:<digest>")
+port = ob.free_port()
+cb.sh(f"docker run -d --name sentiment-1 -p 127.0.0.1:{port}:8000 -e MODEL_VERSION=1.0.1 {digest} >/dev/null && "
+      f"for i in $(seq 60); do s=$(docker inspect --format '{{{{.State.Health.Status}}}}' sentiment-1); "
+      f"[ \"$s\" = healthy ] && break; sleep 0.5; done; echo health: $s",
+      shown="docker run -d --name sentiment-1 -p 127.0.0.1:PORT:8000 -e MODEL_VERSION=1.0.1 127.0.0.1:5000/sentiment@sha256:<digest>; "
+            "docker inspect --format '{{.State.Health.Status}}' sentiment-1")
+cb.sh(f"curl -s -X POST localhost:{port}/v1/predict -H 'Content-Type: application/json' "
+      "-d '{\"texts\": [\"the support team is rude\"]}'",
+      shown="curl -s -X POST localhost:PORT/v1/predict -H 'Content-Type: application/json' -d '{\"texts\": [\"the support team is rude\"]}'")
+cb.sh("docker exec sentiment-1 id", shown="docker exec sentiment-1 id")
+```
+
+```{python}
+#| echo: false
+_ = cb.run("docker rm -f sentiment-1 >/dev/null 2>&1")
+```
+
+The container runs the bytes that were pushed — pulled **by digest**, not by
+tag (@prp-ctr-merkle) — becomes healthy once the model is loaded, answers the
+request with the version given by the environment, and runs as user 10001.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops5-image-easy}
+## Easy — order for the cache
+These instructions build a model service image, in a bad order. Reorder them
+so that changing `app.py` rebuilds as little as possible, and say which
+layers are rebuilt after (a) a change of `app.py`, (b) a new model file,
+(c) a new version of a dependency.
+```dockerfile
+FROM python:3.12-slim
+COPY . /app
+WORKDIR /app
+RUN pip install --no-cache-dir -r requirements.txt
+RUN useradd --uid 10001 app
+USER app
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`COPY . /app` copies everything, so *any* change invalidates it and every step
+after it — including the slow `pip install`. Copy the requirements alone
+first.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN useradd --uid 10001 app
+COPY model.joblib .
+COPY app.py .
+USER app
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+(a) Only `COPY app.py` (and the metadata steps after it) is rebuilt. (b) The
+model copy and everything after it: the code copy too, a few milliseconds.
+(c) Everything from `COPY requirements.txt` on — unavoidable, since the
+environment changed. In the original order, each of the three changes
+reinstalled all dependencies. If the code changes more often than the model,
+copy the model first (as here); a `.dockerignore` keeps unrelated files from
+invalidating `COPY` steps.
+:::
+
+::: {#exr-ops5-image-medium}
+## Medium — time to ready
+Measure, for the image built above, the time from `docker run` to the first
+successful `/ready` response, over five runs, and the memory used by the
+idle container (`docker stats --no-stream`). Why do orchestrators need a
+start-up grace period, and how would you set it?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Poll `/ready` every 50 ms from the host after `docker run -d`. The
+`--start-period` of the health check (and Kubernetes' startup and readiness
+probes) must cover the slowest observed start.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+cb.run("docker pull -q " + digest)
+starts = []
+for i in range(5):
+    port = ob.free_port()
+    t = time.perf_counter()
+    cb.run(f"docker run -d --name ready-{i} -p 127.0.0.1:{port}:8000 {digest}")
+    while True:
+        try:
+            if httpx.get(f"http://127.0.0.1:{port}/ready", timeout=1).status_code == 200:
+                break
+        except httpx.TransportError:
+            pass
+        time.sleep(0.05)
+    starts.append(time.perf_counter() - t)
+mem = cb.run("docker stats --no-stream --format '{{.MemUsage}}' ready-0").stdout.split("/")[0].strip()
+cb.run("docker rm -f " + " ".join(f"ready-{i}" for i in range(5)))
+print(f"time to ready: median {statistics.median(starts):.2f} s, max {max(starts):.2f} s; idle memory {mem}")
+```
+The service is ready about a second or two after `docker run`, dominated by
+importing the scientific stack and starting uvicorn. A probe that declares the
+container dead before then would kill it in a loop; the start period should
+cover the slowest start with a margin (here a few seconds; for a transformer
+loading hundreds of megabytes, tens of seconds — measure it, as here, on the
+target hardware). Memory per container matters for how many replicas fit on a
+node.
+:::
+
+::: {#exr-ops5-image-hard}
+## Hard — bake the model or fetch it?
+Build a second image that does **not** contain the model: at start it reads
+`MODEL_URL` and `MODEL_SHA256` from the environment, downloads the file,
+verifies its hash and refuses to start on a mismatch. Serve the model file
+from the host over HTTP. Compare the two designs on: image size, time to
+ready, what a rollback means, what a tag or digest identifies, and failure
+modes. Demonstrate the refusal with a wrong hash.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A one-line static server on the host (`python -m http.server --bind
+127.0.0.1`) stands in for a model store; the container reaches the host with
+`--network host` (simplest on Linux). Write the download into a temporary file
+and verify before loading.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+fetch = ob.project("image_fetch")
+(fetch / "requirements.txt").write_text((img / "requirements.txt").read_text())
+fetch_app = ob.SERVICE_APP.replace(
+    '    STATE["model"] = joblib.load(os.environ.get("MODEL_PATH", "model.joblib"))',
+    '''    import hashlib, tempfile, urllib.request
+    data = urllib.request.urlopen(os.environ["MODEL_URL"], timeout=30).read()
+    if hashlib.sha256(data).hexdigest() != os.environ["MODEL_SHA256"]:
+        raise SystemExit("model file does not match MODEL_SHA256: refusing to start")
+    with tempfile.NamedTemporaryFile(suffix=".joblib") as f:
+        f.write(data)
+        f.flush()
+        STATE["model"] = joblib.load(f.name)''')
+(fetch / "app.py").write_text(fetch_app)
+(fetch / "Dockerfile").write_text((img / "Dockerfile").read_text()
+                                  .replace("COPY app.py model.joblib ./", "COPY app.py ./")
+                                  .replace("ENV MODEL_PATH=/app/model.joblib MODEL_VERSION=dev", "ENV MODEL_VERSION=dev")
+                                  .replace("http://127.0.0.1:8000/ready", "http://127.0.0.1:8001/ready")
+                                  .replace('"--port", "8000"', '"--port", "8001"'))
+cb.build(fetch, "sentiment-fetch:1", show_cmd=False, table=False)
+
+store = ob.project("model_store")
+joblib.dump(model, store / "model.joblib")
+good_sha = ob.sha256(store / "model.joblib")
+store_port = ob.free_port()
+static = subprocess.Popen([sys.executable, "-m", "http.server", str(store_port), "--bind", "127.0.0.1"],
+                          cwd=store, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+ob.wait_port(store_port)
+
+def start(sha, name):
+    t = time.perf_counter()
+    cb.run(f"docker run -d --name {name} --network host -e MODEL_URL=http://127.0.0.1:{store_port}/model.joblib "
+           f"-e MODEL_SHA256={sha} sentiment-fetch:1")
+    while time.perf_counter() - t < 30:
+        state = cb.run(f"docker inspect --format '{{{{.State.Running}}}}' {name}").stdout.strip()
+        try:
+            if httpx.get("http://127.0.0.1:8001/ready", timeout=1).status_code == 200:
+                return f"ready after {time.perf_counter() - t:.1f} s"
+        except httpx.TransportError:
+            pass
+        if state == "false":
+            logs = cb.run(f"docker logs {name}").stdout + cb.run(f"docker logs {name}").stderr
+            return "exited: " + next((l for l in logs.splitlines() if "refusing" in l), "?")
+        time.sleep(0.1)
+    return "timeout"
+
+print("correct hash:", start(good_sha, "fetch-ok"))
+cb.run("docker rm -f fetch-ok")
+print("wrong hash:  ", start("0" * 64, "fetch-bad"))
+cb.run("docker rm -f fetch-bad")
+static.terminate()
+print(f"image sizes: baked {cb.image_size(digest) / 1e6:.1f} MB, fetched {cb.image_size('sentiment-fetch:1') / 1e6:.1f} MB "
+      f"(model file {os.path.getsize(store / 'model.joblib') / 1e6:.2f} MB)")
+```
+With the correct hash the service downloads, verifies and serves; with a wrong
+one it exits at start-up with an explicit message, so a rollout would stop.
+The comparison: a **baked** image is one immutable artefact — its digest
+identifies code, environment *and* model, a rollback is "run the previous
+digest", and start-up needs no network; but every new model is a new image,
+and large models make large images. A **fetched** model keeps images small and
+lets one image serve many models, but the deployed thing is now a *pair*
+(image digest, model hash) that must be recorded together, start-up depends on
+the model store being reachable, and forgetting the hash check reintroduces
+"same name, different bytes". For a model of a few hundred megabytes that
+changes less often than the code, baking is usually the simpler choice.
+:::
+
+## Release strategies {#sec-ops-release}
+
+### From deployed to released
+
+Once a new version is deployed, how does traffic move to it? The main
+strategies, from simplest to most cautious:
+
+| Strategy | How traffic moves | Rollback | Cost |
+|---|---|---|---|
+| **recreate** | stop old, start new | redeploy old | downtime |
+| **rolling update** | replace instances a few at a time (@prp-ctr-rollout) | roll back the same way | mixed versions for a while |
+| **blue/green** | full new environment (green) next to the old (blue); switch the router at once | switch back instantly | double capacity during the switch |
+| **shadow** (mirroring) | new version receives a **copy** of the traffic; its answers are logged, never returned | nothing to roll back | double compute; no user exposure |
+| **canary** | a small fraction of real traffic goes to the new version; increased if metrics stay healthy | send 0 % to it | needs metrics and a decision rule |
+| **A/B test** | traffic split to measure a **business** effect of two versions | end the test | needs a statistical design |
+
+For models, **shadow** deployment is particularly valuable: the new model sees
+real inputs, its predictions can be compared with the current model's (churn,
+@def-ops-churn) and with labels when they arrive, and no user is affected.
+**Canary** releases then expose a small fraction of users, watching
+operational metrics (errors, latency) and model metrics (prediction
+distribution, @sec-ch-ops-monitor).
+
+### How big must a canary be?
+
+A canary is a statistical test: the new version's error rate $p_1$ is
+compared with the baseline's $p_0$ on the requests each served. Too little
+traffic, and a real degradation goes unnoticed; too much, and the degradation
+hurts many users before it is caught.
+
+::: {#prp-ops-canary}
+## Sample size for a two-proportion comparison
+To detect an increase of the error rate from $p_0$ to $p_1 = p_0 + \delta$
+with a one-sided test of level $\alpha$ and power $1 - \beta$, using the
+normal approximation and $n$ requests in each arm, it suffices that
+$$
+n \;\ge\; \frac{\Bigl(z_{1-\alpha}\sqrt{2\bar p(1 - \bar p)} +
+z_{1-\beta}\sqrt{p_0(1 - p_0) + p_1(1 - p_1)}\Bigr)^2}{\delta^2},
+\qquad \bar p = \frac{p_0 + p_1}{2}.
+$$ {#eq-ops-canary}
+If the canary receives a fraction $f$ of a traffic of $\lambda$ requests per
+second, collecting $n$ requests takes $n/(f\lambda)$ seconds.
+:::
+
+*In one line:* the difference of two error rates is approximately normal;
+requiring the decision threshold to be $z_{1-\alpha}$ standard errors above 0
+under "no change" and $z_{1-\beta}$ below $\delta$ under "degraded" gives $n$
+— proportional to $1/\delta^2$.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-canary
+Let $\hat p_0, \hat p_1$ be the observed rates in the two arms, independent,
+each approximately normal with variance $p(1-p)/n$. The test rejects "no
+increase" when $D = \hat p_1 - \hat p_0 > c$. Under the null ($p_1 = p_0$,
+estimated by the pooled $\bar p$), $D \approx \mathcal N(0, 2\bar p(1 -
+\bar p)/n)$, so level $\alpha$ requires $c = z_{1-\alpha}\sqrt{2\bar p(1 -
+\bar p)/n}$. Under the alternative, $D \approx \mathcal N(\delta, (p_0(1 - p_0)
++ p_1(1 - p_1))/n)$, and power $1 - \beta$ requires $\delta - c \ge
+z_{1-\beta}\sqrt{(p_0(1-p_0) + p_1(1-p_1))/n}$. Substituting $c$ and solving
+for $n$ gives @eq-ops-canary. Requests arrive to the canary at rate $f\lambda$,
+so $n$ of them take $n/(f\lambda)$ seconds. $\blacksquare$
+:::
+
+```{python}
+def canary_n(p0, delta, alpha=0.05, power=0.9):
+    p1, pbar = p0 + delta, p0 + delta / 2
+    za, zb = norm.ppf(1 - alpha), norm.ppf(power)
+    return int(np.ceil((za * np.sqrt(2 * pbar * (1 - pbar)) + zb * np.sqrt(p0 * (1 - p0) + p1 * (1 - p1))) ** 2 / delta**2))
+
+for p0, delta in ((0.01, 0.01), (0.01, 0.005), (0.05, 0.02), (0.10, 0.02)):
+    n = canary_n(p0, delta)
+    print(f"baseline {p0:.1%}, increase {delta:.1%}: n = {n:6d} per arm; "
+          f"at 50 req/s with 5 % to the canary: {n / (0.05 * 50) / 60:5.1f} min")
+```
+
+Rare errors and small increases need many requests: detecting a rise from
+1 % to 1.5 % takes several thousand requests per arm. The widget shows how
+$n$ and the waiting time depend on the baseline, the increase and the share of
+traffic.
+
+```{python}
+#| echo: false
+ojs_define(canary_ref=canary_n(0.01, 0.01))
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof canP0 = Inputs.range([0.001, 0.2], {value: 0.01, step: 0.001, label: "baseline error rate p₀"})
+viewof canFrac = Inputs.range([0.01, 0.5], {value: 0.05, step: 0.01, label: "share of traffic to canary f"})
+viewof canRate = Inputs.range([1, 500], {value: 50, step: 1, label: "traffic λ (requests/s)"})
+viewof canAlpha = Inputs.radio([0.01, 0.05, 0.1], {value: 0.05, label: "level α (one-sided)"})
+```
+
+```{ojs}
+//| echo: false
+canRows = {
+  // inverse standard normal CDF (Acklam's rational approximation, relative error < 1.2e-9)
+  const q = p => {
+    const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+    const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
+    const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549671010332161e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+    const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+    const lo = 0.02425;
+    if (p < lo) { const r = Math.sqrt(-2 * Math.log(p)); return (((((c[0]*r+c[1])*r+c[2])*r+c[3])*r+c[4])*r+c[5]) / ((((d[0]*r+d[1])*r+d[2])*r+d[3])*r+1); }
+    if (p > 1 - lo) { const r = Math.sqrt(-2 * Math.log(1 - p)); return -(((((c[0]*r+c[1])*r+c[2])*r+c[3])*r+c[4])*r+c[5]) / ((((d[0]*r+d[1])*r+d[2])*r+d[3])*r+1); }
+    const r = (p - 0.5), s = r * r;
+    return (((((a[0]*s+a[1])*s+a[2])*s+a[3])*s+a[4])*s+a[5])*r / (((((b[0]*s+b[1])*s+b[2])*s+b[3])*s+b[4])*s+1);
+  };
+  const za = q(1 - canAlpha), rows = [];
+  for (const power of [0.8, 0.9, 0.95]) {
+    const zb = q(power);
+    for (let k = 1; k <= 60; k++) {
+      const delta = canP0 * k / 20, p1 = canP0 + delta, pb = canP0 + delta / 2;
+      if (p1 >= 1) break;
+      const n = Math.ceil((za * Math.sqrt(2 * pb * (1 - pb)) + zb * Math.sqrt(canP0 * (1 - canP0) + p1 * (1 - p1))) ** 2 / delta ** 2);
+      rows.push({rel: delta / canP0, minutes: n / (canFrac * canRate) / 60, n, power: `power ${power}`});
+    }
+  }
+  return rows;
+}
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-ops-canary-widget
+//| fig-cap: "Minutes of canary traffic needed to detect a relative increase of the error rate (x axis: increase as a fraction of p₀), for three powers (@eq-ops-canary). Small relative increases of rare errors need hours; doubling the share of traffic to the canary halves the time, at the price of exposing twice as many users."
+Plot.plot({
+  width: 600, height: 300, x: {label: "relative increase δ / p₀", domain: [0, 3]}, y: {label: "minutes of traffic", type: "log", grid: true},
+  color: {legend: true},
+  marks: [Plot.line(canRows, {x: "rel", y: "minutes", stroke: "power", tip: true})]
+})
+```
+:::
+
+The formula assumes a single look at the data. Checking the canary every few
+minutes and stopping at the first "significant" difference inflates the false
+alarm rate — each look is another test (@exr-ops4-flaky). Sequential designs
+spend the error rate across looks; the simplest valid one divides $\alpha$ by
+the number of planned looks (Bonferroni), as in @exr-ops5-release-hard.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops5-release-easy}
+## Easy — size a canary by hand
+The service returns 5xx errors on 0.5 % of requests. A new version should be
+rolled back if it raises this to 1.0 %. With $\alpha = 0.05$ (one-sided) and
+power 0.9, how many requests per arm are needed? With 20 requests per second
+and 10 % of them sent to the canary, how long does the canary run?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$z_{0.95} = 1.645$, $z_{0.9} = 1.282$, $\bar p = 0.0075$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+n = canary_n(0.005, 0.005)
+print(f"n = {n} per arm; at 20 req/s x 10 % = 2 req/s: {n / 2 / 60:.0f} minutes")
+```
+About 5 100 requests per arm, some 40 minutes of canary traffic. Raising the
+canary's share shortens the wait but exposes more users to a possibly broken
+version — the usual compromise is to start small and increase the share in
+steps once the first checks pass.
+:::
+
+::: {#exr-ops5-release-medium}
+## Medium — a shadow deployment
+Write a FastAPI gateway that answers every request with the **primary**
+model and, **after** the response has been sent, runs the **shadow** model on
+the same texts and records whether the two disagree. Send 2 000 posts through
+it, report the shadow's disagreement rate (churn) and its accuracy on the
+posts for which a label is known, and check that the latency seen by clients
+does not include the shadow's work.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+FastAPI's `BackgroundTasks` run after the response is sent. Make the shadow
+model artificially slow (sleep a few milliseconds) to see that clients do not
+wait for it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+sh_dir = ob.project("shadow")
+joblib.dump(model, sh_dir / "primary.joblib")
+joblib.dump(ob.train_model(train.text, train.label, ngram=(1, 1)), sh_dir / "shadow.joblib")  # a candidate
+ob.write("gateway.py", """
+    import time
+    import joblib
+    from fastapi import BackgroundTasks, FastAPI
+
+    primary, shadow = joblib.load("primary.joblib"), joblib.load("shadow.joblib")
+    LOG = []
+    app = FastAPI()
+
+    def run_shadow(texts, primary_labels):
+        time.sleep(0.005)                                  # a slower model
+        LOG.extend(zip(texts, primary_labels, shadow.predict(texts).tolist()))
+
+    @app.post("/v1/predict")
+    def predict(body: dict, background: BackgroundTasks):
+        labels = primary.predict(body["texts"]).tolist()
+        background.add_task(run_shadow, body["texts"], labels)   # runs after the response is sent
+        return {"labels": labels}
+
+    @app.get("/shadow-log")
+    def shadow_log():
+        return LOG
+""", base=sh_dir)
+
+posts = ob.make_posts(2000, seed=40)
+lat = []
+with ob.server("gateway:app", cwd=sh_dir) as (base, _), httpx.Client(base_url=base, timeout=5) as client:
+    for t in posts.text:
+        t0 = time.perf_counter()
+        client.post("/v1/predict", json={"texts": [t]})
+        lat.append(time.perf_counter() - t0)
+    time.sleep(0.5)                                        # let the last shadow tasks finish
+    log = client.get("/shadow-log").json()
+_, p_lab, s_lab = map(np.array, zip(*log))
+y = posts.label.to_numpy()[: len(log)]
+print(f"logged {len(log)} shadow predictions; disagreement {np.mean(p_lab != s_lab):.3f}")
+print(f"accuracy: primary {np.mean(p_lab == y):.4f}, shadow {np.mean(s_lab == y):.4f}")
+print(f"median client latency {1e3 * statistics.median(lat):.2f} ms (the shadow sleeps 5 ms per request)")
+```
+Clients never wait for the shadow: the median latency is well below the
+shadow's 5 ms, because the background task runs after the response has been
+sent. Its predictions are logged and compared offline: here the shadow
+(unigrams only) disagrees with the primary on several percent of the posts and
+is less accurate, so it would not be promoted. Beware of measuring this with
+FastAPI's in-process `TestClient`, which waits for background tasks before
+returning — the latency would then include the shadow's work. In production
+the shadow often runs as a separate service fed by mirrored traffic, so that
+its failures and its load cannot affect the primary at all.
+:::
+
+::: {#exr-ops5-release-hard}
+## Hard — a canary that rolls itself back
+Simulate a canary release: requests arrive one by one; a router sends a
+fraction $f = 10\%$ to the canary. The baseline fails on 0.5 % of requests.
+Every 500 canary requests, compare the two error rates with a one-sided
+two-proportion test, using $\alpha/K$ at each of at most $K = 8$ looks; roll
+back (send 0 % to the canary) at the first significant result, and promote the
+canary if all $K$ looks pass. Estimate over 400 simulated releases (a) the
+probability of rolling back a canary that is **as good** as the baseline,
+(b) the probability of catching a canary that fails on 1.5 % of requests, and
+the number of users exposed to it before the rollback.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Only the counts matter: at each look, draw the number of failures of the
+canary and of the baseline among the new requests from binomial
+distributions. Use the pooled rate in the test statistic. The Bonferroni split
+keeps the overall false-rollback rate below $\alpha$ whatever the dependence
+between looks.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def canary_release(p_base, p_canary, rng, f=0.10, step=500, K=8, alpha=0.05):
+    z_crit = norm.ppf(1 - alpha / K)
+    nb = nc = eb = ec = 0
+    for look in range(1, K + 1):
+        nc += step
+        nb += int(step * (1 - f) / f)                       # baseline requests in the same period
+        ec += rng.binomial(step, p_canary)
+        eb += rng.binomial(int(step * (1 - f) / f), p_base)
+        pool = (eb + ec) / (nb + nc)
+        se = np.sqrt(pool * (1 - pool) * (1 / nb + 1 / nc)) if 0 < pool < 1 else np.inf
+        if (ec / nc - eb / nb) / se > z_crit:
+            return "rollback", nc                           # users exposed to the canary
+    return "promote", nc
+
+rng = np.random.default_rng(11)
+for label, pc in (("as good (0.5 %)", 0.005), ("worse (1.5 %)", 0.015)):
+    outcomes = [canary_release(0.005, pc, rng) for _ in range(400)]
+    rollback = [n for o, n in outcomes if o == "rollback"]
+    exposed = f"median {int(np.median(rollback))} users exposed before rollback" if rollback else ""
+    print(f"canary {label:16s}: rolled back in {len(rollback) / 400:.3f} of releases; {exposed}")
+```
+A canary as good as the baseline is rolled back in about 4 % of releases —
+within the 5 % budget (Bonferroni guarantees at most $\alpha$ whatever the
+dependence between looks); a canary three times worse is caught in every
+simulated release, typically at the first look, after 500 users. Without the split — testing at $\alpha = 0.05$ at each
+of eight looks — the false-rollback rate would be several times higher
+(@exr-ops4-flaky). The same router, with the threshold check replaced by a
+call to the metrics system, is what a progressive-delivery controller does
+on Kubernetes, building on the rolling update of Part V.
+:::
+
+::: {.project-link}
+**In the project.** The project needs a Dockerfile for the service and an
+image that builds and runs locally. Apply @sec-ops-image: a slim Python base
+pinned by version, dependencies from the lock file installed before the code,
+an unprivileged user, a readiness-based health check, the exec form. Decide
+— and write down why — whether the transformer's weights are baked into the
+image or fetched and verified at start (@exr-ops5-image-hard); measure the
+time to ready and memory of the container (@exr-ops5-image-medium), since a
+transformer changes both by orders of magnitude. A smoke test of meaning, not
+just of status codes, belongs after every deployment (@exr-ops5-what-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Rebuilding per environment**: promote one digest; vary configuration.
+- **Secrets in images or in Git**.
+- **`COPY . .` before installing dependencies**: every edit reinstalls them.
+- **Unpinned base and packages**; a model loaded by another scikit-learn
+  version than the one that saved it.
+- **Running as root**; shell-form `CMD` (signals not delivered).
+- **Health checks on liveness only**, or without a start period.
+- **Deploying by tag**: tags move; record digests.
+- **Canaries without a sample-size plan**, or checked repeatedly at full
+  $\alpha$.
+:::
+
+## Summary
+
+- Deploying installs an immutable artefact in an environment; configuration
+  comes from the environment and is validated at start; releasing (exposing
+  users) is a separate, reversible step.
+- A good model-service image: pinned slim base, dependencies (the training
+  versions) before code, a non-root user, a readiness health check, the exec
+  form. Images go to a registry and are pulled and run by digest. Baking the
+  model gives one self-contained artefact; fetching it needs a recorded hash.
+- Release strategies: recreate, rolling, blue/green, shadow, canary, A/B.
+  A canary is a two-proportion test: $n \approx (z_{1-\alpha}\sqrt{2\bar
+  p(1-\bar p)} + z_{1-\beta}\sqrt{p_0q_0 + p_1q_1})^2/\delta^2$ per arm;
+  repeated looks need a split of $\alpha$.
+
+## Exercises
+
+::: {#exr-ops5-blue-green}
+**Blue/green in a few lines.** Implement a router (a FastAPI app) that
+forwards every request to either a "blue" or a "green" upstream service
+(two uvicorn processes with different model versions), with an admin
+endpoint that switches the target atomically. Show that during a switch under
+continuous traffic no request fails and each response comes from exactly one
+version.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+bg = ob.project("bluegreen")
+(bg / "app.py").write_text(ob.SERVICE_APP)
+joblib.dump(model, bg / "blue.joblib")
+joblib.dump(ob.train_model(train.text, train.label, C=1.0), bg / "green.joblib")
+results, errors = [], []
+with ob.server("app:app", cwd=bg, env={"MODEL_PATH": "blue.joblib", "MODEL_VERSION": "blue"}) as (blue, _), \
+     ob.server("app:app", cwd=bg, env={"MODEL_PATH": "green.joblib", "MODEL_VERSION": "green"}) as (green, _):
+    target = {"url": blue}
+    router = FastAPI()
+    upstream = httpx.Client(timeout=5)
+
+    @router.post("/v1/predict")
+    def route(body: dict):
+        return upstream.post(f"{target['url']}/v1/predict", json=body).json()   # one read of the target
+
+    @router.post("/admin/switch")
+    def switch():
+        target["url"] = green if target["url"] == blue else blue
+        return {"now": "green" if target["url"] == green else "blue"}
+
+    with TestClient(router) as client:
+        def traffic():
+            for _ in range(150):
+                r = client.post("/v1/predict", json={"texts": ["the camera is brilliant"]})
+                (results if r.status_code == 200 else errors).append(r.json()["model_version"])
+        workers = [threading.Thread(target=traffic) for _ in range(4)]
+        for w in workers:
+            w.start()
+        time.sleep(0.2)
+        print(client.post("/admin/switch").json())
+        for w in workers:
+            w.join()
+print(f"{len(results)} responses, {len(errors)} errors; versions: "
+      f"{ {v: results.count(v) for v in set(results)} }")
+```
+Every response comes from one version — blue before the switch, green after
+— and none fails, because the router reads the target once per request and
+both upstreams stay up during the switch. Rolling back is the same switch.
+The cost is running both versions at full capacity while the switch is
+pending.
+:::
+
+::: {#exr-ops5-ab}
+**Canary or A/B?** A product team wants to know whether the new model makes
+moderators resolve flagged posts faster. Explain why this is an A/B test
+rather than a canary, what the unit of randomisation should be, and what
+would bias the comparison if the split were by time of day.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+A canary asks "is the new version *broken*?" — operational metrics, a quick
+decision, small exposure. The question here is about a **business effect** of
+a working version, which needs a planned experiment: a fixed sample size for
+the expected effect (@eq-ops-canary for proportions, its analogue for means),
+a pre-registered metric, and randomisation. The unit should be the
+**moderator** (or the post queue), not the request: a moderator who sees both
+models alternately would contaminate the comparison. Splitting by time of
+day confounds the model with everything that varies during the day —
+workload, the kind of posts, which moderators are on shift — so the
+difference would not be attributable to the model.
+:::
+
+::: {#exr-ops5-rollback-digest}
+**Rollback by digest.** Using the local registry of @sec-ops-image, push two
+versions under the tag `latest`, then show that a deployment recorded by tag
+can no longer be reproduced while one recorded by digest can.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+v1_dir = ob.project("tags_v1")
+(v1_dir / "Dockerfile").write_text('ARG BASE=python:3.12-slim\nFROM ${BASE}\nCMD ["echo", "version 1"]\n')
+cb.build(v1_dir, "127.0.0.1:5000/demo:latest", show_cmd=False, table=False)
+cb.run("docker push -q 127.0.0.1:5000/demo:latest")
+recorded_tag = "127.0.0.1:5000/demo:latest"
+recorded_digest = cb.run("docker image inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5000/demo:latest").stdout.strip()
+(v1_dir / "Dockerfile").write_text('ARG BASE=python:3.12-slim\nFROM ${BASE}\nCMD ["echo", "version 2"]\n')
+cb.build(v1_dir, "127.0.0.1:5000/demo:latest", show_cmd=False, table=False)
+cb.run("docker push -q 127.0.0.1:5000/demo:latest")
+cb.run("docker rmi -f 127.0.0.1:5000/demo:latest >/dev/null")
+print("by tag:   ", cb.run(f"docker run --rm {recorded_tag}").stdout.strip())
+print("by digest:", cb.run(f"docker run --rm {recorded_digest}").stdout.strip())
+registry.terminate()
+```
+The tag now names version 2, so "redeploying what ran yesterday" by tag runs
+something else; the digest still names version 1's bytes. Deployment records,
+lineage (@exr-ops2-registry-hard) and rollbacks must use digests.
+:::
+
+## Further reading {.unnumbered}
+
+- @humble2010, ch. 10 (deploying and releasing applications: blue/green,
+  canary, rollback) — the classic on continuous delivery.
+- @wiggins2011 — the twelve-factor app: configuration in the environment,
+  stateless processes, disposability.
+- @docker2026 — "Dockerfile reference" (HEALTHCHECK, USER, exec form), "Build
+  cache"; @oci2024distribution — how registries store and serve images.
+- @kohavi2020, ch. 2–3 and 17 — online controlled experiments: A/B tests,
+  sample sizes, pitfalls (and sequential testing).
+- @paleyes2022, §6 — deployment challenges reported in case studies,
+  including monitoring a new model in shadow mode before exposing it.

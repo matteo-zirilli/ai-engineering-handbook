@@ -1,0 +1,2019 @@
+# Monitoring models in production {#sec-ch-ops-monitor}
+
+> *"Your monitoring system should address two questions: what's broken, and
+> why?"* — Rob Ewaschuk, in *Site Reliability Engineering*, 2016
+> [@beyer2016, ch. 6]
+
+```{python}
+#| echo: false
+import opsbook as ob
+ob.setup()
+import json, os, re, sys, time, subprocess, threading, textwrap
+from pathlib import Path
+from importlib.metadata import version
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import joblib, httpx, yaml
+from scipy.stats import ks_2samp, chi2, chisquare, norm
+from sklearn.metrics import confusion_matrix, accuracy_score
+sys.path.insert(0, str(Path("..") / "containers"))
+import ctrbook as cb
+train = ob.make_posts(3000, seed=1)
+model = ob.train_model(train.text, train.label)
+```
+
+::: {.callout-note}
+## Learning objectives
+By the end of this chapter you will be able to:
+
+- decide **what to monitor** in an ML service — golden signals, inputs,
+  outputs, quality — and express objectives as **SLOs** with error budgets
+  and burn rates;
+- instrument a FastAPI service with **Prometheus** metrics (counters,
+  gauges, histograms), query them with PromQL, and bound the error of
+  **quantiles estimated from histogram buckets**;
+- define **covariate, label and concept shift**, detect drift with the
+  **population stability index** (proved to be a symmetric Kullback–Leibler
+  divergence that can only shrink when bins are merged), the
+  **Kolmogorov–Smirnov** test with a sample size from the **DKW** inequality,
+  and the **χ²** test on predicted classes — controlling false alarms across
+  windows;
+- estimate how the class mix changes **without labels**, with black-box shift
+  estimation and the EM adjustment of priors, and know their assumptions;
+- detect changes as they happen with **CUSUM**, trading false alarms against
+  detection delay;
+- run a monitoring stack with **Docker Compose** — the service, Prometheus,
+  Alertmanager — write **alert rules** with motivated thresholds, test them
+  with `promtool`, and describe a **Grafana** dashboard and alert.
+:::
+
+::: {.callout-tip}
+## Topics covered
+What to monitor in production; data drift and concept drift; Docker Compose;
+Grafana dashboards; alerts and notifications.
+:::
+
+## What to monitor {#sec-ops-what-monitor}
+
+### Four layers of signals
+
+A model service can fail in ways an ordinary service cannot, so its
+monitoring has more layers:
+
+| Layer | Signals | Needs labels? | Reacts in |
+|---|---|---|---|
+| **service** | the four golden signals: **latency**, **traffic**, **errors**, **saturation** [@beyer2016, ch. 6] | no | seconds |
+| **inputs** | text length, rate of unknown words, language, share of empty or truncated texts | no | minutes |
+| **outputs** | distribution of predicted classes, mean confidence, share of low-confidence answers | no | minutes to hours |
+| **quality** | accuracy, calibration, per-slice metrics on labelled samples | yes — often delayed | days |
+
+The first layer says the service is up; only the others say it is *right*.
+Labels arrive late, if ever (someone must annotate a sample of posts), so
+the label-free signals of inputs and outputs are the early warnings, and
+@sec-ops-drift, @sec-ops-label-shift and @sec-ops-cusum turn them into tests.
+
+### Objectives: SLOs and error budgets
+
+A **service level indicator** (SLI) is a measured quantity — the fraction of
+requests answered successfully within 300 ms, say. A **service level
+objective** (SLO) is a target for it over a window — 99.5 % over 30 days. The
+complement is the **error budget**: $1 - 0.995 = 0.5\,\%$ of the requests may
+fail without breaking the objective [@beyer2016, ch. 4]. The **burn rate** is
+the observed bad fraction divided by the budget fraction: at burn rate 1 the
+budget lasts exactly the window; at burn rate $r$ it lasts $1/r$ of it.
+
+::: {#prp-ops-burn}
+## Time to exhaust an error budget
+With an SLO $s$ over a window of length $W$ and a constant bad-request
+fraction $e > 0$, the budget is exhausted after
+$$
+T = W\,\frac{1 - s}{e} = \frac{W}{r}, \qquad r = \frac{e}{1 - s} .
+$$
+An alert on "burn rate above $r^\star$ measured over a window $\tau$" fires
+only for incidents that would consume, if they lasted the whole SLO window, at
+least $r^\star$ times the budget.
+:::
+
+*In one line:* the budget is a quantity of failures; dividing it by the rate
+of failures gives the time left.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-burn
+With traffic $\lambda$ the budget is $(1 - s)\lambda W$ bad requests;
+failures accumulate at rate $e\lambda$, so the budget is gone after $(1 -
+s)\lambda W/(e\lambda) = W(1 - s)/e$. The second sentence restates $r =
+e/(1 - s)$. $\blacksquare$
+:::
+
+Google's SRE workbook recommends alerting on burn rates over two windows at
+once — e.g. 14.4 over both the last hour and the last 5 minutes, which
+pages when 2 % of a 30-day budget burns in an hour — so that alerts are both
+significant and quick to reset [@beyer2018, ch. 5].
+
+### Metrics with Prometheus
+
+**Prometheus** stores **time series** — a metric name with labels, sampled
+over time — that it collects by **scraping**: every few seconds it requests
+`GET /metrics` from each target, which answers with the current values in a
+simple text format [@prometheus2026]. Four metric types cover most needs:
+
+- a **counter** only increases (requests served, predictions per label);
+  queries look at its rate, `rate(x[5m])`, which also handles restarts;
+- a **gauge** goes up and down (requests in flight, model load time);
+- a **histogram** counts observations into cumulative buckets
+  (`le` = "less than or equal") plus their sum and count — latencies, text
+  lengths, confidences — and is aggregated across replicas;
+- a **summary** computes quantiles in the client; they cannot be aggregated.
+
+The service of @sec-ch-ops-serving has a hook (`OBSERVERS`) called with the
+texts and probabilities of every prediction. An instrumented version adds a
+middleware for request metrics, an observer for model metrics, and the
+`/metrics` endpoint:
+
+```{python}
+#| echo: false
+#| output: asis
+mon = ob.make_service(ob.project("monitored"), model)
+ob.write("monitored.py", '''
+    """The sentiment service with Prometheus metrics."""
+    import time
+
+    from prometheus_client import Counter, Gauge, Histogram, make_asgi_app
+
+    from app import LABELS, OBSERVERS, STATE, app
+
+    REQUESTS = Counter("sentiment_http_requests_total", "HTTP requests", ["path", "status"])
+    LATENCY = Histogram("sentiment_http_request_seconds", "Request latency", ["path"],
+                        buckets=(0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0))
+    PREDICTIONS = Counter("sentiment_predictions_total", "Predicted labels", ["label"])
+    CONFIDENCE = Histogram("sentiment_confidence", "Largest class probability",
+                           buckets=(0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99))
+    LENGTH = Histogram("sentiment_text_length_chars", "Characters per text",
+                       buckets=(10, 20, 30, 40, 60, 80, 120, 200, 280))
+    MODEL_INFO = Gauge("sentiment_model_info", "Served model version", ["version"])
+
+
+    def observe(texts, proba):
+        for text, p in zip(texts, proba, strict=True):
+            PREDICTIONS.labels(LABELS[int(p.argmax())]).inc()
+            CONFIDENCE.observe(float(p.max()))
+            LENGTH.observe(len(text))
+        MODEL_INFO.labels(STATE["version"]).set(1)
+
+
+    OBSERVERS.append(observe)
+
+
+    @app.middleware("http")
+    async def record(request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        path = request.url.path
+        if path != "/metrics":
+            LATENCY.labels(path).observe(time.perf_counter() - start)
+            REQUESTS.labels(path, str(response.status_code)).inc()
+        return response
+
+
+    app.mount("/metrics", make_asgi_app())
+''', base=mon)
+ob.show("monitored.py", base=mon)
+```
+
+```{python}
+with ob.server("monitored:app", cwd=mon, env={"MODEL_VERSION": "v1"}) as (base, _):
+    with httpx.Client(base_url=base, timeout=5, follow_redirects=True) as client:
+        client.post("/v1/predict", json={"texts": ["the battery is awful", "love the camera", "got the phone"]})
+        client.post("/v1/predict", json={"texts": []})                      # a 422
+        metrics = client.get("/metrics").text
+shown = [l for l in metrics.splitlines()
+         if l.startswith(("sentiment_predictions_total", "sentiment_http_requests_total", "sentiment_confidence_bucket"))]
+print("\n".join(shown))
+```
+
+Every histogram bucket is **cumulative**: `le="0.9"` counts the observations
+$\le 0.9$, and the `+Inf` bucket equals the count. Prometheus estimates a
+quantile from the buckets with `histogram_quantile`, by linear interpolation
+inside the bucket that contains it.
+
+::: {#prp-ops-hist-quantile}
+## Quantiles from buckets
+Let the buckets have upper bounds $b_0 < b_1 < \dots < b_K$ and cumulative
+counts $N_0 \le \dots \le N_K = N$, and let the $\phi$-quantile's rank $r =
+\phi N$ fall in bucket $j$ ($N_{j-1} < r \le N_j$). Prometheus returns
+$$
+\hat q_\phi = b_{j-1} + (b_j - b_{j-1})\,\frac{r - N_{j-1}}{N_j - N_{j-1}} ,
+$$ {#eq-ops-hist-quantile}
+and the empirical $\phi$-quantile $q_\phi$ of the observations lies in the
+same bucket, so $|\hat q_\phi - q_\phi| \le b_j - b_{j-1}$.
+:::
+
+*In one line:* the bucket that contains the rank is known exactly; inside it,
+the position is a guess — so the error is at most the bucket's width.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-hist-quantile
+The empirical quantile is the $\lceil r\rceil$-th smallest observation; since
+$N_{j-1} < r \le N_j$, exactly $N_{j-1}$ observations are $\le b_{j-1}$ and
+$N_j$ are $\le b_j$, so it lies in $(b_{j-1}, b_j]$. The formula interpolates
+linearly between the bucket's bounds, so $\hat q_\phi \in [b_{j-1}, b_j]$ too.
+Two points of an interval of length $b_j - b_{j-1}$ are at most that far
+apart. $\blacksquare$
+:::
+
+The practical consequence: put bucket boundaries densely **around the
+values you alert on** — a latency SLO of 250 ms needs boundaries near 250 ms,
+not only at 100 ms and 1 s.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops7-what-easy}
+## Easy — buckets and budgets by hand
+(a) A latency histogram has cumulative counts 500 at `le=0.05`, 900 at
+`le=0.1`, 980 at `le=0.25`, 1 000 at `le=0.5`. Estimate the 95th percentile
+with @eq-ops-hist-quantile and bound its error. (b) An SLO of 99.5 % over 30
+days: how long does the budget last if 2 % of requests fail? What burn rate
+is that?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+(a) The rank is $0.95 \times 1000 = 950$: which bucket contains it?
+(b) $r = e/(1 - s)$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+b = [0.0, 0.05, 0.1, 0.25, 0.5]; N = [0, 500, 900, 980, 1000]
+r = 0.95 * N[-1]
+j = next(i for i in range(1, len(N)) if N[i - 1] < r <= N[i])
+q = b[j - 1] + (b[j] - b[j - 1]) * (r - N[j - 1]) / (N[j] - N[j - 1])
+print(f"(a) p95 ≈ {q:.4f} s, error at most {b[j] - b[j - 1]:.2f} s")
+e, s, W = 0.02, 0.995, 30
+print(f"(b) burn rate {e / (1 - s):.1f}: budget gone after {W * (1 - s) / e:.1f} days")
+```
+(a) Rank 950 falls in the bucket $(0.1, 0.25]$: the estimate is 0.194 s, but
+the true value could be anywhere in that bucket — an error up to 150 ms. (b)
+A burn rate of 4: the month's budget is gone in a week. A burn-rate alert at
+14.4 would not fire for this slow leak; a second, lower threshold over a
+longer window (e.g. 1 over 3 days) catches it.
+:::
+
+::: {#exr-ops7-what-medium}
+## Medium — Prometheus for real
+Start the instrumented service and a Prometheus server (the binary, on the
+loopback interface) that scrapes it every second. Send traffic for 20
+seconds, then query, through Prometheus's HTTP API: the request rate, the
+share of each predicted label, and the 95th-percentile latency. Compare the
+percentile with the one computed from the client-side measurements.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+`GET /api/v1/query?query=<PromQL>` returns JSON. Useful expressions:
+`sum(rate(sentiment_http_requests_total[15s]))`,
+`sum by (label) (rate(sentiment_predictions_total[15s]))`,
+`histogram_quantile(0.95, sum by (le) (rate(sentiment_http_request_seconds_bucket[15s])))`.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def start_prometheus(directory: Path, config: str, port: int):
+    (directory / "prometheus.yml").write_text(textwrap.dedent(config))
+    proc = subprocess.Popen([ob.tool("prometheus"), f"--config.file={directory / 'prometheus.yml'}",
+                             f"--storage.tsdb.path={directory / 'data'}", f"--web.listen-address=127.0.0.1:{port}"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ob.wait_port(port)
+    return proc
+
+def promql(port, expr):
+    r = httpx.get(f"http://127.0.0.1:{port}/api/v1/query", params={"query": expr}).json()
+    return {tuple(sorted(x["metric"].items())): float(x["value"][1]) for x in r["data"]["result"]}
+
+prom_dir = ob.project("prometheus")
+traffic = list(ob.make_posts(4000, seed=70).text)
+client_lat = []
+with ob.server("monitored:app", cwd=mon, env={"MODEL_VERSION": "v1"}) as (base, _):
+    svc_port = int(base.rsplit(":", 1)[1])
+    prom_port = ob.free_port()
+    prom = start_prometheus(prom_dir, f"""
+        global:
+          scrape_interval: 1s
+        scrape_configs:
+          - job_name: sentiment
+            static_configs:
+              - targets: ["127.0.0.1:{svc_port}"]
+    """, prom_port)
+    with httpx.Client(base_url=base, timeout=5) as client:
+        t_end = time.time() + 20
+        i = 0
+        while time.time() < t_end:
+            t0 = time.perf_counter()
+            client.post("/v1/predict", json={"texts": traffic[i % 4000: i % 4000 + 4]})
+            client_lat.append(time.perf_counter() - t0)
+            i += 4
+            time.sleep(0.01)
+    time.sleep(2)
+    rate = promql(prom_port, "sum(rate(sentiment_http_requests_total[15s]))")
+    labels = promql(prom_port, "sum by (label) (rate(sentiment_predictions_total[15s]))")
+    p95 = promql(prom_port, "histogram_quantile(0.95, sum by (le) (rate(sentiment_http_request_seconds_bucket[15s])))")
+    prom.terminate()
+total = sum(labels.values())
+print(f"request rate {list(rate.values())[0]:.1f}/s")
+print("label shares:", {dict(k)["label"]: round(v / total, 3) for k, v in labels.items()})
+print(f"p95 latency: Prometheus {1e3 * list(p95.values())[0]:.1f} ms, client side {1e3 * np.quantile(client_lat, 0.95):.1f} ms")
+```
+Prometheus reports the request rate, the label mix (close to the generator's
+30/40/30 priors) and a 95th percentile that differs from the client-side one:
+the server measures less (no network, no client), and the estimate is
+interpolated inside a bucket whose width bounds its error
+(@prp-ops-hist-quantile). The rate window must contain several scrapes —
+`rate()` over a window shorter than two scrape intervals returns nothing.
+:::
+
+::: {#exr-ops7-what-hard}
+## Hard — buckets for an SLO
+The SLO says: 95 % of prediction requests within 6 ms on the build machine.
+Choose histogram buckets so that `histogram_quantile(0.95, …)` decides
+reliably whether the SLO is met — i.e. the estimate's error is at most
+0.5 ms near 6 ms — with no more than ten buckets. Check your choice by replaying the
+client-side latencies of the previous exercise through two histograms (the
+service's default buckets and yours) and computing @eq-ops-hist-quantile for
+both.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Only the bucket that contains the 95th percentile matters for its error;
+boundaries far from 6 ms can be coarse. Simulate the histogram with
+`np.searchsorted` on the sorted latencies.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def hist_quantile(values, bounds, phi):
+    bounds = np.asarray(bounds, float)
+    cum = np.array([np.sum(np.asarray(values) <= u) for u in bounds])
+    r = phi * len(values)
+    j = int(np.searchsorted(cum, r))          # first bucket with cumulative count >= r
+    lo = bounds[j - 1] if j > 0 else 0.0
+    prev = cum[j - 1] if j > 0 else 0
+    return lo + (bounds[j] - lo) * (r - prev) / (cum[j] - prev), bounds[j] - lo
+
+lat = np.array(client_lat)
+default = [0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, np.inf]
+mine = [0.002, 0.004, 0.005, 0.0055, 0.006, 0.0065, 0.007, 0.01, 0.025, np.inf]
+print(f"true p95 {1e3 * np.quantile(lat, 0.95):.2f} ms; SLO 6 ms")
+widths = {}
+for name, bounds in (("default", default), ("dense near 6 ms", mine)):
+    q, width = hist_quantile(lat, bounds, 0.95)
+    widths[name] = width
+    print(f"{name:16s} estimate {1e3 * q:.2f} ms, bucket width {1e3 * width:.1f} ms")
+```
+With the default buckets the 95th percentile falls in a bucket
+`{python} f"{1e3 * widths['default']:.0f}"` ms wide, so an estimate near 6 ms
+could be off by more than the margin that decides whether the SLO holds; with
+boundaries every half millisecond around 6 ms the error is bounded by
+`{python} f"{1e3 * widths['dense near 6 ms']:.1f}"` ms (if the percentile
+falls there), using the same number of buckets. (On a slower or faster
+machine the percentile moves; the bucket design should follow the SLO, not
+the current measurement.) Each bucket is a separate time series for
+Prometheus, so adding many is not free; placing them where the decisions are
+made is.
+:::
+
+## Data drift and concept drift {#sec-ops-drift}
+
+### Three kinds of shift
+
+Write the joint distribution of an input $X$ and its label $Y$ in two ways,
+$P(X, Y) = P(X)\,P(Y \mid X) = P(Y)\,P(X \mid Y)$. When production data come
+from $P_t$ instead of the training distribution $P_s$, three cases are
+distinguished [@morenotorres2012; @quinonero2009]:
+
+- **covariate shift**: $P_t(X) \ne P_s(X)$, but $P_t(Y \mid X) = P_s(Y \mid
+  X)$ — new topics, longer posts, slang the model never saw; the right answer
+  for each post is unchanged;
+- **label (prior) shift**: $P_t(Y) \ne P_s(Y)$, but $P_t(X \mid Y) =
+  P_s(X \mid Y)$ — the public mood turns negative after an outage; negative
+  posts look as before, there are just more of them;
+- **concept shift**: $P_t(Y \mid X) \ne P_s(Y \mid X)$ — the same words now
+  mean something else ("sick" as praise, a product name that becomes a
+  joke, irony spreading). This is the dangerous one: inputs may look
+  unchanged, and only labels reveal it.
+
+"Data drift" usually refers to the first two, observable without labels;
+"concept drift" to the third. The synthetic posts make each kind a switch:
+
+```{python}
+shifts = {
+    "none": {},
+    "covariate: unseen slang": {"slang_rate": 0.8},
+    "covariate: new topics": {"topics": ob.NEW_TOPICS},
+    "label: 60 % negative": {"prior": (0.6, 0.2, 0.2)},
+    "concept: 5 words flip": {"swap": {w: 0 for w in ("cheap", "fast", "smooth", "perfect", "awesome")}},
+}
+rows = []
+for name, kw in shifts.items():
+    d = ob.make_posts(4000, seed=500, **kw)
+    proba = model.predict_proba(d.text)
+    rows.append({"shift": name, "accuracy": accuracy_score(d.label, proba.argmax(1)),
+                 "mean length": d.text.str.len().mean(), "mean confidence": proba.max(1).mean(),
+                 "share predicted negative": np.mean(proba.argmax(1) == 0)})
+print(pd.DataFrame(rows).round(3).to_string(index=False))
+```
+
+Each shift leaves a different footprint. Slang makes the posts longer (the
+inserted word) and costs a little accuracy; new topics leave the length and the
+accuracy unchanged — the model never relied on topics — but make it *more*
+confident (the new topic words are unknown, so the polar words weigh more);
+label shift doubles the share of predicted negatives while accuracy stays;
+the concept shift costs six points of accuracy, with inputs and confidence
+unchanged and, here, a visible drop of predicted negatives (posts that became
+negative are still predicted positive). No single monitor sees everything.
+
+### The population stability index
+
+A popular drift score compares the distribution of a quantity — a feature,
+the model's confidence — in a **reference** sample and a **current** sample,
+both binned into $B$ bins with proportions $q_i$ (reference) and $p_i$
+(current):
+$$
+\mathrm{PSI} = \sum_{i=1}^{B} (p_i - q_i)\ln\frac{p_i}{q_i} .
+$$ {#eq-ops-psi}
+
+::: {#prp-ops-psi}
+## PSI is Jeffreys' divergence, and binning can only hide drift
+(i) $\mathrm{PSI} = \mathrm{KL}(p\,\|\,q) + \mathrm{KL}(q\,\|\,p)$, the
+symmetrised Kullback–Leibler divergence introduced by Jeffreys
+[@jeffreys1946; @kullback1951]; hence $\mathrm{PSI} \ge 0$, with equality iff
+$p = q$. (ii) Merging bins never increases the PSI: if $p', q'$ are obtained
+by summing groups of bins of $p, q$, then $\mathrm{PSI}(p', q') \le
+\mathrm{PSI}(p, q)$.
+:::
+
+*In one line:* PSI measures how surprised each distribution is by the other;
+coarse bins blur differences, never invent them.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-psi
+(i) $\mathrm{KL}(p\|q) + \mathrm{KL}(q\|p) = \sum_i p_i \ln(p_i/q_i) + \sum_i
+q_i\ln(q_i/p_i) = \sum_i (p_i - q_i)\ln(p_i/q_i)$. Each KL is $\ge 0$ by
+Gibbs' inequality ($\ln x \le x - 1$ gives $-\mathrm{KL}(p\|q) = \sum p_i
+\ln(q_i/p_i) \le \sum (q_i - p_i) = 0$), with equality iff $p = q$; so is the
+sum — indeed every term $(p_i - q_i)\ln(p_i/q_i)$ is $\ge 0$ because both
+factors have the same sign. (ii) It suffices to merge two bins. By the
+**log-sum inequality**, $a_1\ln\frac{a_1}{b_1} + a_2\ln\frac{a_2}{b_2} \ge
+(a_1 + a_2)\ln\frac{a_1 + a_2}{b_1 + b_2}$ for positive $a, b$ (a consequence
+of the convexity of $t \mapsto t\ln t$). Applied with $(a, b) = (p, q)$ it
+shows that $\mathrm{KL}(p\|q)$ does not increase when the two bins are
+merged; applied with $(a, b) = (q, p)$, neither does $\mathrm{KL}(q\|p)$; so
+neither does their sum. $\blacksquare$
+:::
+
+Two consequences matter in practice. The value of the PSI **depends on the
+binning** — ten quantile bins of the reference are customary, but any change
+of bins changes the number — so a PSI threshold is meaningful only with its
+binning. And the widely quoted thresholds — below 0.1 "stable", 0.1–0.25
+"some change", above 0.25 "significant shift" — are **industry folklore**,
+from credit scoring practice [@siddiqi2006], not results of a theory: they
+ignore the sample size (a PSI of 0.05 is noise with 200 posts and a real
+change with 200 000) and the binning. A PSI is a measure of *size*; whether a
+change is *real* is what the tests below answer.
+
+The widget computes the PSI of the model's confidence between a reference
+sample and samples with an increasing amount of unseen slang, for two
+binnings.
+
+```{python}
+#| echo: false
+ref_conf = model.predict_proba(ob.make_posts(3000, seed=600).text).max(1)
+widget_conf = {str(r): np.round(model.predict_proba(ob.make_posts(3000, seed=601 + int(10 * r), slang_rate=r,
+               extra_words=int(4 * r)).text).max(1), 4).tolist() for r in (0.0, 0.25, 0.5, 0.75, 1.0)}
+ojs_define(psi_ref=np.round(ref_conf, 4).tolist(), psi_cur=widget_conf)
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof psiShift = Inputs.radio(["0", "0.25", "0.5", "0.75", "1"], {value: "0.5", label: "slang rate (and longer posts)"})
+viewof psiBins = Inputs.range([2, 40], {value: 10, step: 1, label: "number of bins"})
+```
+
+```{ojs}
+//| echo: false
+psiRows = {
+  const key = psiShift === "0" ? "0.0" : psiShift === "1" ? "1.0" : psiShift;
+  const cur = psi_cur[key], ref = psi_ref.slice().sort((a, b) => a - b);
+  const B = psiBins, eps = 1e-6;
+  const quantEdges = Array.from({length: B - 1}, (_, i) => ref[Math.floor((i + 1) * ref.length / B)]);
+  const lo = Math.min(...ref, ...cur), hi = Math.max(...ref, ...cur);
+  const widthEdges = Array.from({length: B - 1}, (_, i) => lo + (i + 1) * (hi - lo) / B);
+  const psi = edges => {
+    const count = xs => { const c = new Array(B).fill(0); xs.forEach(x => { let j = 0; while (j < edges.length && x > edges[j]) j++; c[j]++; }); return c.map(v => Math.max(v / xs.length, eps)); };
+    const q = count(psi_ref), p = count(cur);
+    return p.reduce((s, pi, i) => s + (pi - q[i]) * Math.log(pi / q[i]), 0);
+  };
+  return {quant: psi(quantEdges), width: psi(widthEdges), cur};
+}
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">PSI with ${psiBins} quantile bins of the reference: <b>${psiRows.quant.toFixed(4)}</b> · with ${psiBins} equal-width bins: <b>${psiRows.width.toFixed(4)}</b></p>`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-ops-psi-widget
+//| fig-cap: "Distribution of the model's confidence on 3 000 reference posts (grey) and on 3 000 current posts with the chosen slang rate (blue). The PSI above depends on both the shift and the binning; with few bins, differences inside a bin are invisible (@prp-ops-psi)."
+Plot.plot({
+  width: 600, height: 240, x: {label: "confidence (largest class probability)", domain: [0.3, 1]}, y: {label: "density", grid: true},
+  marks: [Plot.rectY(psi_ref, Plot.binX({y: "proportion"}, {x: d => d, thresholds: 30, fill: "#8a8984", fillOpacity: 0.45})),
+          Plot.rectY(psiRows.cur, Plot.binX({y: "proportion"}, {x: d => d, thresholds: 30, fill: "#2a78d6", fillOpacity: 0.45}))]
+})
+```
+:::
+
+### Tests: Kolmogorov–Smirnov and χ²
+
+For a continuous quantity, the **two-sample Kolmogorov–Smirnov statistic**
+is the largest vertical distance between the two empirical CDFs, $D =
+\sup_x |\hat F_n(x) - \hat G_m(x)|$; under "same distribution" its law does
+not depend on the distribution, which gives exact p-values
+(`scipy.stats.ks_2samp`). How many observations does a window need to see a
+shift of a given size? The **Dvoretzky–Kiefer–Wolfowitz** inequality, with
+the optimal constant found by Massart, answers with a bound that holds for
+every $n$ [@dvoretzky1956; @massart1990]:
+$$
+P\Bigl(\sup_x |\hat F_n(x) - F(x)| > \varepsilon\Bigr) \le 2e^{-2n\varepsilon^2}.
+$$ {#eq-ops-dkw}
+
+::: {#prp-ops-ks-size}
+## A sample size for detecting a shift
+Let both samples have size $n$, and set $\varepsilon = \sqrt{\ln(4/\alpha)/(2n)}$.
+The test that signals drift when $D > 2\varepsilon$ has false-alarm
+probability at most $\alpha$; if the true distributions satisfy $\sup_x|F(x)
+- G(x)| \ge \delta$ with $\delta > 4\varepsilon$ — that is, $n > 8\ln(4/\alpha)/\delta^2$
+— it detects the shift with probability at least $1 - \alpha$.
+:::
+
+*In one line:* each empirical CDF is within $\varepsilon$ of its truth with
+high probability, so two equal distributions look at most $2\varepsilon$
+apart and two distributions $\delta$ apart look at least $\delta -
+2\varepsilon$ apart.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-ks-size
+By @eq-ops-dkw and the union bound, with probability at least $1 - 4e^{-2n
+\varepsilon^2} = 1 - \alpha$ both $\sup|\hat F_n - F| \le \varepsilon$ and
+$\sup|\hat G_n - G| \le \varepsilon$. On that event, by the triangle
+inequality, $|D - \sup_x|F - G|| \le 2\varepsilon$. If $F = G$, then $D \le
+2\varepsilon$: a false alarm has probability at most $\alpha$. If $\sup|F -
+G| \ge \delta > 4\varepsilon$, then $D \ge \delta - 2\varepsilon > 2\varepsilon$:
+the shift is detected with probability at least $1 - \alpha$. $\blacksquare$
+:::
+
+The bound is conservative — the exact KS test is more powerful — but it is
+valid for any distribution and any $n$, and it shows the scaling: halving the
+detectable shift quadruples the window.
+
+For the **predicted classes**, a categorical quantity, the natural test
+compares observed counts $O_k$ in a window of $n$ predictions with the counts
+$E_k = n\pi_k$ expected from the reference shares $\pi_k$ with **Pearson's
+statistic** $X^2 = \sum_k (O_k - E_k)^2/E_k$, approximately $\chi^2_{K-1}$
+under "no change" [@pearson1900].
+
+::: {.deep kind="proof"}
+## Why $X^2$ is approximately $\chi^2_{K-1}$
+Let $Z_k = (O_k - n\pi_k)/\sqrt{n\pi_k}$, so $X^2 = \|Z\|^2$. The counts are
+multinomial, so by the multivariate central limit theorem $Z$ is approximately
+normal with mean 0 and covariance $I - \sqrt\pi\sqrt\pi^{\top}$ (from
+$\mathrm{Var}(O_k) = n\pi_k(1 - \pi_k)$ and $\mathrm{Cov}(O_j, O_k) =
+-n\pi_j\pi_k$). That matrix is the orthogonal projection onto the hyperplane
+orthogonal to the unit vector $\sqrt\pi$, of rank $K - 1$; a standard normal
+vector projected onto a $(K-1)$-dimensional subspace has squared norm
+$\chi^2_{K-1}$. $\blacksquare$
+:::
+
+### Many windows, many false alarms
+
+A monitor runs a test on every window — every hour, say. With level $\alpha$
+per window and no drift at all, the expected number of false alarms per day is
+$24\alpha$, and the probability of at least one is $1 - (1 - \alpha)^{24}$:
+at $\alpha = 0.05$, about 70 %. Two remedies: a smaller per-window level
+(Bonferroni, $\alpha/m$ for $m$ tests per period, @exr-ops4-flaky; or the less
+conservative Benjamini–Hochberg procedure when many features are tested at
+once, which controls the expected share of false alarms among all alarms
+[@benjamini1995]), or a sequential method that accumulates evidence over
+windows (@sec-ops-cusum).
+
+```{python}
+reference = ob.make_posts(5000, seed=700)
+ref_len = reference.text.str.len().to_numpy()
+ref_pred = model.predict(reference.text)
+ref_share = np.bincount(ref_pred, minlength=3) / len(ref_pred)
+
+def window_tests(posts):
+    pred = model.predict(posts.text)
+    counts = np.bincount(pred, minlength=3)
+    return {"KS length p": ks_2samp(ref_len, posts.text.str.len()).pvalue,
+            "chi2 classes p": chisquare(counts, ref_share * counts.sum()).pvalue}
+
+for name, kw in shifts.items():
+    res = window_tests(ob.make_posts(500, seed=800, **kw))
+    print(f"{name:26s} " + "  ".join(f"{k} = {v:.2g}" for k, v in res.items()))
+```
+
+With windows of 500 posts, slang changes the length distribution (KS) and
+label shift the class mix (χ²); new topics and this concept shift go unnoticed
+by both tests in this window. Note also the window *without* shift: its χ²
+p-value is small. One window, one test — and chance alone produces small
+p-values; how often is the subject of the next paragraph and of
+@exr-ops7-drift-medium.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops7-drift-easy}
+## Easy — PSI and KS by hand
+Reference shares of predicted classes (negative, neutral, positive):
+$(0.30, 0.40, 0.30)$; current window: $(0.45, 0.30, 0.25)$. Compute the PSI
+and check it equals $\mathrm{KL}(p\|q) + \mathrm{KL}(q\|p)$. Then, for two
+samples of text lengths `[12, 15, 20, 22, 30]` and `[18, 25, 27, 33, 41]`,
+compute the KS statistic $D$ by hand (the largest gap between the two step
+functions).
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+For KS, evaluate both empirical CDFs at every observed value; the supremum is
+attained at one of them.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+q_ = np.array([0.30, 0.40, 0.30]); p_ = np.array([0.45, 0.30, 0.25])
+psi = np.sum((p_ - q_) * np.log(p_ / q_))
+kl = lambda a, b: np.sum(a * np.log(a / b))
+print(f"PSI = {psi:.4f}, KL(p||q) + KL(q||p) = {kl(p_, q_) + kl(q_, p_):.4f}")
+a, b = np.array([12, 15, 20, 22, 30]), np.array([18, 25, 27, 33, 41])
+grid = np.sort(np.r_[a, b])
+gaps = [abs(np.mean(a <= x) - np.mean(b <= x)) for x in grid]
+print(f"D = {max(gaps):.1f} at x = {grid[int(np.argmax(gaps))]}; scipy: {ks_2samp(a, b).statistic:.1f}, p = {ks_2samp(a, b).pvalue:.3f}")
+```
+PSI ≈ 0.099 — just "stable" by the folklore thresholds, although the
+negative share rose by half; whether that is significant depends on the window size
+(with 1 000 predictions it certainly is). For the lengths, $D = 0.6$ at 22
+(4 of 5 against 1 of 5), but with five values per sample the p-value is about
+0.36: no evidence of a shift.
+:::
+
+::: {#exr-ops7-drift-medium}
+## Medium — false alarms over a day
+Simulate 24 hourly windows of 300 posts **without** any drift and run the
+χ² test on the predicted classes in each, at $\alpha = 0.05$. Repeat the day
+500 times and estimate the probability of at least one false alarm per day,
+with and without the Bonferroni correction. Then insert label shift (60 %
+negative) from hour 12 and estimate how often each version detects it within
+three hours.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+To save time, simulate the predicted counts directly: under no drift they are
+multinomial with the reference shares; under label shift, with the shares the
+model predicts on shifted data (measure them once).
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+rng = np.random.default_rng(9)
+shifted_share = np.bincount(model.predict(ob.make_posts(5000, seed=801, prior=(0.6, 0.2, 0.2)).text), minlength=3) / 5000
+
+def day(alpha, shift_from=None, n=300):
+    alarms = []
+    for h in range(24):
+        share = shifted_share if shift_from is not None and h >= shift_from else ref_share
+        counts = rng.multinomial(n, share)
+        alarms.append(chisquare(counts, ref_share * n).pvalue < alpha)
+    return np.array(alarms)
+
+for name, a in (("alpha = 0.05", 0.05), ("Bonferroni 0.05/24", 0.05 / 24)):
+    false_day = np.mean([day(a).any() for _ in range(500)])
+    detect = np.mean([day(a, shift_from=12)[12:15].any() for _ in range(500)])
+    print(f"{name:20s} P(false alarm in a quiet day) {false_day:.2f}; P(detect the shift within 3 h) {detect:.2f}")
+```
+At 5 % per window, a quiet day raises at least one alarm most of the time —
+people learn to ignore such a monitor. With Bonferroni the daily false-alarm
+probability falls below 5 %, and this large label shift is still caught
+within three hours. Smaller shifts would need larger windows or the
+cumulative evidence of @sec-ops-cusum.
+:::
+
+::: {#exr-ops7-drift-hard}
+## Hard — which monitor sees which shift?
+For each of the four shifts of this section (slang, new topics, label, concept)
+and for "none", run on 50 windows of 500 posts: the KS test on text length,
+the KS test on confidence, the χ² test on predicted classes, the PSI of the
+confidence (10 quantile bins), and — assuming 50 labelled posts per window —
+a test that accuracy has dropped below the reference (one-sided, exact
+binomial). Report the detection rate of each monitor for each shift at a
+per-window level of 1 %, and propose a minimal set of monitors that covers all
+four shifts.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Compute the reference quantities (lengths, confidences, class shares,
+accuracy) once on a large reference sample. For the accuracy test, the number
+of correct answers among 50 is binomial with the reference accuracy under "no
+change". The PSI has no p-value: decide a threshold by looking at its values
+under "none".
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+from scipy.stats import binom
+ref_proba = model.predict_proba(reference.text)
+ref_conf_all, ref_acc = ref_proba.max(1), accuracy_score(reference.label, ref_proba.argmax(1))
+edges = np.quantile(ref_conf_all, np.linspace(0, 1, 11)[1:-1])
+q_bins = np.bincount(np.searchsorted(edges, ref_conf_all), minlength=10) / len(ref_conf_all)
+
+def monitors(posts, rng):
+    proba = model.predict_proba(posts.text)
+    conf, pred = proba.max(1), proba.argmax(1)
+    p_bins = np.maximum(np.bincount(np.searchsorted(edges, conf), minlength=10) / len(conf), 1e-6)
+    lab = rng.choice(len(posts), 50, replace=False)
+    correct = int(np.sum(pred[lab] == posts.label.to_numpy()[lab]))
+    return {"KS length": ks_2samp(ref_len, posts.text.str.len()).pvalue < 0.01,
+            "KS confidence": ks_2samp(ref_conf_all, conf).pvalue < 0.01,
+            "chi2 classes": chisquare(np.bincount(pred, minlength=3), ref_share * len(pred)).pvalue < 0.01,
+            "PSI conf > 0.1": float(np.sum((p_bins - q_bins) * np.log(p_bins / q_bins))) > 0.1,
+            "accuracy (50 labels)": binom.cdf(correct, 50, ref_acc) < 0.01}
+
+rng = np.random.default_rng(10)
+table = {name: pd.DataFrame([monitors(ob.make_posts(500, seed=900 + 37 * i + k, **kw), rng) for i in range(50)]).mean()
+         for k, (name, kw) in enumerate(shifts.items())}
+print(pd.DataFrame(table).T.round(2).to_string())
+```
+Under "none" every monitor stays quiet (rates near or below the 1 % level;
+the PSI threshold of 0.1 yields no alarms at this window size). Slang is
+caught by the length test (and half the time by the confidence test), new
+topics by the confidence monitors (KS and PSI), label shift by the class-mix
+test, and this concept shift mostly by the class-mix test — because the
+flipped words happen to move predictions out of the negative class — and
+only rarely by 50 labels per window. A minimal set: input length (or an
+unknown-word rate, @exr-ops7-length-oov), the confidence distribution, the
+class mix, and a stream of labelled posts for the concept shifts that do not
+move the mix (a word that changes meaning in both directions would not). The
+common mistake is to monitor only the inputs and conclude "no drift" while the
+concept has moved.
+:::
+
+## Estimating label shift without labels {#sec-ops-label-shift}
+
+### The share of negative posts, corrected
+
+The share of posts *predicted* negative is a biased estimate of the share
+that *is* negative: errors move posts between classes, and the bias changes
+with the class mix. Under **label shift** ($P_t(X \mid Y) = P_s(X \mid Y)$)
+the bias can be removed.
+
+::: {#thm-ops-bbse}
+## Black-box shift estimation
+Let $\hat y = f(x)$ be any fixed classifier, $C_{ij} = P_s(\hat y = i \mid
+y = j)$ its confusion matrix normalised by true class on the source
+distribution, $\mu_i = P_t(\hat y = i)$ the distribution of its predictions on
+the target, and $q_j = P_t(y = j)$ the target priors. Under label shift,
+$$
+\mu = C q, \qquad\text{so, if } C \text{ is invertible,}\qquad q = C^{-1}\mu ,
+$$ {#eq-ops-bbse}
+and the importance weights are $w_j = q_j / p_j$ with $p_j = P_s(y = j)$
+[@lipton2018].
+:::
+
+*In one line:* how the classifier errs given the true class is the same in
+training and in production — only the class mix changed — so the observed
+prediction mix is a known linear mixture of the unknown class mix.
+
+::: {.deep kind="proof"}
+## Proof of @thm-ops-bbse
+By total probability, $\mu_i = \sum_j P_t(\hat y = i \mid y = j)P_t(y = j)$.
+Since $\hat y$ is a function of $x$ and $P_t(x \mid y) = P_s(x \mid y)$, also
+$P_t(\hat y = i \mid y = j) = P_s(\hat y = i \mid y = j) = C_{ij}$. Hence
+$\mu = Cq$, and $q = C^{-1}\mu$ when $C$ is invertible. $\blacksquare$
+:::
+
+In practice $C$ is estimated on a labelled validation set from the source and
+$\mu$ on unlabelled production data; the estimate inherits their noise, and
+it is poor when $C$ is nearly singular (a classifier that confuses two classes
+cannot separate their shares). It can also return small negative values,
+which are clipped and renormalised.
+
+A second method uses the model's **probabilities** instead of its decisions.
+
+::: {#prp-ops-em-prior}
+## EM adjustment of priors
+If $p_s(y \mid x)$ is calibrated on the source and only the priors change,
+then $p_t(y \mid x) \propto p_s(y \mid x)\,q_y/p_y$. The iteration
+$$
+q^{(k+1)}_y = \frac1n\sum_{i=1}^n
+\frac{p_s(y \mid x_i)\,q^{(k)}_y/p_y}{\sum_{y'} p_s(y' \mid x_i)\,q^{(k)}_{y'}/p_{y'}}
+$$ {#eq-ops-em}
+never decreases the likelihood of the unlabelled target sample, and its
+fixed points are the stationary points of that likelihood [@saerens2002].
+:::
+
+*In one line:* re-weight each post's probabilities by the ratio of new to old
+priors, average them to get new priors, and repeat — expectation-maximisation
+for the mixture weights.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-em-prior
+By Bayes' rule $p_t(y \mid x) = p_t(x \mid y)q_y/p_t(x)$ and $p_t(x \mid y)
+= p_s(x \mid y) = p_s(y \mid x)p_s(x)/p_y$, so $p_t(y \mid x) \propto
+p_s(y \mid x)q_y/p_y$, normalised over $y$. The target density of $x$ is a
+mixture $\sum_y q_y p_s(x \mid y)$ with known components and unknown weights
+$q$; the E-step computes the responsibilities $p_t(y \mid x_i)$ under the
+current $q^{(k)}$, and the M-step maximises the expected complete-data
+log-likelihood $\sum_i\sum_y p_t(y \mid x_i)\log q_y$ over the simplex, whose
+solution is the average responsibility — @eq-ops-em. EM never decreases the
+observed-data likelihood [@dempster1977]; at a fixed point, the
+Lagrangian stationarity conditions of the likelihood over the simplex hold,
+since they reduce to the same averaging equation. $\blacksquare$
+:::
+
+EM needs calibrated probabilities (@sec-ops-calibration); BBSE needs only a
+fixed classifier and an invertible confusion matrix. Both fail under concept
+shift, where $P(x \mid y)$ changes. Let us compare them with the naive
+"share of predictions". The local model is so accurate against the *true*
+sentiment (its errors are mostly the annotators') that the naive share is
+nearly right; to see the bias, take a quick classifier — unigrams, trained on
+400 posts — and a carefully annotated validation set (`noise=0`: the true
+sentiment), and measure the shares against the true sentiment:
+
+```{python}
+from scipy.special import softmax, log_softmax
+from scipy.optimize import minimize_scalar
+small = ob.make_posts(400, seed=3)
+quick = ob.train_model(small.text, small.label, ngram=(1, 1), C=1.0)
+valid = ob.make_posts(5000, seed=710, noise=0)                  # carefully annotated
+y_val = valid.label.to_numpy()
+print(f"accuracy of the quick model against the true sentiment: {np.mean(quick.predict(valid.text) == y_val):.3f}")
+C = confusion_matrix(y_val, quick.predict(valid.text), normalize="true").T   # C[i, j] = P(pred i | true j)
+p_src = np.bincount(y_val, minlength=3) / len(y_val)
+z_val = quick.decision_function(valid.text)
+T_cal = minimize_scalar(lambda T: -log_softmax(z_val / T, 1)[np.arange(len(y_val)), y_val].mean(),
+                        bounds=(0.05, 20), method="bounded").x       # temperature scaling (@sec-ops-calibration)
+
+def bbse(texts):
+    mu = np.bincount(quick.predict(texts), minlength=3) / len(texts)
+    q = np.clip(np.linalg.solve(C, mu), 0, None)
+    return q / q.sum()
+
+def em_priors(texts, iters=300):
+    post = softmax(quick.decision_function(texts) / T_cal, axis=1)
+    q = p_src.copy()
+    for _ in range(iters):
+        adj = post * q / p_src
+        adj /= adj.sum(axis=1, keepdims=True)
+        q = adj.mean(axis=0)
+    return q
+
+for truth in ((0.3, 0.4, 0.3), (0.6, 0.2, 0.2), (0.1, 0.3, 0.6)):
+    d = ob.make_posts(3000, seed=720, prior=truth, noise=0)
+    naive = np.bincount(quick.predict(d.text), minlength=3) / len(d)
+    actual = np.bincount(d.label, minlength=3) / len(d)
+    print(f"true {np.round(actual, 3)}  naive {np.round(naive, 3)}  BBSE {np.round(bbse(d.text), 3)}  EM {np.round(em_priors(d.text), 3)}")
+```
+
+```{python}
+#| echo: false
+grid_rows = []
+for qn in np.round(np.arange(0.1, 0.71, 0.05), 2):
+    rest = 1 - qn
+    d = ob.make_posts(2000, seed=730 + int(100 * qn), prior=(qn, rest * 4 / 7, rest * 3 / 7), noise=0)
+    actual = np.mean(d.label == 0)
+    grid_rows.append({"q": float(qn), "truth": float(actual),
+                      "naive": float(np.mean(quick.predict(d.text) == 0)),
+                      "BBSE": float(bbse(d.text)[0]), "EM": float(em_priors(d.text)[0])})
+ojs_define(ls_rows=grid_rows)
+```
+
+The naive share is pulled towards the training mix — too few negatives when
+they are many, too many when they are few. BBSE removes almost all of the
+bias; EM removes part of it: it relies on the probabilities being calibrated
+for every class, which one temperature does not achieve for this crude model
+(BBSE needs only its confusion matrix). The widget shows the estimated share
+of negative posts as the true share varies.
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof lsQ = Inputs.range([0.1, 0.7], {value: 0.5, step: 0.05, label: "true share of negative posts"})
+```
+
+```{ojs}
+//| echo: false
+lsLong = ls_rows.flatMap(r => ["naive", "BBSE", "EM"].map(m => ({q: r.truth, method: m, est: r[m]})))
+lsSel = ls_rows.reduce((a, r) => Math.abs(r.q - lsQ) < Math.abs(a.q - lsQ) ? r : a)
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">true ${lsSel.truth.toFixed(3)} · naive ${lsSel.naive.toFixed(3)} · BBSE ${lsSel.BBSE.toFixed(3)} · EM ${lsSel.EM.toFixed(3)}</p>`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-ops-label-shift-widget
+//| fig-cap: "Estimated share of negative posts against the true share, on 2 000 unlabelled posts per point, for the quick classifier. The naive share of predictions is pulled towards the training mix; BBSE (@thm-ops-bbse) follows the diagonal; EM (@prp-ops-em-prior) lies in between, limited by the calibration of the classifier's probabilities. The vertical line marks the selected true share."
+Plot.plot({
+  width: 520, height: 340, x: {label: "true share negative", domain: [0.05, 0.75]}, y: {label: "estimated share negative", domain: [0.05, 0.75], grid: true},
+  color: {legend: true, domain: ["naive", "BBSE", "EM"], range: ["#8a8984", "#2a78d6", "#eb6834"]},
+  marks: [Plot.line([[0.05, 0.05], [0.75, 0.75]], {stroke: "#c8c7c2", strokeDasharray: "4,3"}),
+          Plot.ruleX([lsSel.truth], {stroke: "#c8c7c2"}),
+          Plot.line(lsLong, {x: "q", y: "est", stroke: "method"}),
+          Plot.dot(lsLong.filter(d => Math.abs(d.q - lsSel.truth) < 1e-9), {x: "q", y: "est", fill: "method", r: 5})]
+})
+```
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-ops7-ls-easy}
+## Easy — two classes by hand
+A spam filter has, on validation data, $P(\hat y = \text{spam} \mid
+\text{spam}) = 0.9$ and $P(\hat y = \text{spam} \mid \text{ham}) = 0.05$.
+Today it flags 23 % of the messages. Under label shift, what share is really
+spam? Why is the naive answer (23 %) wrong, and in which direction?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+$0.23 = 0.9\,q + 0.05\,(1 - q)$: solve for $q$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+C2 = np.array([[0.9, 0.05], [0.1, 0.95]])     # columns: true spam, true ham; rows: predicted spam, ham
+print(np.linalg.solve(C2, [0.23, 0.77]))
+```
+$q = (0.23 - 0.05)/(0.9 - 0.05) \approx 0.212$: 21 % spam. The naive 23 %
+counts the 5 % of ham wrongly flagged and misses the 10 % of spam let
+through; with few spam messages the false positives dominate, so the naive
+share is too high. The correction needs $C$ to be invertible: here the
+classifier's two columns are clearly different ($0.9 \ne 0.05$).
+:::
+
+::: {#exr-ops7-ls-medium}
+## Medium — BBSE with intervals
+Estimate the share of negative posts with BBSE on windows of 300, 1 000 and
+3 000 unlabelled posts whose true negative share is 0.5, and give a 90 %
+interval by the bootstrap (resample the window and the validation set). How
+does the width scale with the window size?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Both $\hat C$ and $\hat\mu$ are estimates: resample both in each bootstrap
+replicate. The width should scale roughly like $1/\sqrt n$ once the window
+dominates the error.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+rng = np.random.default_rng(12)
+val_pred, val_true = quick.predict(valid.text), y_val
+
+def bbse_from(pred_window, vp, vt):
+    Cb = np.zeros((3, 3))
+    for j in range(3):
+        Cb[:, j] = np.bincount(vp[vt == j], minlength=3) / max(np.sum(vt == j), 1)
+    q = np.clip(np.linalg.solve(Cb, np.bincount(pred_window, minlength=3) / len(pred_window)), 0, None)
+    return q / q.sum()
+
+for n in (300, 1000, 3000):
+    w = ob.make_posts(n, seed=740 + n, prior=(0.5, 0.25, 0.25), noise=0)
+    wp = quick.predict(w.text)
+    est = bbse_from(wp, val_pred, val_true)[0]
+    boots = []
+    for _ in range(300):
+        i = rng.integers(0, n, n); k = rng.integers(0, len(val_pred), len(val_pred))
+        boots.append(bbse_from(wp[i], val_pred[k], val_true[k])[0])
+    lo, hi = np.quantile(boots, [0.05, 0.95])
+    print(f"n = {n:4d}: estimate {est:.3f}, 90% interval [{lo:.3f}, {hi:.3f}], width {hi - lo:.3f}, true {np.mean(w.label == 0):.3f}")
+```
+The intervals cover the true share, and their width shrinks roughly like
+$1/\sqrt n$ — from about ±7 points with 300 posts to about ±3 with 3 000
+(the validation set's own noise sets a floor).
+Reporting the estimate without its interval invites over-reaction to noise.
+:::
+
+::: {#exr-ops7-ls-hard}
+## Hard — when the assumption breaks
+Compare the naive share, BBSE and EM against the truth (a) under pure label
+shift to 60 % negative, (b) under concept shift (five positive words now
+negative, priors unchanged), and (c) under both. Which estimator degrades
+under concept shift, and why? Propose a way to **detect** that the label-shift
+assumption is violated, using a small labelled sample.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Under concept shift, $P(x \mid y)$ changes: posts labelled negative now
+include words the model associates with positive, so the confusion matrix
+estimated on old validation data no longer describes the classifier's errors.
+Compare the confusion matrix on a few hundred recent labelled posts with the
+old one.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+concept = {"swap": {w: 0 for w in ("cheap", "fast", "smooth", "perfect", "awesome")}}
+cases = {"(a) label shift": {"prior": (0.6, 0.2, 0.2)}, "(b) concept shift": concept,
+         "(c) both": {"prior": (0.6, 0.2, 0.2), **concept}}
+for name, kw in cases.items():
+    d = ob.make_posts(4000, seed=760, noise=0, **kw)
+    truth = np.mean(d.label == 0)
+    print(f"{name:18s} true {truth:.3f}  naive {np.mean(quick.predict(d.text) == 0):.3f}  "
+          f"BBSE {bbse(d.text)[0]:.3f}  EM {em_priors(d.text)[0]:.3f}")
+
+# detecting the violation: compare confusion matrices on 400 recent labelled posts
+recent = ob.make_posts(400, seed=761, noise=0, **concept)
+C_recent = confusion_matrix(recent.label, quick.predict(recent.text), normalize="true").T
+print("P(pred negative | true negative): validation", round(C[0, 0], 3), "recent", round(C_recent[0, 0], 3))
+```
+Under pure label shift BBSE lands near the truth. Under concept shift the
+posts that became negative are predicted positive; the old confusion matrix
+does not know that, so BBSE (and EM) attribute the predictions to the wrong
+classes and underestimate the negative share, as the naive count does. The violation is visible in a small labelled sample: the
+recall of the negative class drops sharply compared with validation. Hence
+the design of @exr-ops7-drift-hard: a trickle of labels is needed, not for
+the estimate itself, but to check the assumption the estimate rests on.
+:::
+
+## Detecting change as it happens: CUSUM {#sec-ops-cusum}
+
+### Accumulating small evidence
+
+Window tests look at each window separately; a small, persistent change
+— two extra points of negative posts — is invisible in any single window. The
+**cumulative sum** procedure of Page accumulates evidence across
+observations [@page1954]. For observations $x_1, x_2, \dots$ (one per batch,
+e.g. the share of negative predictions), a reference value $\mu_0$ and an
+allowance $k \ge 0$:
+$$
+S_0 = 0, \qquad S_t = \max\bigl(0,\; S_{t-1} + x_t - \mu_0 - k\bigr), \qquad
+\text{alarm when } S_t > h .
+$$ {#eq-ops-cusum}
+Each observation above $\mu_0 + k$ adds to $S$, each below subtracts, and
+$S$ never goes below zero — it forgets good news.
+
+::: {#prp-ops-cusum}
+## What CUSUM computes, and how fast it reacts
+(i) $S_t = \max_{0 \le s \le t}\sum_{i = s+1}^{t}(x_i - \mu_0 - k)$: the
+largest excess accumulated over any recent stretch, maximised over the
+unknown change point. (ii) If after a change the observations are
+independent with mean $\mu_1 > \mu_0 + k$, then $E[S_{\tau + m}] \ge m(\mu_1 -
+\mu_0 - k)$ for the change time $\tau$, so the expected detection delay is
+about $h/(\mu_1 - \mu_0 - k)$ — linear in the threshold — whereas the mean
+time between false alarms grows exponentially in $h$ [@siegmund1985, ch. 2].
+:::
+
+*In one line:* CUSUM keeps the best "a change started at $s$" score for all
+$s$ at once; raising the threshold delays detection linearly but postpones
+false alarms exponentially.
+
+::: {.deep kind="proof"}
+## Proof of @prp-ops-cusum
+(i) By induction. For $t = 0$ both sides are 0 (empty sum). If $S_{t-1} =
+\max_{s \le t-1}\sum_{s+1}^{t-1} z_i$ with $z_i = x_i - \mu_0 - k$, then
+$\max_{s \le t}\sum_{s+1}^{t} z_i = \max\bigl(0, \max_{s \le t-1}\sum_{s+1}^{t-1}
+z_i + z_t\bigr) = \max(0, S_{t-1} + z_t) = S_t$ (the $s = t$ term is the empty
+sum). (ii) By (i) with $s = \tau$, $S_{\tau + m} \ge \sum_{i=\tau+1}^{\tau +
+m} z_i$, whose expectation is $m(\mu_1 - \mu_0 - k)$; the statistic therefore
+drifts upward at least at that rate and crosses $h$ after about $h/(\mu_1 -
+\mu_0 - k)$ steps. The exponential growth of the in-control run length is a
+classical result of random-walk theory (Wald's identity applied to the
+excursions of $S$ above zero), which we use without proof, citing
+@siegmund1985. $\blacksquare$
+:::
+
+The **Page–Hinkley** test is the same idea written with the running mean
+instead of a fixed $\mu_0$ [@hinkley1971]. The choice of $k$ tunes CUSUM to a
+target change: $k$ halfway between $\mu_0$ and the smallest $\mu_1$ worth
+detecting is the classical choice for normal observations.
+
+```{python}
+def cusum(x, mu0, k, h):
+    s, path, alarm = 0.0, [], None
+    for t, v in enumerate(x):
+        s = max(0.0, s + v - mu0 - k)
+        path.append(s)
+        if alarm is None and s > h:
+            alarm = t
+    return np.array(path), alarm
+
+rng = np.random.default_rng(13)
+batch = 200
+p_neg_before = ref_share[0]
+p_neg_after = np.bincount(model.predict(ob.make_posts(5000, seed=780, prior=(0.36, 0.36, 0.28)).text), minlength=3)[0] / 5000
+x = np.r_[rng.binomial(batch, p_neg_before, 150), rng.binomial(batch, p_neg_after, 100)] / batch
+path, alarm = cusum(x, mu0=p_neg_before, k=(p_neg_after - p_neg_before) / 2, h=0.15)
+chi_alarm = next((t for t, v in enumerate(x) if chisquare([v * batch, (1 - v) * batch],
+                  [p_neg_before * batch, (1 - p_neg_before) * batch]).pvalue < 0.05 / 250), None)
+print(f"predicted-negative share: {p_neg_before:.3f} before, {p_neg_after:.3f} after the change at batch 150")
+print(f"CUSUM alarm at batch {alarm}; per-batch chi-square test (Bonferroni) alarm at batch {chi_alarm}")
+```
+
+The change — a few points more negative posts — is too small for any single
+batch of 200, but CUSUM signals it soon after it starts. The widget lets you
+move the threshold and see the trade-off.
+
+```{python}
+#| echo: false
+ojs_define(cs_p0=float(p_neg_before), cs_p1=float(p_neg_after), cs_batch=batch)
+```
+
+::: {.widget}
+```{ojs}
+//| echo: false
+viewof csH = Inputs.range([0.02, 0.4], {value: 0.15, step: 0.01, label: "threshold h"})
+viewof csK = Inputs.range([0, 0.05], {value: 0.015, step: 0.0025, label: "allowance k"})
+```
+
+```{ojs}
+//| echo: false
+csSim = {
+  let seed = 42; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const binom = (n, p) => { let c = 0; for (let i = 0; i < n; i++) if (rnd() < p) c++; return c / n; };
+  const run = (p, T, h, k) => { let s = 0; for (let t = 0; t < T; t++) { s = Math.max(0, s + binom(cs_batch, p) - cs_p0 - k); if (s > h) return t + 1; } return T; };
+  const path = []; let s = 0, alarm = null;
+  for (let t = 0; t < 250; t++) { const x = binom(cs_batch, t < 150 ? cs_p0 : cs_p1); s = Math.max(0, s + x - cs_p0 - csK); path.push({t, s}); if (alarm === null && s > csH) alarm = t; }
+  const arl0 = Array.from({length: 60}, () => run(cs_p0, 2000, csH, csK)).reduce((a, b) => a + b, 0) / 60;
+  const delay = Array.from({length: 60}, () => run(cs_p1, 2000, csH, csK)).reduce((a, b) => a + b, 0) / 60;
+  return {path, alarm, arl0, delay};
+}
+```
+
+```{ojs}
+//| echo: false
+html`<p style="margin:0;font-size:0.9em">alarm in this run: ${csSim.alarm === null ? "none" : "batch " + csSim.alarm} · mean batches between false alarms (no change) ≈ ${csSim.arl0 >= 2000 ? "> 2000" : csSim.arl0.toFixed(0)} · mean detection delay after the change ≈ ${csSim.delay.toFixed(1)} batches</p>`
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-ops-cusum-widget
+//| fig-cap: "CUSUM statistic of the share of negative predictions per batch of 200 posts; the share increases at batch 150 (grey line). A higher threshold h removes false alarms (their mean spacing grows quickly) at the price of a longer delay, which grows only linearly (@prp-ops-cusum)."
+Plot.plot({
+  width: 600, height: 260, x: {label: "batch"}, y: {label: "S_t", grid: true},
+  marks: [Plot.ruleX([150], {stroke: "#c8c7c2"}), Plot.ruleY([csH], {stroke: "#eb6834", strokeDasharray: "4,3"}),
+          Plot.line(csSim.path, {x: "t", y: "s", stroke: "#2a78d6"})]
+})
+```
+:::
+
+### Practice {.unnumbered}
+
+::: {#exr-ops7-cusum-easy}
+## Easy — CUSUM by hand
+Shares of negative predictions in ten batches: `0.30, 0.28, 0.33, 0.31, 0.36,
+0.35, 0.37, 0.34, 0.38, 0.36`. With $\mu_0 = 0.30$, $k = 0.02$, $h = 0.1$,
+compute $S_t$ step by step and the alarm time. Check (i) of
+@prp-ops-cusum at the alarm.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Each step adds $x_t - 0.32$ and clips at 0.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+xs = np.array([0.30, 0.28, 0.33, 0.31, 0.36, 0.35, 0.37, 0.34, 0.38, 0.36])
+path_, alarm_ = cusum(xs, 0.30, 0.02, 0.10)
+print("S_t:", np.round(path_, 3), "alarm at index", alarm_)
+z = xs - 0.32
+best = max(z[s:alarm_ + 1].sum() for s in range(alarm_ + 1))
+print(f"max over change points {best:.3f} = S at alarm {path_[alarm_]:.3f}")
+```
+$S$ stays near zero for four batches, then grows by the excess above 0.32 at
+every batch and crosses 0.1 at the seventh batch. The maximum over change
+points equals $S_t$, attained by the stretch starting at the fifth batch —
+CUSUM also says *when* the change probably began.
+:::
+
+::: {#exr-ops7-cusum-medium}
+## Medium — tune h on a quiet stream
+For the batch stream of this section (batches of 200 predictions, change at
+150), estimate by simulation the mean number of batches between false alarms
+(no change) and the mean detection delay, for $h \in \{0.05, 0.1, 0.15, 0.2,
+0.3\}$. Pick the smallest $h$ with at most one false alarm per 1 000 batches
+on average, and report its delay.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Run in-control streams until the first alarm (cap at, say, 5 000 batches) to
+estimate the average run length; start each delay simulation at the change.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def run_length(p, h, k, cap=5000, rng=rng):
+    s = 0.0
+    for t in range(cap):
+        s = max(0.0, s + rng.binomial(batch, p) / batch - p_neg_before - k)
+        if s > h:
+            return t + 1
+    return cap
+
+k_ = (p_neg_after - p_neg_before) / 2
+for h in (0.05, 0.1, 0.15, 0.2, 0.3):
+    arl0 = np.mean([run_length(p_neg_before, h, k_) for _ in range(100)])
+    delay = np.mean([run_length(p_neg_after, h, k_) for _ in range(200)])
+    print(f"h = {h:.2f}: mean run without change {arl0:7.0f} batches (capped at 5000), mean delay {delay:5.1f} batches")
+```
+The run length without change grows very fast with $h$ while the delay grows
+roughly linearly, as @prp-ops-cusum states. The smallest $h$ whose mean
+quiet run exceeds 1 000 batches (here 0.1) is the operating point; its delay,
+about four batches after the change, is the price of a monitor that can be
+trusted. A threshold
+chosen on a few days of history rather than by simulation is usually far too
+low.
+:::
+
+::: {#exr-ops7-cusum-hard}
+## Hard — a two-sided monitor for the class mix
+Extend CUSUM to watch the share of **each** predicted class for increases
+**and** decreases (six one-sided statistics), with a common threshold chosen
+so that the combined monitor has a mean quiet run of at least 1 000 batches.
+Test it on three changes: label shift towards negative, towards positive,
+and the concept shift of @sec-ops-drift. Which statistic fires first in each
+case?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+A decrease is an increase of $-x$: use $S^-_t = \max(0, S^-_{t-1} - x_t +
+\mu_0 - k)$. The combined monitor alarms when any statistic does, so its quiet
+run is shorter than each statistic's: tune $h$ on the combination.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+def class_monitor(stream, ref, k=0.015, h=0.2):
+    s_up, s_down = np.zeros(3), np.zeros(3)
+    for t, share in enumerate(stream):
+        s_up = np.maximum(0, s_up + share - ref - k)
+        s_down = np.maximum(0, s_down - share + ref - k)
+        if (s_up > h).any() or (s_down > h).any():
+            which = [f"{ob.LABELS[i]} up" for i in np.flatnonzero(s_up > h)] + \
+                    [f"{ob.LABELS[i]} down" for i in np.flatnonzero(s_down > h)]
+            return t, which
+    return None, []
+
+def shares_stream(n_batches, share):
+    return [rng.multinomial(batch, share) / batch for _ in range(n_batches)]
+
+h_star = None
+for h in (0.2, 0.25, 0.3, 0.35, 0.4):                 # smallest h with a mean quiet run >= 1000 batches
+    runs = [class_monitor(shares_stream(2000, ref_share), ref_share, h=h)[0] for _ in range(20)]
+    mean_run = np.mean([2000 if t is None else t for t in runs])
+    print(f"h = {h:.2f}: mean quiet run {mean_run:6.0f} batches (capped at 2000)")
+    if h_star is None and mean_run >= 1000:
+        h_star = h
+targets = {"towards negative": {"prior": (0.4, 0.35, 0.25)}, "towards positive": {"prior": (0.25, 0.35, 0.4)},
+           "concept shift": {"swap": {w: 0 for w in ("cheap", "fast", "smooth", "perfect", "awesome")}}}
+for name, kw in targets.items():
+    share = np.bincount(model.predict(ob.make_posts(5000, seed=790, **kw).text), minlength=3) / 5000
+    t, which = class_monitor(shares_stream(500, share), ref_share, h=h_star)
+    print(f"h = {h_star}: {name:17s} shares {np.round(share, 3)} -> alarm after {t} batches: {which}")
+```
+Six statistics at the threshold of a single one would raise false alarms
+often (the first rows): the common threshold is chosen on the combination.
+With it, both label shifts are detected within a few batches, and the
+monitor names the class that moved. This concept shift is caught too, through
+the shares it moves — here first as an increase of predicted positives: the
+flipped words make posts that are now negative look positive. A concept shift that moves as many posts into a
+class as out of it would leave the shares unchanged: for those, only labels
+help.
+:::
+
+## Docker Compose, Prometheus, Grafana and alerts {#sec-ops-compose}
+
+### A stack in one file
+
+A monitoring setup is several programs — the service, Prometheus, an alert
+router, a dashboard — that must start together, find each other by name, and
+keep their data. **Docker Compose** describes such a multi-container
+application in one YAML file: **services** (each an image and its
+configuration), the **networks** that connect them (on the default network
+each service is reachable under its own name), **volumes** for persistent
+data, health checks and start-up order (`depends_on` with `condition:
+service_healthy`) [@compose2026]. `docker compose up -d` creates and starts
+everything; `down` removes it.
+
+```{python}
+#| echo: false
+#| output: asis
+cb.ensure_base_images()
+stack = ob.project("stack")
+ob.make_service(stack / "service", model)
+(stack / "service" / "monitored.py").write_text((mon / "monitored.py").read_text())
+pins = ["fastapi", "uvicorn", "pydantic", "scikit-learn", "numpy", "scipy", "joblib", "threadpoolctl", "prometheus-client"]
+(stack / "service" / "requirements.txt").write_text("\n".join(f"{p}=={version(p)}" for p in pins) + "\n")
+(stack / "service" / "Dockerfile").write_text(textwrap.dedent("""\
+    ARG BASE=python:3.12-slim
+    FROM ${BASE}
+    ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    RUN useradd --create-home --uid 10001 app
+    COPY app.py monitored.py model.joblib ./
+    ENV MODEL_PATH=/app/model.joblib
+    USER app
+    CMD ["uvicorn", "monitored:app", "--host", "0.0.0.0", "--port", "8000"]
+"""))
+ob.write("compose.yaml", """
+    services:
+      sentiment:
+        build:
+          context: ./service
+          args:
+            BASE: ${PYTHON_IMAGE:-python:3.12-slim}
+        environment:
+          MODEL_VERSION: "2026-11-18.1"
+        ports:
+          - "127.0.0.1:${SERVICE_PORT:-8000}:8000"
+        healthcheck:
+          test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+          interval: 5s
+          retries: 10
+
+      prometheus:
+        image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.16.0}
+        command:
+          - --config.file=/etc/prometheus/prometheus.yml
+          - --storage.tsdb.path=/prometheus
+        volumes:
+          - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+          - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+          - prometheus-data:/prometheus
+        ports:
+          - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+        depends_on:
+          sentiment:
+            condition: service_healthy
+
+      alertmanager:
+        image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.35.0}
+        command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+        volumes:
+          - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+        ports:
+          - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+
+      grafana:
+        image: grafana/grafana-oss:13.3.1
+        profiles: ["dashboards"]            # started only with --profile dashboards
+        volumes:
+          - ./grafana/provisioning:/etc/grafana/provisioning:ro
+          - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+        ports:
+          - "127.0.0.1:3000:3000"
+        depends_on: [prometheus]
+
+    volumes:
+      prometheus-data:
+""", base=stack)
+ob.show("compose.yaml", base=stack)
+```
+
+The images are the official ones by default; variables let the build machine
+substitute local stand-ins (built from the binaries of the GitHub releases on
+the local Ubuntu base of Part V) and choose free ports. The Grafana service
+sits in a **profile**, so `docker compose up` starts it only when asked: the
+build machine cannot download Grafana, and its part of the stack is configured
+and validated below but not run.
+
+### Rules: recording and alerting
+
+Prometheus evaluates **rules** periodically. A **recording rule** stores the
+result of an expression as a new series (cheap dashboards); an **alerting
+rule** fires when its expression returns a value, after it has been true
+continuously for the `for:` duration, and sends the alert to Alertmanager,
+which groups, silences and routes notifications (e-mail, chat, paging)
+[@prometheus2026]. Two alerts for the service, each with a threshold derived
+from a number rather than chosen by feel:
+
+- **error ratio**: more than 2 % of requests answered with 5xx over 5
+  minutes — a burn rate of 4 for a 99.5 % SLO (@prp-ops-burn);
+- **class mix**: the share of negative predictions over the last minute
+  exceeds the reference share by more than four standard errors of a binomial
+  proportion at the expected traffic. With reference share $\pi_0 \approx
+  `{python} f"{ref_share[0]:.2f}"`$ and about 1 200 predictions per minute,
+  $\sqrt{\pi_0(1 - \pi_0)/1200} \approx 0.013$, so the threshold is
+  $\pi_0 + 0.053$; `for: 30s` requires the condition to persist.
+
+```{python}
+#| echo: false
+#| output: asis
+thr = round(float(ref_share[0] + 4 * np.sqrt(ref_share[0] * (1 - ref_share[0]) / 1200)), 3)
+ob.write("prometheus/prometheus.yml", """
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    rule_files: [/etc/prometheus/rules.yml]
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ["alertmanager:9093"]
+    scrape_configs:
+      - job_name: sentiment
+        static_configs:
+          - targets: ["sentiment:8000"]       # the service's name on the Compose network
+""", base=stack)
+ob.write("prometheus/rules.yml", f"""
+    groups:
+      - name: sentiment
+        rules:
+          - record: sentiment:negative_share:1m
+            expr: >
+              sum(rate(sentiment_predictions_total{{label="negative"}}[1m]))
+              / sum(rate(sentiment_predictions_total[1m]))
+
+          - alert: SentimentHighErrorRatio
+            expr: >
+              sum(rate(sentiment_http_requests_total{{status=~"5.."}}[5m]))
+              / sum(rate(sentiment_http_requests_total[5m])) > 0.02
+            for: 5m
+            labels: {{severity: page}}
+            annotations:
+              summary: "More than 2% of requests fail (burn rate > 4 for a 99.5% SLO)"
+
+          - alert: SentimentNegativeShareHigh
+            expr: sentiment:negative_share:1m > {thr}
+            for: 30s
+            labels: {{severity: ticket}}
+            annotations:
+              summary: "Negative share {{{{ $value | humanizePercentage }}}} above reference + 4 standard errors"
+""", base=stack)
+ob.write("alertmanager/alertmanager.yml", """
+    route:
+      receiver: team
+      group_by: [alertname]
+      group_wait: 5s
+    receivers:
+      - name: team        # in production: email_configs, slack_configs, webhook_configs, ...
+""", base=stack)
+ob.show("prometheus/rules.yml", base=stack)
+ob.sh(f"{ob.tool('promtool')} check rules prometheus/rules.yml", cwd=stack, shown="promtool check rules prometheus/rules.yml")
+```
+
+Now the stack, with the local images and free ports, started by Compose:
+
+```{python}
+#| echo: false
+#| output: asis
+for name, binaries in (("prometheus", ("prometheus", "promtool")), ("alertmanager", ("alertmanager", "amtool"))):
+    d = ob.project(f"img_{name}")
+    for b in binaries:
+        (d / b).write_bytes(Path(ob.tool(b)).read_bytes()); (d / b).chmod(0o755)
+    (d / "Dockerfile").write_text(f"FROM {cb.LOCAL['ubuntu']}\nCOPY {' '.join(binaries)} /bin/\n"
+                                  f"RUN mkdir -p /prometheus && chown nobody /prometheus\nWORKDIR /prometheus\nUSER nobody\n"
+                                  f'ENTRYPOINT ["/bin/{name}"]\n')
+    ob.run(f"docker build -q -t local/{name}:latest .", cwd=d, check=True)
+ports = {"SERVICE_PORT": ob.free_port(), "PROMETHEUS_PORT": ob.free_port(), "ALERTMANAGER_PORT": ob.free_port()}
+compose_env = {"PYTHON_IMAGE": cb.LOCAL["python"], "PROMETHEUS_IMAGE": "local/prometheus:latest",
+               "ALERTMANAGER_IMAGE": "local/alertmanager:latest", **{k: str(v) for k, v in ports.items()}}
+ob.sh("docker compose -p sentiment up -d --build --wait --quiet-pull 2>&1 | grep -v -i 'built\\|building\\|step\\|#'; "
+      "docker compose -p sentiment ps --format '{{.Service}}: {{.Status}}'",
+      cwd=stack, env=compose_env, timeout=1200,
+      shown="docker compose up -d --build --wait && docker compose ps", filt=lambda s: re.sub(r"\d+ seconds?", "N seconds", s))
+```
+
+Then two minutes of traffic: one minute from the reference distribution, one
+minute in which the share of negative posts jumps to 60 % — the label shift
+of @sec-ops-drift:
+
+```{python}
+SP, PP, AP = ports["SERVICE_PORT"], ports["PROMETHEUS_PORT"], ports["ALERTMANAGER_PORT"]
+def send(duration, **shift):
+    posts = list(ob.make_posts(5000, seed=int(time.time()) % 1000, **shift).text)
+    end, i = time.time() + duration, 0
+    with httpx.Client(base_url=f"http://127.0.0.1:{SP}", timeout=5) as c:
+        while time.time() < end:
+            c.post("/v1/predict", json={"texts": posts[i % 5000: i % 5000 + 4]})
+            i += 4
+            time.sleep(0.15)                       # about 25 predictions per second
+def query(expr):
+    r = httpx.get(f"http://127.0.0.1:{PP}/api/v1/query", params={"query": expr}).json()["data"]["result"]
+    return float(r[0]["value"][1]) if r else float("nan")
+def firing():
+    alerts = httpx.get(f"http://127.0.0.1:{AP}/api/v2/alerts").json()
+    return sorted({a["labels"]["alertname"] for a in alerts if a["status"]["state"] == "active"})
+
+send(60)
+print(f"normal traffic : negative share {query('sentiment:negative_share:1m'):.3f}, alerts at Alertmanager: {firing()}")
+send(75, prior=(0.6, 0.2, 0.2))
+time.sleep(10)
+print(f"after the shift: negative share {query('sentiment:negative_share:1m'):.3f}, alerts at Alertmanager: {firing()}")
+```
+
+The recording rule tracks the share; when the shift persists beyond the `for:`
+duration, Prometheus fires `SentimentNegativeShareHigh` and Alertmanager
+receives it, ready to route it to a team.
+
+### Testing alert rules
+
+Alert rules are code, and can be unit-tested without waiting for incidents:
+`promtool test rules` feeds synthetic series to the rules and checks which
+alerts fire when [@prometheus2026]:
+
+```{python}
+#| echo: false
+#| output: asis
+ob.write("prometheus/tests.yml", """
+    rule_files: [rules.yml]
+    evaluation_interval: 15s
+    tests:
+      - interval: 15s
+        input_series:
+          # 100 requests per 15 s, of which 1 per 15 s fails from minute 0 (1 %), then 5 per 15 s from minute 10 (5 %)
+          - series: 'sentiment_http_requests_total{path="/v1/predict", status="200"}'
+            values: '0+99x40 3960+95x40'
+          - series: 'sentiment_http_requests_total{path="/v1/predict", status="500"}'
+            values: '0+1x40 40+5x40'
+        alert_rule_test:
+          - eval_time: 9m
+            alertname: SentimentHighErrorRatio
+            exp_alerts: []                       # 1 % < 2 %: quiet
+          - eval_time: 14m
+            alertname: SentimentHighErrorRatio
+            exp_alerts: []                       # ratio above 2 % but not yet for 5 minutes
+          - eval_time: 20m
+            alertname: SentimentHighErrorRatio
+            exp_alerts:
+              - exp_labels: {severity: page}
+                exp_annotations:
+                  summary: "More than 2% of requests fail (burn rate > 4 for a 99.5% SLO)"
+""", base=stack)
+ob.show("prometheus/tests.yml", base=stack)
+ob.sh(f"cd prometheus && {ob.tool('promtool')} test rules tests.yml", cwd=stack, shown="promtool test rules tests.yml")
+```
+
+### Grafana: dashboards and alerts as files
+
+**Grafana** turns the series into dashboards: panels with PromQL queries,
+thresholds and units, organised in a JSON document; it can also evaluate alert
+rules itself and send notifications through contact points [@grafana2026].
+Both can be **provisioned** from files, so that the dashboard is versioned with
+the code instead of edited by hand: a data-source file tells Grafana where
+Prometheus is, a dashboard provider loads JSON dashboards from a folder.
+
+```{python}
+#| echo: false
+#| output: asis
+ob.write("grafana/provisioning/datasources/prometheus.yml", """
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+""", base=stack)
+ob.write("grafana/provisioning/dashboards/sentiment.yml", """
+    apiVersion: 1
+    providers:
+      - name: sentiment
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+""", base=stack)
+def panel(i, title, expr, unit, legend="", thresholds=None, x=0, y=0):
+    p = {"id": i, "type": "timeseries", "title": title, "datasource": {"type": "prometheus", "uid": "prometheus"},
+         "gridPos": {"h": 8, "w": 12, "x": x, "y": y},
+         "targets": [{"refId": "A", "expr": expr, "legendFormat": legend}],
+         "fieldConfig": {"defaults": {"unit": unit}, "overrides": []}}
+    if thresholds:
+        p["fieldConfig"]["defaults"]["thresholds"] = {"mode": "absolute", "steps": [
+            {"color": "green", "value": None}, {"color": "red", "value": thresholds}]}
+        p["fieldConfig"]["defaults"]["custom"] = {"thresholdsStyle": {"mode": "line"}}
+    return p
+dashboard = {"uid": "sentiment", "title": "Sentiment service", "schemaVersion": 41, "refresh": "10s",
+             "time": {"from": "now-30m", "to": "now"}, "panels": [
+    panel(1, "Requests per second", "sum by (status) (rate(sentiment_http_requests_total[1m]))", "reqps", "{{status}}"),
+    panel(2, "p95 latency", "histogram_quantile(0.95, sum by (le) (rate(sentiment_http_request_seconds_bucket[5m])))", "s", x=12),
+    panel(3, "Predicted class shares", "sum by (label) (rate(sentiment_predictions_total[5m])) / ignoring(label) group_left sum(rate(sentiment_predictions_total[5m]))",
+          "percentunit", "{{label}}", y=8),
+    panel(4, "Negative share vs alert threshold", "sentiment:negative_share:1m", "percentunit", thresholds=thr, x=12, y=8),
+    panel(5, "Mean confidence", "rate(sentiment_confidence_sum[5m]) / rate(sentiment_confidence_count[5m])", "percentunit", y=16),
+    panel(6, "Median text length", "histogram_quantile(0.5, sum by (le) (rate(sentiment_text_length_chars_bucket[5m])))", "none", x=12, y=16)]}
+(stack / "grafana/dashboards").mkdir(parents=True, exist_ok=True)
+(stack / "grafana/dashboards/sentiment.json").write_text(json.dumps(dashboard, indent=1))
+ob.show("grafana/provisioning/datasources/prometheus.yml", base=stack)
+print("\n**`grafana/dashboards/sentiment.json`** (one of six panels)\n\n``` {.json}\n" + json.dumps(dashboard["panels"][3], indent=1) + "\n```\n")
+```
+
+Grafana itself cannot run here, but every part of this configuration can be
+checked against the running stack: the YAML files parse, every panel uses the
+provisioned data source, the panels do not overlap, and — the part most
+likely to break — every PromQL expression is valid and returns data from the
+live Prometheus:
+
+```{python}
+checks = []
+for f in (stack / "grafana/provisioning").rglob("*.yml"):
+    yaml.safe_load(f.read_text())
+checks.append(("provisioning files parse", True))
+ds_uids = {d["uid"] for d in yaml.safe_load((stack / "grafana/provisioning/datasources/prometheus.yml").read_text())["datasources"]}
+checks.append(("panels use a provisioned data source", all(p["datasource"]["uid"] in ds_uids for p in dashboard["panels"])))
+cells = [(p["gridPos"]["x"] + dx, p["gridPos"]["y"] + dy) for p in dashboard["panels"]
+         for dx in range(p["gridPos"]["w"]) for dy in range(p["gridPos"]["h"])]
+checks.append(("panels do not overlap", len(cells) == len(set(cells))))
+for p in dashboard["panels"]:
+    r = httpx.get(f"http://127.0.0.1:{PP}/api/v1/query", params={"query": p["targets"][0]["expr"]}).json()
+    checks.append((f"query of '{p['title']}' returns data", r["status"] == "success" and len(r["data"]["result"]) > 0))
+for name, ok in checks:
+    print(f"{'ok  ' if ok else 'FAIL'} {name}")
+```
+
+```{python}
+#| echo: false
+_ = ob.run("docker compose -p sentiment down -v --remove-orphans", cwd=stack, env=compose_env, timeout=300)
+```
+
+A Grafana alert rule for the same condition is a provisioned YAML file with
+the query, a threshold expression, the `for` duration (`for: 30s`) and a
+contact point; it behaves like the Prometheus rule above. Keeping the alert in
+Prometheus and the dashboard in Grafana — or both in Grafana — is a matter of
+taste; keeping them in **files under version control**, tested like the rules
+above, is not.
+
+### Practice {.unnumbered}
+
+::: {#exr-ops7-compose-easy}
+## Easy — a threshold from noise
+The service handles 300 predictions per minute, of which 40 % are normally
+neutral. An alert should fire when the neutral share over one minute drops
+below normal by more than chance would explain. Compute a threshold at four
+standard errors. If the share in successive minutes were independent, how
+likely is a false alarm in a minute, and with `for: 3m` (three consecutive
+one-minute evaluations)?
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Standard error $\sqrt{0.4 \cdot 0.6/300}$; a normal variable is more than four
+standard deviations below its mean with probability $\Phi(-4)$.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+se = np.sqrt(0.4 * 0.6 / 300)
+p_one = norm.cdf(-4)
+print(f"threshold {0.4 - 4 * se:.3f}; P(false alarm in a minute) {p_one:.1e}; with for: 3m {p_one**3:.1e}")
+```
+The threshold is about 0.287. With independent minutes, a single evaluation
+crosses it about 3 times in 100 000, and three in a row essentially never.
+Real evaluations are *not* independent — a rule evaluated every 5 s on a
+1-minute window sees mostly the same data — so `for:` mainly suppresses short
+spikes; the noise calculation is what sets the threshold.
+:::
+
+::: {#exr-ops7-compose-medium}
+## Medium — unit-test the drift alert
+Write `promtool` unit tests for `SentimentNegativeShareHigh`: synthetic
+`sentiment_predictions_total` series in which the negative share is at the
+reference level for ten minutes and then rises above the threshold. Check that
+the alert does not fire before the rise, does not fire 15 seconds after it
+(the `for:` duration has not elapsed), and fires a minute after.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Counters grow by a constant per interval: `'0+30x40 1200+60x20'` means +30
+per interval for 40 intervals, then +60 per interval. The recording rule needs
+a full minute of data after the change to reflect it.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+#| echo: false
+#| output: asis
+ob.write("prometheus/tests_drift.yml", """
+    rule_files: [rules.yml]
+    evaluation_interval: 15s
+    tests:
+      - interval: 15s
+        input_series:
+          # per 15 s: 30 negative, 40 neutral, 30 positive; from minute 10: 60 negative
+          - series: 'sentiment_predictions_total{label="negative"}'
+            values: '0+30x40 1200+60x20'
+          - series: 'sentiment_predictions_total{label="neutral"}'
+            values: '0+40x60'
+          - series: 'sentiment_predictions_total{label="positive"}'
+            values: '0+30x60'
+        alert_rule_test:
+          - eval_time: 9m
+            alertname: SentimentNegativeShareHigh
+            exp_alerts: []
+          - eval_time: 10m15s
+            alertname: SentimentNegativeShareHigh
+            exp_alerts: []
+          - eval_time: 12m
+            alertname: SentimentNegativeShareHigh
+            exp_alerts:
+              - exp_labels: {severity: ticket}
+""", base=stack)
+ob.show("prometheus/tests_drift.yml", base=stack)
+ob.sh(f"cd prometheus && {ob.tool('promtool')} test rules tests_drift.yml", cwd=stack, shown="promtool test rules tests_drift.yml",
+      filt=lambda s: re.sub(r"exp_annotations.*", "", s))
+```
+Before the change the share is 0.30 and nothing fires; 15 seconds after it,
+the one-minute rate has barely moved and the `for:` clock has not run out;
+two minutes after it the share is $60/130 \approx 0.46$, above the threshold,
+and the alert fires. The test fails if someone "simplifies" the recording rule
+or raises the threshold without noticing — which is the point.
+:::
+
+::: {#exr-ops7-compose-hard}
+## Hard — an alert on concept drift?
+Concept shift is invisible to label-free signals (@exr-ops7-drift-hard).
+Design an alert that can catch it in production: what extra data must flow
+into the monitoring (and from where), which metric does Prometheus compute,
+what threshold and window would you use given that only 20 labelled posts
+arrive per hour, and how long would it take to detect a drop of accuracy from
+0.93 to 0.85? Implement the metric as two counters in the service (a
+`POST /v1/feedback` endpoint receiving the true label of a previously
+classified post) and test the alert with promtool.
+:::
+
+::: {.callout-note collapse="true"}
+## Hint
+Count feedback events and correct predictions; accuracy over a window is
+`increase(correct[6h]) / increase(feedback[6h])`. With 20 labels per hour, a
+6-hour window has 120 labels: use the test-size reasoning of
+@sec-ops-model-tests to set the threshold.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+n_lab = 120                                         # labels in a 6-hour window
+p0, p1 = 0.93, 0.85
+thr_acc = p0 - norm.ppf(0.99) * np.sqrt(p0 * (1 - p0) / n_lab)
+power = norm.cdf((thr_acc - p1) / np.sqrt(p1 * (1 - p1) / n_lab))
+print(f"threshold {thr_acc:.3f} (1% false alarms per window), power against 0.85 = {power:.2f}")
+ob.write("prometheus/rules_feedback.yml", f"""
+    groups:
+      - name: quality
+        rules:
+          - alert: SentimentAccuracyDrop
+            expr: >
+              increase(sentiment_feedback_correct_total[6h]) / increase(sentiment_feedback_total[6h]) < {thr_acc:.3f}
+              and increase(sentiment_feedback_total[6h]) >= 60
+            for: 1h
+            labels: {{severity: ticket}}
+""", base=stack)
+ob.write("prometheus/tests_feedback.yml", """
+    rule_files: [rules_feedback.yml]
+    evaluation_interval: 5m
+    tests:
+      - interval: 5m
+        input_series:                          # 20 labels/hour = 5 per 15 min; accuracy 0.93 then 0.8
+          - series: sentiment_feedback_total
+            values: '0+1.6667x200'
+          - series: sentiment_feedback_correct_total
+            values: '0+1.55x100 155+1.3333x100'
+        alert_rule_test:
+          - eval_time: 8h
+            alertname: SentimentAccuracyDrop
+            exp_alerts: []
+          - eval_time: 16h
+            alertname: SentimentAccuracyDrop
+            exp_alerts:
+              - exp_labels: {severity: ticket}
+""", base=stack)
+p = ob.run(f"cd prometheus && {ob.tool('promtool')} test rules tests_feedback.yml", cwd=stack)
+print(ob.mask(p.stdout.strip() or p.stderr.strip()))
+```
+The extra data are **delayed labels**: a sample of classified posts sent to
+annotators (or user feedback such as "this label is wrong"), joined back to
+the prediction by an identifier and posted to the service, which counts
+feedback and correct predictions — the service already knows what it
+predicted. With 120 labels per window, a threshold at 1 % false alarms is
+about 0.875, and a drop to 0.85 is caught in a single window about four times
+in five; detecting it with near certainty takes a longer window or more
+labels per hour. The rule also requires a minimum
+number of labels, so that a quiet night does not fire it. The promtool test
+checks that the alert stays quiet while accuracy is 0.93 and fires once a
+drop to 0.8 has filled the window and persisted for the `for:` duration.
+:::
+
+::: {.project-link}
+**In the project.** The project asks for a monitoring setup with Docker
+Compose that collects the service's metrics, a Grafana dashboard, at least one
+alert with a motivated threshold, and an explanation of the signals that
+would reveal data or concept drift. This chapter gives the pieces: decide the
+signals first (@sec-ops-what-monitor) — request rate, latency, errors,
+predicted-class shares, confidence, text length — then instrument the
+service (@sec-ops-what-monitor), write the Compose file with Prometheus (and
+Alertmanager), provision the dashboard and the data source as files
+(@sec-ops-compose), and derive each threshold from a number — an SLO burn
+rate, or the binomial noise of a share at the expected traffic
+(@exr-ops7-compose-easy) — testing the rules with promtool. For drift, map
+each kind of shift to the monitor that can see it (@exr-ops7-drift-hard):
+inputs for covariate shift, the class mix (corrected with BBSE,
+@sec-ops-label-shift) for label shift, and a trickle of labels for concept
+shift (@exr-ops7-compose-hard).
+:::
+
+## Common pitfalls
+
+::: {.callout-warning}
+## Watch out
+- **Monitoring only the service**: a model can be up, fast and wrong.
+- **Summaries instead of histograms** when replicas must be aggregated;
+  histogram buckets far from the thresholds that matter.
+- **PSI thresholds as laws**: they depend on binning and ignore sample size.
+- **A test per window at 5 %**: daily false alarms; correct for multiplicity
+  or accumulate evidence (CUSUM).
+- **The share of predictions as the share of classes**: correct for the
+  classifier's errors (BBSE, EM) — and check the label-shift assumption.
+- **No labels at all**: concept shift stays invisible.
+- **Alerts without tests, dashboards edited by hand**: version and test them.
+:::
+
+## Summary
+
+- Monitor four layers: service (golden signals), inputs, outputs, quality.
+  SLOs and error budgets turn reliability into numbers; burn rate $r =
+  e/(1-s)$ says how fast the budget goes.
+- Prometheus scrapes counters, gauges and histograms; `histogram_quantile`
+  interpolates inside a bucket, with error at most the bucket's width.
+- Shift is covariate, label or concept. PSI $= \mathrm{KL}(p\|q) +
+  \mathrm{KL}(q\|p)$ measures size and shrinks with coarser bins; KS with the
+  DKW–Massart bound gives windows of $n > 8\ln(4/\alpha)/\delta^2$; Pearson's
+  $\chi^2$ tests the class mix. Many windows need multiplicity control.
+- Under label shift, $q = C^{-1}\mu$ (BBSE) and EM on calibrated probabilities
+  estimate the class mix without labels; both fail under concept shift, which
+  only labels reveal.
+- CUSUM $S_t = \max(0, S_{t-1} + x_t - \mu_0 - k)$ maximises over change
+  points; delay grows linearly and the quiet run exponentially with $h$.
+- Docker Compose runs the service, Prometheus and Alertmanager together;
+  rules and dashboards are files — validated with promtool and against the
+  live Prometheus.
+
+## Exercises
+
+::: {#exr-ops7-length-oov}
+**An unknown-word monitor.** Slang was the shift that label-free monitors
+barely saw. Add a metric for the share of words in each text that are not in
+the model's vocabulary, and show on windows of 500 posts that a KS test on it
+detects the slang shift that the length and confidence monitors missed.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+vocab = set(model[0].vocabulary_)
+def oov_share(texts):
+    out = []
+    for t in texts:
+        words = re.findall(r"\b\w+\b", t.lower())
+        out.append(np.mean([w not in vocab for w in words]) if words else 0.0)
+    return np.array(out)
+ref_oov = oov_share(reference.text)
+for name, kw in (("none", {}), ("covariate: unseen slang", {"slang_rate": 0.8})):
+    pvals = [ks_2samp(ref_oov, oov_share(ob.make_posts(500, seed=950 + i, **kw).text)).pvalue for i in range(30)]
+    print(f"{name:24s} detection rate at 1 %: {np.mean(np.array(pvals) < 0.01):.2f}")
+```
+The unknown-word share jumps when slang appears and the KS test catches it in
+essentially every window, while staying quiet without shift. Monitors should
+target the *mechanism* by which a shift hurts the model: unseen words are
+exactly what a bag-of-words model cannot use.
+:::
+
+::: {#exr-ops7-psi-n}
+**PSI and sample size.** Compute the distribution of the PSI of the
+confidence (10 quantile bins) between a reference of 5 000 posts and windows
+of 200, 1 000 and 10 000 posts **from the same distribution**. What fraction
+of windows exceed the folklore threshold 0.1 in each case?
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+for n in (200, 1000, 10_000):
+    vals = []
+    for i in range(30):
+        conf = model.predict_proba(ob.make_posts(n, seed=1000 + 31 * i + n).text).max(1)
+        p_b = np.maximum(np.bincount(np.searchsorted(edges, conf), minlength=10) / n, 1e-6)
+        vals.append(np.sum((p_b - q_bins) * np.log(p_b / q_bins)))
+    print(f"n = {n:6d}: median PSI {np.median(vals):.4f}, share above 0.1: {np.mean(np.array(vals) > 0.1):.2f}")
+```
+Without any shift, the PSI of small windows is inflated by sampling noise
+(its expectation is roughly $(B - 1)(1/n + 1/N)$ for $B$ bins); with 200
+posts the median is several times that of 10 000 posts. A fixed threshold
+therefore means different things at different traffic levels — the reason to
+pair a size measure with a test.
+:::
+
+::: {#exr-ops7-burn-windows}
+**Two-window burn-rate alert.** Write a PromQL alert that fires when the error
+budget of a 99.5 % SLO burns at more than 14.4 times the sustainable rate over
+both the last hour and the last 5 minutes, and test with promtool that it
+fires during a spike of 50 % errors lasting 15 minutes but not for a 2-minute
+spike of the same intensity.
+:::
+
+::: {.callout-tip collapse="true"}
+## Solution
+```{python}
+ob.write("prometheus/rules_burn.yml", """
+    groups:
+      - name: slo
+        rules:
+          - alert: SentimentBudgetBurn
+            expr: >
+              (sum(rate(sentiment_http_requests_total{status=~"5.."}[1h])) / sum(rate(sentiment_http_requests_total[1h]))) > 14.4 * 0.005
+              and
+              (sum(rate(sentiment_http_requests_total{status=~"5.."}[5m])) / sum(rate(sentiment_http_requests_total[5m]))) > 14.4 * 0.005
+            labels: {severity: page}
+""", base=stack)
+ok_per_min, err_per_min = np.full(260, 100), np.zeros(260, int)     # 100 requests per minute
+for start, length in ((60, 2), (180, 15)):                           # 50 % errors: 2 min at 60, 15 min at 180
+    ok_per_min[start:start + length], err_per_min[start:start + length] = 50, 50
+series = lambda inc: " ".join(map(str, np.r_[0, np.cumsum(inc)]))
+ob.write("prometheus/tests_burn.yml", f"""
+    rule_files: [rules_burn.yml]
+    evaluation_interval: 1m
+    tests:
+      - interval: 1m
+        input_series:
+          - series: 'sentiment_http_requests_total{{status="200"}}'
+            values: '{series(ok_per_min)}'
+          - series: 'sentiment_http_requests_total{{status="500"}}'
+            values: '{series(err_per_min)}'
+        alert_rule_test:
+          - eval_time: 63m
+            alertname: SentimentBudgetBurn
+            exp_alerts: []
+          - eval_time: 194m
+            alertname: SentimentBudgetBurn
+            exp_alerts:
+              - exp_labels: {{severity: page}}
+""", base=stack)
+p = ob.run(f"cd prometheus && {ob.tool('promtool')} test rules tests_burn.yml", cwd=stack)
+print(ob.mask(p.stdout.strip() or p.stderr.strip()))
+```
+The 1-hour window ignores the short spike (2 minutes at 50 % average to
+under 2 % over an hour, below the 7.2 % that a burn rate of 14.4 means) while
+the 5-minute window alone would have paged for it; during the long spike both
+windows exceed 7.2 %, and the 5-minute window lets the alert stop soon after
+the incident ends. Requiring both makes the alert significant and quick to
+reset. A 15-minute spike of 10 % errors, by contrast, consumes less than 1 % of
+a month's budget and should not page anyone.
+:::
+
+## Further reading {.unnumbered}
+
+- @beyer2016, ch. 4 (SLOs) and ch. 6 (monitoring distributed systems: the
+  four golden signals, symptoms versus causes); @beyer2018, ch. 5 (alerting on
+  SLOs: burn rates and multiwindow alerts).
+- @prometheus2026 — data model, metric types, PromQL (`rate`,
+  `histogram_quantile`), recording and alerting rules, `promtool` unit tests;
+  @compose2026 and @grafana2026 for the Compose file and Grafana provisioning.
+- @quinonero2009 and @morenotorres2012 — the taxonomy of dataset shift;
+  @rabanser2019 — an empirical comparison of shift detectors.
+- @lipton2018 — black-box shift estimation (§3–4); @saerens2002 — EM
+  adjustment of priors; @dempster1977 — the EM algorithm.
+- @dvoretzky1956 and @massart1990 — the DKW inequality and its tight
+  constant; @pearson1900 — the χ² test; @benjamini1995 — false discovery
+  rate.
+- @page1954 — CUSUM; @hinkley1971 — the Page–Hinkley test; @siegmund1985,
+  ch. 2 — run lengths of sequential tests; @gama2014 — a survey of concept
+  drift adaptation.
+- @siddiqi2006 — credit scoring practice, where PSI and its thresholds come
+  from.

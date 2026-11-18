@@ -5092,3 +5092,817 @@
   url          = {https://fetch.spec.whatwg.org/},
   note         = {Free (accessed November 2026). Section 3.2 (CORS protocol) and the Access-Control-Allow-Origin header}
 }
+
+% -----------------------------------------------------------------------------
+% Part VII — MLOps: machine learning in production
+% -----------------------------------------------------------------------------
+
+% ---- What MLOps is (Chapter on MLOps; also the part overview) ------------------
+
+@inproceedings{sculley2015,
+  author    = {Sculley, D. and Holt, Gary and Golovin, Daniel and Davydov, Eugene and Phillips, Todd and Ebner, Dietmar and Chaudhary, Vinay and Young, Michael and Crespo, Jean-Fran{\c{c}}ois and Dennison, Dan},
+  title     = {Hidden Technical Debt in Machine Learning Systems},
+  booktitle = {Advances in Neural Information Processing Systems 28 (NIPS 2015)},
+  pages     = {2503--2511},
+  year      = {2015},
+  url       = {https://papers.nips.cc/paper/5656-hidden-technical-debt-in-machine-learning-systems},
+  note      = {Free from the NeurIPS proceedings. §2 (entanglement, correction cascades, undeclared consumers), §3 (data dependencies), §4 (feedback loops), §5--6 (anti-patterns, configuration debt), §7 (changes in the external world)}
+}
+
+@article{kreuzberger2023,
+  author  = {Kreuzberger, Dominik and K{\"u}hl, Niklas and Hirschl, Sebastian},
+  title   = {Machine Learning Operations ({MLOps}): Overview, Definition, and Architecture},
+  journal = {IEEE Access},
+  volume  = {11},
+  pages   = {31866--31879},
+  year    = {2023},
+  doi     = {10.1109/ACCESS.2023.3262138},
+  note    = {Open access (also arXiv:2205.02302). §IV (principles), §V (technical components and roles), §VI (architecture and workflow), the definition of MLOps}
+}
+
+@inproceedings{amershi2019,
+  author    = {Amershi, Saleema and Begel, Andrew and Bird, Christian and DeLine, Robert and Gall, Harald and Kamar, Ece and Nagappan, Nachiappan and Nushi, Besmira and Zimmermann, Thomas},
+  title     = {Software Engineering for Machine Learning: A Case Study},
+  booktitle = {2019 IEEE/ACM 41st International Conference on Software Engineering: Software Engineering in Practice (ICSE-SEIP)},
+  pages     = {291--300},
+  year      = {2019},
+  doi       = {10.1109/ICSE-SEIP.2019.00042},
+  note      = {Free from Microsoft Research. The nine-stage ML workflow and the challenges reported by teams at Microsoft}
+}
+
+@article{paleyes2022,
+  author  = {Paleyes, Andrei and Urma, Raoul-Gabriel and Lawrence, Neil D.},
+  title   = {Challenges in Deploying Machine Learning: A Survey of Case Studies},
+  journal = {ACM Computing Surveys},
+  volume  = {55},
+  number  = {6},
+  pages   = {114:1--114:29},
+  year    = {2022},
+  doi     = {10.1145/3533378},
+  note    = {Free on arXiv (2011.09926). Challenges organised by stage of the deployment workflow: data management, learning, verification, deployment, cross-cutting issues}
+}
+
+@inproceedings{breck2017,
+  author    = {Breck, Eric and Cai, Shanqing and Nielsen, Eric and Salib, Michael and Sculley, D.},
+  title     = {The {ML} Test Score: A Rubric for {ML} Production Readiness and Technical Debt Reduction},
+  booktitle = {2017 IEEE International Conference on Big Data (Big Data)},
+  pages     = {1123--1132},
+  year      = {2017},
+  doi       = {10.1109/BigData.2017.8258038},
+  note      = {Free from Google Research. §II--V (the 28 tests: data, model, infrastructure, monitoring), §VI (scoring: 0, ½, 1 point per test; the minimum over sections; interpretation)}
+}
+
+@misc{google2024mlops,
+  author       = {{Google Cloud}},
+  title        = {{MLOps}: Continuous Delivery and Automation Pipelines in Machine Learning},
+  howpublished = {Cloud Architecture Center},
+  year         = {2024},
+  url          = {https://cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning},
+  note         = {Free (last reviewed 28 August 2024; accessed November 2026). MLOps levels 0 (manual process), 1 (ML pipeline automation, continuous training) and 2 (CI/CD pipeline automation)}
+}
+
+@misc{microsoft2024maturity,
+  author       = {{Microsoft}},
+  title        = {Machine Learning Operations Maturity Model},
+  howpublished = {Azure Architecture Center},
+  year         = {2024},
+  url          = {https://learn.microsoft.com/azure/architecture/ai-ml/guide/mlops-maturity-model},
+  note         = {Free (accessed November 2026). The five levels, from 0 (no MLOps) to 4 (full MLOps automated operations), by people, model creation, release and integration}
+}
+
+@inproceedings{milanifard2016,
+  author    = {Milani Fard, Mahdi and Cormier, Quentin and Canini, Kevin and Gupta, Maya},
+  title     = {Launch and Iterate: Reducing Prediction Churn},
+  booktitle = {Advances in Neural Information Processing Systems 29 (NIPS 2016)},
+  year      = {2016},
+  url       = {https://papers.nips.cc/paper_files/paper/2016/hash/dc5c768b5dc76a084531934b34601977-Abstract.html},
+  note      = {Free from the NeurIPS proceedings. §1--2: churn as the expected fraction of differing predictions between successive models; stabilisation towards the previous model}
+}
+
+@article{gebru2021,
+  author  = {Gebru, Timnit and Morgenstern, Jamie and Vecchione, Briana and Vaughan, Jennifer Wortman and Wallach, Hanna and Daum{\'e} III, Hal and Crawford, Kate},
+  title   = {Datasheets for Datasets},
+  journal = {Communications of the {ACM}},
+  volume  = {64},
+  number  = {12},
+  pages   = {86--92},
+  year    = {2021},
+  doi     = {10.1145/3458723},
+  note    = {Free on arXiv (1803.09010). The questions a datasheet answers: motivation, composition, collection, preprocessing, uses, distribution, maintenance}
+}
+
+@misc{huggingface2026hub,
+  author       = {{Hugging Face}},
+  title        = {Hub Documentation: Model Cards, Repositories and Downloading Files},
+  year         = {2026},
+  url          = {https://huggingface.co/docs/hub/},
+  note         = {Free (consulted through search results in November 2026: huggingface.co is not reachable from the build machine). "Model Cards" (YAML metadata), "Repositories" (Git, large files), "Spaces" (Docker Spaces)}
+}
+
+@misc{devcontainers2025,
+  author       = {{Development Container Specification Authors}},
+  title        = {Development Container Specification},
+  year         = {2025},
+  url          = {https://containers.dev/implementors/spec/},
+  note         = {Free (accessed November 2026). The devcontainer.json file used by GitHub Codespaces and editors to create a reproducible development environment}
+}
+
+@misc{gitlfs2024spec,
+  author       = {{Git LFS Authors}},
+  title        = {Git {LFS} Specification},
+  year         = {2024},
+  url          = {https://github.com/git-lfs/git-lfs/blob/main/docs/spec.md},
+  note         = {Free (accessed November 2026). The pointer file: version, oid sha256:<hash>, size}
+}
+
+@misc{liu2019roberta,
+  author       = {Liu, Yinhan and Ott, Myle and Goyal, Naman and Du, Jingfei and Joshi, Mandar and Chen, Danqi and Levy, Omer and Lewis, Mike and Zettlemoyer, Luke and Stoyanov, Veselin},
+  title        = {{RoBERTa}: A Robustly Optimized {BERT} Pretraining Approach},
+  howpublished = {arXiv:1907.11692},
+  year         = {2019},
+  doi          = {10.48550/arXiv.1907.11692},
+  note         = {Free on arXiv. The architecture and pre-training recipe of the project's base model}
+}
+
+@inproceedings{barbieri2020,
+  author    = {Barbieri, Francesco and Camacho-Collados, Jose and Espinosa Anke, Luis and Neves, Leonardo},
+  title     = {{TweetEval}: Unified Benchmark and Comparative Evaluation for Tweet Classification},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2020},
+  pages     = {1644--1650},
+  year      = {2020},
+  doi       = {10.18653/v1/2020.findings-emnlp.148},
+  note      = {Free from the ACL Anthology. The seven tasks, including three-class sentiment from SemEval-2017 Task 4}
+}
+
+@inproceedings{loureiro2022,
+  author    = {Loureiro, Daniel and Barbieri, Francesco and Neves, Leonardo and Espinosa Anke, Luis and Camacho-Collados, Jose},
+  title     = {{TimeLMs}: Diachronic Language Models from {Twitter}},
+  booktitle = {Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics: System Demonstrations},
+  pages     = {251--260},
+  year      = {2022},
+  doi       = {10.18653/v1/2022.acl-demo.25},
+  note      = {Free from the ACL Anthology (also arXiv:2202.03829). Language models trained on tweets up to successive dates; degradation over time and concept drift}
+}
+
+@inproceedings{camachocollados2022,
+  author    = {Camacho-Collados, Jose and Rezaee, Kiamehr and Riahi, Talayeh and Ushio, Asahi and Loureiro, Daniel and Antypas, Dimosthenis and Boisson, Joanne and Espinosa-Anke, Luis and Liu, Fangyu and Mart{\'i}nez-C{\'a}mara, Eugenio and Medina, Gonzalo and Buhrmann, Thomas and Neves, Leonardo and Barbieri, Francesco},
+  title     = {{TweetNLP}: Cutting-Edge Natural Language Processing for Social Media},
+  booktitle = {Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing: System Demonstrations},
+  pages     = {38--49},
+  year      = {2022},
+  doi       = {10.18653/v1/2022.emnlp-demos.5},
+  note      = {Free from the ACL Anthology (also arXiv:2206.14774). The library and models, including the sentiment classifier used in the project}
+}
+
+@misc{cardiffnlp2022card,
+  author       = {{Cardiff NLP}},
+  title        = {twitter-roberta-base-sentiment-latest: Model Card},
+  howpublished = {Hugging Face Hub, model cardiffnlp/twitter-roberta-base-sentiment-latest},
+  year         = {2022},
+  url          = {https://huggingface.co/cardiffnlp/twitter-roberta-base-sentiment-latest},
+  note         = {Free (the card's content was read through search-engine copies in November 2026, since huggingface.co is not reachable from the build machine). Training data (about 124M tweets, January 2018 to December 2021), TweetEval fine-tuning, labels 0/1/2, licence CC BY 4.0}
+}
+
+% ---- Reproducibility (Chapter on environments, version control, registries) ---
+
+@book{popper1959,
+  author    = {Popper, Karl R.},
+  title     = {The Logic of Scientific Discovery},
+  publisher = {Hutchinson},
+  address   = {London},
+  year      = {1959},
+  isbn      = {978-0-415-27844-7},
+  note      = {Libraries (Routledge Classics edition, 2002). §8 (scientific objectivity: reproducible effects)}
+}
+
+@misc{acm2020badging,
+  author       = {{Association for Computing Machinery}},
+  title        = {Artifact Review and Badging, Version 1.1},
+  year         = {2020},
+  url          = {https://www.acm.org/publications/policies/artifact-review-and-badging-current},
+  note         = {Free (accessed November 2026). Definitions of repeatability, reproducibility and replicability}
+}
+
+@misc{pip2026hashes,
+  author       = {{The pip developers}},
+  title        = {pip Documentation: Secure Installs (Hash-Checking Mode)},
+  year         = {2026},
+  url          = {https://pip.pypa.io/en/stable/topics/secure-installs/},
+  note         = {Free (accessed November 2026). --require-hashes, the all-or-nothing rule for dependencies, pip hash}
+}
+
+@misc{uv2026,
+  author       = {{Astral}},
+  title        = {uv Documentation},
+  year         = {2026},
+  url          = {https://docs.astral.sh/uv/},
+  note         = {Free (accessed November 2026). "Locking environments", uv pip compile --generate-hashes}
+}
+
+@misc{python2026hashseed,
+  author       = {{Python Software Foundation}},
+  title        = {Command Line and Environment: {PYTHONHASHSEED}},
+  year         = {2026},
+  url          = {https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHASHSEED},
+  note         = {Free (accessed November 2026). Hash randomisation of str and bytes, and how to fix the seed}
+}
+
+@book{chacon2014,
+  author    = {Chacon, Scott and Straub, Ben},
+  title     = {Pro Git},
+  edition   = {2},
+  publisher = {Apress},
+  address   = {Berkeley, CA},
+  year      = {2014},
+  isbn      = {978-1-4842-0077-3},
+  doi       = {10.1007/978-1-4842-0076-6},
+  note      = {Free at https://git-scm.com/book (CC BY-NC-SA). Ch. 3 (branching), ch. 7.5 (searching, git bisect), ch. 10 (internals: objects, references)}
+}
+
+@misc{git2026hashtransition,
+  author       = {{The Git Project}},
+  title        = {Git Hash Function Transition},
+  year         = {2026},
+  url          = {https://git-scm.com/docs/hash-function-transition},
+  note         = {Free (accessed November 2026). SHA-1 with collision detection, SHA-256 repositories and their interoperability}
+}
+
+@inproceedings{stevens2017,
+  author    = {Stevens, Marc and Bursztein, Elie and Karpman, Pierre and Albertini, Ange and Markov, Yarik},
+  title     = {The First Collision for Full {SHA-1}},
+  booktitle = {Advances in Cryptology -- CRYPTO 2017},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {10401},
+  pages     = {570--596},
+  publisher = {Springer},
+  year      = {2017},
+  doi       = {10.1007/978-3-319-63688-7_19},
+  note      = {Free at https://shattered.io. Two PDF files with the same SHA-1}
+}
+
+@misc{mlflow2026,
+  author       = {{MLflow Project}},
+  title        = {{MLflow} Documentation (version 3.18)},
+  year         = {2026},
+  url          = {https://mlflow.org/docs/latest/},
+  note         = {Free (accessed through PyPI and the package itself in November 2026; mlflow.org is not reachable from the build machine). Tracking (experiments, runs, parameters, metrics, artefacts), Model Registry (versions, aliases), backend stores}
+}
+
+@misc{dvc2026,
+  author       = {{Iterative}},
+  title        = {{DVC} Documentation},
+  year         = {2026},
+  url          = {https://dvc.org/doc},
+  note         = {Free (accessed November 2026). Data versioning with .dvc pointer files and content-addressed caches; version 3.67 on PyPI}
+}
+
+% ---- Serving (Chapter on serving a model over HTTP) ----------------------------
+
+@inproceedings{guo2017,
+  author    = {Guo, Chuan and Pleiss, Geoff and Sun, Yu and Weinberger, Kilian Q.},
+  title     = {On Calibration of Modern Neural Networks},
+  booktitle = {Proceedings of the 34th International Conference on Machine Learning},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {70},
+  pages     = {1321--1330},
+  year      = {2017},
+  url       = {https://proceedings.mlr.press/v70/guo17a.html},
+  note      = {Free (also arXiv:1706.04599). §2 (calibration, reliability diagrams, ECE), §4.2 (temperature scaling)}
+}
+
+@inproceedings{naeini2015,
+  author    = {Naeini, Mahdi Pakdaman and Cooper, Gregory F. and Hauskrecht, Milos},
+  title     = {Obtaining Well Calibrated Probabilities Using {Bayesian} Binning},
+  booktitle = {Proceedings of the Twenty-Ninth AAAI Conference on Artificial Intelligence},
+  pages     = {2901--2907},
+  year      = {2015},
+  doi       = {10.1609/aaai.v29i1.9602},
+  note      = {Free from the AAAI digital library. The expected and maximum calibration errors on binned confidences}
+}
+
+@inproceedings{niculescumizil2005,
+  author    = {Niculescu-Mizil, Alexandru and Caruana, Rich},
+  title     = {Predicting Good Probabilities with Supervised Learning},
+  booktitle = {Proceedings of the 22nd International Conference on Machine Learning (ICML)},
+  pages     = {625--632},
+  year      = {2005},
+  doi       = {10.1145/1102351.1102430},
+  note      = {Free from the authors' pages. Reliability of classical classifiers; Platt scaling and isotonic regression; naive Bayes pushes probabilities to 0 and 1}
+}
+
+@inproceedings{crankshaw2017,
+  author    = {Crankshaw, Daniel and Wang, Xin and Zhou, Guilio and Franklin, Michael J. and Gonzalez, Joseph E. and Stoica, Ion},
+  title     = {Clipper: A Low-Latency Online Prediction Serving System},
+  booktitle = {14th USENIX Symposium on Networked Systems Design and Implementation (NSDI 17)},
+  pages     = {613--627},
+  year      = {2017},
+  url       = {https://www.usenix.org/conference/nsdi17/technical-sessions/presentation/crankshaw},
+  note      = {Free from USENIX. §4.3 (adaptive batching under a latency objective)}
+}
+
+@misc{olston2017,
+  author       = {Olston, Christopher and Fiedel, Noah and Gorovoy, Kiril and Harmsen, Jeremiah and Lao, Li and Li, Fangwei and Rajashekhar, Vinu and Ramesh, Sukriti and Soyke, Jordan},
+  title        = {{TensorFlow-Serving}: Flexible, High-Performance {ML} Serving},
+  howpublished = {arXiv:1712.06139 (Workshop on ML Systems at NIPS 2017)},
+  year         = {2017},
+  doi          = {10.48550/arXiv.1712.06139},
+  note         = {Free on arXiv. Model versions, loading and unloading, request batching}
+}
+
+% ---- Testing (Chapter on testing ML systems) ------------------------------------
+
+@techreport{dijkstra1970,
+  author      = {Dijkstra, Edsger W.},
+  title       = {Notes on Structured Programming},
+  institution = {Technological University Eindhoven},
+  type        = {EWD},
+  number      = {249},
+  year        = {1970},
+  url         = {https://www.cs.utexas.edu/~EWD/transcriptions/EWD02xx/EWD249/EWD249.html},
+  note        = {Free from the E. W. Dijkstra Archive. §3 (on the reliability of mechanisms: testing shows the presence of bugs)}
+}
+
+@book{cohn2009,
+  author    = {Cohn, Mike},
+  title     = {Succeeding with Agile: Software Development Using Scrum},
+  publisher = {Addison-Wesley},
+  address   = {Upper Saddle River, NJ},
+  year      = {2009},
+  isbn      = {978-0-321-57936-2},
+  note      = {Libraries. Ch. 16 (quality; the test automation pyramid)}
+}
+
+@misc{pytest2026,
+  author       = {{pytest-dev}},
+  title        = {pytest Documentation},
+  year         = {2026},
+  url          = {https://docs.pytest.org/},
+  note         = {Free (version 9; accessed November 2026). "How to use fixtures" (scopes, conftest.py, yield teardown), "How to parametrize", "Assertion introspection", "Good integration practices"}
+}
+
+@misc{hypothesis2026,
+  author       = {MacIver, David R. and {the Hypothesis developers}},
+  title        = {Hypothesis Documentation},
+  year         = {2026},
+  url          = {https://hypothesis.readthedocs.io/},
+  note         = {Free (version 6.170; accessed November 2026). Strategies, @given, settings, shrinking of counterexamples}
+}
+
+@misc{ruff2026,
+  author       = {{Astral}},
+  title        = {Ruff Documentation},
+  year         = {2026},
+  url          = {https://docs.astral.sh/ruff/},
+  note         = {Free (version 0.17; accessed November 2026). "Linter" (rule selection, fixes), "Formatter" (Black compatibility), "Configuring Ruff", the rule pages (F401, F821, B006, E711, E722)}
+}
+
+@misc{black2026,
+  author       = {Langa, {\L}ukasz and {the Black contributors}},
+  title        = {Black: The Uncompromising Code Formatter},
+  year         = {2026},
+  url          = {https://black.readthedocs.io/},
+  note         = {Free (accessed November 2026). "The Black code style"; the AST equivalence and stability checks run on every formatted file}
+}
+
+@misc{precommit2026,
+  author       = {Sottile, Anthony and {the pre-commit contributors}},
+  title        = {pre-commit},
+  year         = {2026},
+  url          = {https://pre-commit.com/},
+  note         = {Free (accessed November 2026). The .pre-commit-config.yaml format, pinned hook revisions, pre-commit install}
+}
+
+@inproceedings{ribeiro2020,
+  author    = {Ribeiro, Marco Tulio and Wu, Tongshuang and Guestrin, Carlos and Singh, Sameer},
+  title     = {Beyond Accuracy: Behavioral Testing of {NLP} Models with {CheckList}},
+  booktitle = {Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics},
+  pages     = {4902--4912},
+  year      = {2020},
+  doi       = {10.18653/v1/2020.acl-main.442},
+  note      = {Free from the ACL Anthology. §2 (capabilities; MFT, INV and DIR tests), §3--4 (tests of commercial sentiment models)}
+}
+
+@article{wilson1927,
+  author  = {Wilson, Edwin B.},
+  title   = {Probable Inference, the Law of Succession, and Statistical Inference},
+  journal = {Journal of the American Statistical Association},
+  volume  = {22},
+  number  = {158},
+  pages   = {209--212},
+  year    = {1927},
+  doi     = {10.1080/01621459.1927.10502953},
+  note    = {Libraries and JSTOR. The score interval for a binomial proportion}
+}
+
+@article{brown2001,
+  author  = {Brown, Lawrence D. and Cai, T. Tony and DasGupta, Anirban},
+  title   = {Interval Estimation for a Binomial Proportion},
+  journal = {Statistical Science},
+  volume  = {16},
+  number  = {2},
+  pages   = {101--133},
+  year    = {2001},
+  doi     = {10.1214/ss/1009213286},
+  note    = {Free from Project Euclid. Why the Wald interval behaves poorly; Wilson and Agresti--Coull recommended}
+}
+
+% ---- Deployment (Chapter on deploying a model service) --------------------------
+
+@book{humble2010,
+  author    = {Humble, Jez and Farley, David},
+  title     = {Continuous Delivery: Reliable Software Releases through Build, Test, and Deployment Automation},
+  publisher = {Addison-Wesley},
+  address   = {Upper Saddle River, NJ},
+  year      = {2010},
+  isbn      = {978-0-321-60191-9},
+  note      = {Libraries. Ch. 5 (the deployment pipeline), ch. 10 (deploying and releasing: blue-green deployments, canary releasing, rollback), ch. 13--14 (dependencies, version control)}
+}
+
+@misc{oci2024distribution,
+  author       = {{Open Container Initiative}},
+  title        = {{OCI} Distribution Specification, version 1.1},
+  year         = {2024},
+  url          = {https://github.com/opencontainers/distribution-spec/blob/main/spec.md},
+  note         = {Free. Pulling and pushing manifests and blobs by digest; tags as references. The reference registry used in the chapter is the CNCF Distribution project's, version 3.1.2}
+}
+
+@book{kohavi2020,
+  author    = {Kohavi, Ron and Tang, Diane and Xu, Ya},
+  title     = {Trustworthy Online Controlled Experiments: A Practical Guide to {A/B} Testing},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2020},
+  isbn      = {978-1-108-72426-5},
+  doi       = {10.1017/9781108653985},
+  note      = {Libraries. Ch. 2--3 (running and analysing an experiment, pitfalls), ch. 15 (ramping: canaries and exposure), ch. 17 (statistics: sample sizes, multiple testing)}
+}
+
+% ---- CI/CD (Chapter on continuous integration and delivery) ----------------------
+
+@misc{fowler2006,
+  author       = {Fowler, Martin},
+  title        = {Continuous Integration},
+  year         = {2006},
+  url          = {https://martinfowler.com/articles/continuousIntegration.html},
+  note         = {Free (revised 2024; accessed November 2026). The practices of CI: a single source repository, automated self-testing builds, everyone commits to the mainline every day, fix broken builds immediately}
+}
+
+@book{forsgren2018,
+  author    = {Forsgren, Nicole and Humble, Jez and Kim, Gene},
+  title     = {Accelerate: The Science of Lean Software and {DevOps}},
+  publisher = {IT Revolution Press},
+  address   = {Portland, OR},
+  year      = {2018},
+  isbn      = {978-1-942788-33-1},
+  note      = {Libraries. Ch. 2 (measuring software delivery performance: the four key metrics), ch. 4 (technical practices, continuous delivery)}
+}
+
+@article{garey1973,
+  author  = {Garey, Michael R.},
+  title   = {Optimal Task Sequencing with Precedence Constraints},
+  journal = {Discrete Mathematics},
+  volume  = {4},
+  number  = {1},
+  pages   = {37--56},
+  year    = {1973},
+  doi     = {10.1016/0012-365X(73)90113-7},
+  note    = {Libraries. Sequencing tests that stop at the first failure; without precedence constraints, the order by increasing cost/probability ratio is optimal}
+}
+
+@misc{githubactions2026,
+  author       = {{GitHub}},
+  title        = {{GitHub Actions} Documentation},
+  year         = {2026},
+  url          = {https://docs.github.com/actions},
+  note         = {Free (accessed November 2026). "Workflow syntax" (on, jobs, needs, strategy.matrix, permissions, concurrency), "Contexts" and "Expressions", "Caching dependencies", "Using secrets", "Managing environments for deployment", "Publishing Docker images"}
+}
+
+@misc{actionlint2026,
+  author       = {{rhysd} and {contributors}},
+  title        = {actionlint: Static Checker for {GitHub Actions} Workflow Files},
+  year         = {2026},
+  url          = {https://github.com/rhysd/actionlint},
+  note         = {Free (version 1.7.12; accessed November 2026). The checks: syntax, expressions and contexts, action inputs, job dependencies, ShellCheck integration}
+}
+
+@misc{act2026,
+  author       = {{nektos}},
+  title        = {act: Run Your {GitHub Actions} Locally},
+  year         = {2026},
+  url          = {https://github.com/nektos/act},
+  note         = {Free (version 0.2.98; accessed November 2026). Platforms (-P, including -self-hosted), --var, --local-repository, the ACT environment variable}
+}
+
+@article{mcnemar1947,
+  author  = {McNemar, Quinn},
+  title   = {Note on the Sampling Error of the Difference between Correlated Proportions or Percentages},
+  journal = {Psychometrika},
+  volume  = {12},
+  number  = {2},
+  pages   = {153--157},
+  year    = {1947},
+  doi     = {10.1007/BF02295996},
+  note    = {Libraries. The test for paired proportions based on the discordant pairs}
+}
+
+@article{dietterich1998,
+  author  = {Dietterich, Thomas G.},
+  title   = {Approximate Statistical Tests for Comparing Supervised Classification Learning Algorithms},
+  journal = {Neural Computation},
+  volume  = {10},
+  number  = {7},
+  pages   = {1895--1923},
+  year    = {1998},
+  doi     = {10.1162/089976698300017197},
+  note    = {Free from the author's page. McNemar's test has acceptable type I error for comparing two classifiers on one test set; the resampled t-test does not}
+}
+
+% ---- Monitoring (Chapter on monitoring models in production) ---------------------
+
+@book{beyer2016,
+  editor    = {Beyer, Betsy and Jones, Chris and Petoff, Jennifer and Murphy, Niall Richard},
+  title     = {Site Reliability Engineering: How {Google} Runs Production Systems},
+  publisher = {O'Reilly Media},
+  address   = {Sebastopol, CA},
+  year      = {2016},
+  isbn      = {978-1-4919-2912-4},
+  url       = {https://sre.google/sre-book/table-of-contents/},
+  note      = {Free online. Ch. 4 (service level objectives), ch. 6 (monitoring distributed systems: the four golden signals; chapter by R. Ewaschuk)}
+}
+
+@book{beyer2018,
+  editor    = {Beyer, Betsy and Murphy, Niall Richard and Rensin, David K. and Kawahara, Kent and Thorne, Stephen},
+  title     = {The Site Reliability Workbook: Practical Ways to Implement {SRE}},
+  publisher = {O'Reilly Media},
+  address   = {Sebastopol, CA},
+  year      = {2018},
+  isbn      = {978-1-4920-2950-2},
+  url       = {https://sre.google/workbook/table-of-contents/},
+  note      = {Free online. Ch. 5 (alerting on SLOs: burn rates, multiwindow multi-burn-rate alerts)}
+}
+
+@misc{prometheus2026,
+  author       = {{Prometheus Authors}},
+  title        = {Prometheus Documentation},
+  year         = {2026},
+  url          = {https://prometheus.io/docs/},
+  note         = {Free (version 3.16; accessed November 2026). "Data model", "Metric types", "Querying basics" (rate, histogram\_quantile), "Recording rules", "Alerting rules", "Unit testing for rules" (promtool test rules), "Histograms and summaries"; Alertmanager 0.35 configuration}
+}
+
+@misc{compose2026,
+  author       = {{Docker Inc.}},
+  title        = {Docker Compose Documentation and the Compose Specification},
+  year         = {2026},
+  url          = {https://docs.docker.com/compose/},
+  note         = {Free (Compose v5.7; accessed November 2026). Services, networks (service names as host names), volumes, depends\_on with conditions, health checks, profiles, variable interpolation}
+}
+
+@misc{grafana2026,
+  author       = {{Grafana Labs}},
+  title        = {Grafana Documentation},
+  year         = {2026},
+  url          = {https://grafana.com/docs/grafana/latest/},
+  note         = {Free (Grafana 13.3; accessed November 2026; not runnable on the build machine). "Provision Grafana" (data sources and dashboard providers as files), "Dashboard JSON model", "Alerting" (alert rules, contact points)}
+}
+
+@book{quinonero2009,
+  editor    = {Qui{\~n}onero-Candela, Joaquin and Sugiyama, Masashi and Schwaighofer, Anton and Lawrence, Neil D.},
+  title     = {Dataset Shift in Machine Learning},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2009},
+  isbn      = {978-0-262-17005-5},
+  doi       = {10.7551/mitpress/9780262170055.001.0001},
+  note      = {Libraries. Ch. 1 (when training and test sets are different: covariate shift, prior probability shift)}
+}
+
+@article{morenotorres2012,
+  author  = {Moreno-Torres, Jose G. and Raeder, Troy and Alaiz-Rodr{\'i}guez, Roc{\'i}o and Chawla, Nitesh V. and Herrera, Francisco},
+  title   = {A Unifying View on Dataset Shift in Classification},
+  journal = {Pattern Recognition},
+  volume  = {45},
+  number  = {1},
+  pages   = {521--530},
+  year    = {2012},
+  doi     = {10.1016/j.patcog.2011.06.019},
+  note    = {Libraries. §3 (covariate shift, prior probability shift, concept shift: definitions)}
+}
+
+@article{jeffreys1946,
+  author  = {Jeffreys, Harold},
+  title   = {An Invariant Form for the Prior Probability in Estimation Problems},
+  journal = {Proceedings of the Royal Society of London. Series A},
+  volume  = {186},
+  number  = {1007},
+  pages   = {453--461},
+  year    = {1946},
+  doi     = {10.1098/rspa.1946.0056},
+  note    = {Libraries. The symmetric divergence now called Jeffreys' divergence}
+}
+
+@article{kullback1951,
+  author  = {Kullback, Solomon and Leibler, Richard A.},
+  title   = {On Information and Sufficiency},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {22},
+  number  = {1},
+  pages   = {79--86},
+  year    = {1951},
+  doi     = {10.1214/aoms/1177729694},
+  note    = {Free from Project Euclid. The directed divergence and its properties}
+}
+
+@book{siddiqi2006,
+  author    = {Siddiqi, Naeem},
+  title     = {Credit Risk Scorecards: Developing and Implementing Intelligent Credit Scoring},
+  publisher = {Wiley},
+  address   = {Hoboken, NJ},
+  year      = {2006},
+  isbn      = {978-0-471-75451-0},
+  note      = {Libraries. The system stability index (PSI) and its rule-of-thumb thresholds 0.1 and 0.25 in scorecard monitoring}
+}
+
+@article{dvoretzky1956,
+  author  = {Dvoretzky, Aryeh and Kiefer, Jack and Wolfowitz, Jacob},
+  title   = {Asymptotic Minimax Character of the Sample Distribution Function and of the Classical Multinomial Estimator},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {27},
+  number  = {3},
+  pages   = {642--669},
+  year    = {1956},
+  doi     = {10.1214/aoms/1177728174},
+  note    = {Free from Project Euclid. The inequality for the uniform deviation of the empirical distribution function (with an unspecified constant)}
+}
+
+@article{massart1990,
+  author  = {Massart, Pascal},
+  title   = {The Tight Constant in the {Dvoretzky--Kiefer--Wolfowitz} Inequality},
+  journal = {The Annals of Probability},
+  volume  = {18},
+  number  = {3},
+  pages   = {1269--1283},
+  year    = {1990},
+  doi     = {10.1214/aop/1176990746},
+  note    = {Free from Project Euclid. The constant 2 in front of the exponential}
+}
+
+@article{pearson1900,
+  author  = {Pearson, Karl},
+  title   = {On the Criterion that a Given System of Deviations from the Probable in the Case of a Correlated System of Variables is such that it can be Reasonably Supposed to have Arisen from Random Sampling},
+  journal = {The London, Edinburgh, and Dublin Philosophical Magazine and Journal of Science},
+  volume  = {50},
+  number  = {302},
+  pages   = {157--175},
+  year    = {1900},
+  doi     = {10.1080/14786440009463897},
+  note    = {Libraries. The χ² goodness-of-fit statistic}
+}
+
+@article{benjamini1995,
+  author  = {Benjamini, Yoav and Hochberg, Yosef},
+  title   = {Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing},
+  journal = {Journal of the Royal Statistical Society: Series B (Methodological)},
+  volume  = {57},
+  number  = {1},
+  pages   = {289--300},
+  year    = {1995},
+  doi     = {10.1111/j.2517-6161.1995.tb02031.x},
+  note    = {Libraries. The step-up procedure and the proof that it controls the false discovery rate for independent tests}
+}
+
+@inproceedings{lipton2018,
+  author    = {Lipton, Zachary C. and Wang, Yu-Xiang and Smola, Alexander J.},
+  title     = {Detecting and Correcting for Label Shift with Black Box Predictors},
+  booktitle = {Proceedings of the 35th International Conference on Machine Learning},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {80},
+  pages     = {3122--3130},
+  year      = {2018},
+  url       = {https://proceedings.mlr.press/v80/lipton18a.html},
+  note      = {Free (also arXiv:1802.03916). §3 (the label shift assumption; BBSE: w = C⁻¹μ), §4 (consistency and error bounds), §5 (detection)}
+}
+
+@article{saerens2002,
+  author  = {Saerens, Marco and Latinne, Patrice and Decaestecker, Christine},
+  title   = {Adjusting the Outputs of a Classifier to New a Priori Probabilities: A Simple Procedure},
+  journal = {Neural Computation},
+  volume  = {14},
+  number  = {1},
+  pages   = {21--41},
+  year    = {2002},
+  doi     = {10.1162/089976602753284446},
+  note    = {Libraries. The EM procedure for re-estimating priors on unlabelled data and adjusting posteriors}
+}
+
+@article{dempster1977,
+  author  = {Dempster, Arthur P. and Laird, Nan M. and Rubin, Donald B.},
+  title   = {Maximum Likelihood from Incomplete Data via the {EM} Algorithm},
+  journal = {Journal of the Royal Statistical Society: Series B (Methodological)},
+  volume  = {39},
+  number  = {1},
+  pages   = {1--22},
+  year    = {1977},
+  doi     = {10.1111/j.2517-6161.1977.tb01600.x},
+  note    = {Libraries. The EM algorithm and the monotonicity of the likelihood}
+}
+
+@article{page1954,
+  author  = {Page, E. S.},
+  title   = {Continuous Inspection Schemes},
+  journal = {Biometrika},
+  volume  = {41},
+  number  = {1/2},
+  pages   = {100--115},
+  year    = {1954},
+  doi     = {10.1093/biomet/41.1-2.100},
+  note    = {Libraries and JSTOR. The cumulative sum scheme and its average run length}
+}
+
+@article{hinkley1971,
+  author  = {Hinkley, David V.},
+  title   = {Inference about the Change-Point from Cumulative Sum Tests},
+  journal = {Biometrika},
+  volume  = {58},
+  number  = {3},
+  pages   = {509--523},
+  year    = {1971},
+  doi     = {10.1093/biomet/58.3.509},
+  note    = {Libraries and JSTOR. Cumulative-sum statistics for detecting and locating a change point}
+}
+
+@book{siegmund1985,
+  author    = {Siegmund, David},
+  title     = {Sequential Analysis: Tests and Confidence Intervals},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {1985},
+  isbn      = {978-0-387-96134-7},
+  doi       = {10.1007/978-1-4757-1862-1},
+  note      = {Libraries. Ch. 2 (CUSUM: average run lengths, Wald's identity), ch. 3 (approximations)}
+}
+
+@article{gama2014,
+  author  = {Gama, Jo{\~a}o and {\v{Z}}liobait{\.e}, Indr{\.e} and Bifet, Albert and Pechenizkiy, Mykola and Bouchachia, Abdelhamid},
+  title   = {A Survey on Concept Drift Adaptation},
+  journal = {ACM Computing Surveys},
+  volume  = {46},
+  number  = {4},
+  pages   = {44:1--44:37},
+  year    = {2014},
+  doi     = {10.1145/2523813},
+  note    = {Libraries. Types of drift, detectors (including Page--Hinkley), adaptation strategies}
+}
+
+@inproceedings{rabanser2019,
+  author    = {Rabanser, Stephan and G{\"u}nnemann, Stephan and Lipton, Zachary C.},
+  title     = {Failing Loudly: An Empirical Study of Methods for Detecting Dataset Shift},
+  booktitle = {Advances in Neural Information Processing Systems 32 (NeurIPS 2019)},
+  year      = {2019},
+  url       = {https://proceedings.neurips.cc/paper/2019/hash/846c260d715e5b854ffad5f70a516c88-Abstract.html},
+  note      = {Free (also arXiv:1810.11953). Two-sample tests on model outputs (black-box shift detection) work well in practice; multiplicity corrections}
+}
+
+% ---- Orchestration (Chapter on orchestrating ML pipelines) ------------------------
+
+@misc{airflow2026,
+  author       = {{The Apache Software Foundation}},
+  title        = {Apache {Airflow} Documentation},
+  year         = {2026},
+  url          = {https://airflow.apache.org/docs/apache-airflow/stable/},
+  note         = {Free (version 3.4; accessed November 2026). "Core Concepts" (DAGs, tasks, XComs, DAG runs, data intervals, catchup and backfill), "TaskFlow", "Best Practices" (idempotent tasks, not passing large data through XCom), "Testing" (airflow dags test), installation with constraint files}
+}
+
+@article{graham1969,
+  author  = {Graham, Ronald L.},
+  title   = {Bounds on Multiprocessing Timing Anomalies},
+  journal = {SIAM Journal on Applied Mathematics},
+  volume  = {17},
+  number  = {2},
+  pages   = {416--429},
+  year    = {1969},
+  doi     = {10.1137/0117039},
+  note    = {Libraries. List scheduling of precedence-constrained tasks is within a factor 2 - 1/m of optimal on m processors}
+}
+
+@article{brent1974,
+  author  = {Brent, Richard P.},
+  title   = {The Parallel Evaluation of General Arithmetic Expressions},
+  journal = {Journal of the {ACM}},
+  volume  = {21},
+  number  = {2},
+  pages   = {201--206},
+  year    = {1974},
+  doi     = {10.1145/321812.321815},
+  note    = {Free from the author's page. The scheduling principle T_p <= T_1/p + T_inf}
+}
+
+@article{harris1913,
+  author  = {Harris, Ford W.},
+  title   = {How Many Parts to Make at Once},
+  journal = {Factory, The Magazine of Management},
+  volume  = {10},
+  number  = {2},
+  pages   = {135--136},
+  year    = {1913},
+  note    = {Reprinted in Operations Research 38(6):947--950, 1990, doi:10.1287/opre.38.6.947. The square-root formula for the economic order quantity}
+}
